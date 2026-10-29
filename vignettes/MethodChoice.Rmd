@@ -1,0 +1,139 @@
+---
+title: "Choosing CohortMethod or CloneCensorWeight"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Choosing CohortMethod or CloneCensorWeight}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(CloneCensorWeight)
+```
+
+## The design choice
+
+Use **CohortMethod** when the causal question compares two treatment cohorts
+defined at a common index date and treatment assignment is considered fixed at
+cohort entry. Its workflow is designed for large-scale propensity scores,
+propensity-score trimming, matching, stratification, IPTW, and outcome models
+for a fixed target-versus-comparator contrast.
+
+Use **CloneCensorWeight** when the question is a target-trial strategy such as
+"initiate treatment within 30 days" versus "do not initiate during 30 days".
+The treatment strategy is dynamic during a grace period, so each eligible
+subject is cloned into each strategy and a clone is artificially censored when
+its observed treatment history deviates from its assigned strategy.
+
+This is not a choice between equivalent estimators. The packages answer
+different causal questions.
+
+## Inputs compared
+
+| Concern | CohortMethod | CloneCensorWeight |
+|---|---|---|
+| Eligibility | Target and comparator exposure cohorts | One trial-eligible target cohort before assignment |
+| Treatment definition | `targetId`, `comparatorId`, exposure cohort table | `arms`, `exposureId`, and treatment initiation date |
+| Outcome definition | `outcomeIds` in an OMOP cohort/outcome table | `outcomeIds` and subject-level outcome dates |
+| Baseline covariates | FeatureExtraction `covariateSettings` | FeatureExtraction covariates attached to the eligible population |
+| Follow-up | Study-population risk-window arguments | `gracePeriod`, `washoutPeriod`, and discrete interval boundaries |
+| Confounding/censoring model | Propensity score and optional PS adjustment | Stabilized IPCW numerator and denominator models |
+| Model settings | R6 `create*Args()` objects and analysis specifications | R6 `createCloneCensorWeightAnalysis()` objects |
+
+The CohortMethod database extractor accepts additional nesting-cohort,
+common-period, duplicate-subject, age, gender, and sampling controls. The CCW
+extractor instead needs the treatment initiation source because initiation
+relative to trial start determines protocol deviation.
+
+## Technical execution differences
+
+Both packages use DatabaseConnector, SqlRender, FeatureExtraction, Andromeda,
+Cyclops, ParallelLogger, and checkmate. Their computation is organized
+differently:
+
+* CohortMethod creates target/comparator temporary tables in the database,
+  extracts a `CohortMethodData` object, then constructs a study population and
+  propensity score. PS trimming, matching, stratification, balance, and the
+  outcome model are separate stages.
+* CloneCensorWeight extracts the eligible cohort, initiation dates, outcomes,
+  and baseline covariates, then duplicates subjects into strategy-specific
+  clones. Person-time is discretized and weighted for artificial censoring
+  before the outcome model is fitted.
+* CohortMethod's large-scale propensity and outcome models are Cyclops models.
+  CloneCensorWeight uses Cyclops for both pooled censoring models and the final
+  pooled logistic or Cox outcome model. Andromeda remains the storage layer;
+  small summaries and plots are the only intended ordinary-R materializations.
+
+## What the outputs mean
+
+```{r ccw-example}
+ccwData <- createSampleCloneCensorWeightData(n = 120, seed = 2026)
+arms <- list(
+  list(arm = "initiate", strategy = "initiate"),
+  list(arm = "never", strategy = "never")
+)
+cloned <- createClonesAndCensor(ccwData, arms, gracePeriod = 30,
+                                washoutPeriod = 0)
+personTime <- discretizePersonTime(cloned, intervalLength = 30)
+weighted <- createCensoringWeights(personTime, cloned)
+ccwModel <- fitOutcomeModel(weighted, modelType = "cox")
+ccwModel$summary
+```
+
+For CohortMethod, the primary effect is a target-versus-comparator relative
+risk, odds ratio, or hazard ratio after the selected PS design. Typical outputs
+include cohort attrition, PS distributions, covariate balance, study-population
+counts, and an `OutcomeModel` with coefficients and confidence intervals.
+
+For CCW, the primary effect compares the specified treatment strategies under
+the artificial-censoring protocol. The output must be read with the weight
+diagnostics: extreme or unstable weights can indicate practical positivity
+problems, insufficient covariate information, or an implausible grace period.
+The analysis output contains:
+
+* `results.csv`: strategy effect estimate, confidence interval, p-value, and
+  log likelihood;
+* `weightDistribution.csv`: cumulative stabilized-weight summaries by arm;
+* an Andromeda cache containing cloned cohorts and analysis tables.
+
+The two estimates should not be compared as if they were the same estimand
+unless the CohortMethod exposure definition, CCW arms, grace period, follow-up,
+and censoring rules have been deliberately aligned.
+
+## Practical decision rules
+
+Choose CohortMethod when:
+
+* treatment is naturally defined at baseline;
+* the main concern is baseline confounding between two exposure cohorts;
+* PS matching, trimming, or stratification is part of the design;
+* the target population is already represented by target and comparator cohorts.
+
+Choose CloneCensorWeight when:
+
+* treatment initiation may occur during a prespecified grace period;
+* the estimand is a treatment strategy rather than observed treatment at index;
+* protocol deviation should censor follow-up rather than redefine treatment;
+* repeated strategy clones and informative artificial censoring are acceptable
+  and can be modeled with adequate baseline covariates.
+
+```{r cohortmethod-inputs, eval=FALSE}
+# CohortMethod-style live-CDM setup, shown for comparison:
+cmData <- CohortMethod::getDbCohortMethodData(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = cdmDatabaseSchema,
+  targetId = targetId,
+  comparatorId = comparatorId,
+  outcomeIds = outcomeIds,
+  exposureDatabaseSchema = cohortDatabaseSchema,
+  exposureTable = cohortTable,
+  outcomeDatabaseSchema = cohortDatabaseSchema,
+  outcomeTable = cohortTable,
+  getDbCohortMethodDataArgs = getDbCohortMethodDataArgs
+)
+```
+
+The safest optimization for either design is to keep cohort construction,
+joins, date restrictions, and feature construction on the database; keep sparse
+covariates and large person-time tables in Andromeda; and reserve ordinary R
+objects for model metadata, diagnostics, and plots.

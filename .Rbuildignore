@@ -1,0 +1,6 @@
+^cohortmethod-reference$
+^cohortmethod-reference/
+^docs/
+^\.Rcheck$
+^\.git$
+^\.Rproj\.user$

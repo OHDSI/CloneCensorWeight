@@ -1,0 +1,77 @@
+---
+title: "Clone-Censor-Weight Target Trial Emulation"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Clone-Censor-Weight Target Trial Emulation}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(CloneCensorWeight)
+```
+
+## Build post-CDM analysis data
+
+`createSampleCloneCensorWeightData()` creates the same normalized tables that
+the database extractor returns after reading OMOP cohort, exposure, outcome,
+and baseline covariate tables. It is useful for tests and for checking an
+analysis specification before connecting to a CDM. In a Eunomia workflow, the
+same tables can be populated from the Eunomia cohort and feature tables.
+
+```{r data}
+ccwData <- createSampleCloneCensorWeightData(n = 200, seed = 2026)
+c("cohorts", "outcomes", "covariates", "covariateRef", "analysisRef")
+```
+
+## Clone and censor
+
+The first arm requires initiation during the 30-day grace period. The second
+arm requires no initiation during that period. A deviating clone is censored at
+the first protocol deviation.
+
+```{r clone}
+arms <- list(
+  list(arm = "initiate", strategy = "initiate"),
+  list(arm = "never", strategy = "never")
+)
+cloned <- createClonesAndCensor(ccwData, arms, gracePeriod = 30,
+                                washoutPeriod = 0)
+dplyr::collect(cloned$cohorts) |> head()
+```
+
+## Estimate censoring weights and outcome model
+
+```{r model}
+personTime <- discretizePersonTime(cloned, intervalLength = 30)
+weighted <- createCensoringWeights(personTime, cloned)
+computeWeightDistribution(weighted)
+outcomeModel <- fitOutcomeModel(weighted, modelType = "cox")
+outcomeModel$summary
+```
+
+The diagnostic plots use ordinary `ggplot2` objects and can be saved using
+standard R graphics workflows.
+
+```{r plots, eval=FALSE}
+plotWeightDistribution(weighted)
+plotKaplanMeier(weighted)
+plotCovariateBalance(computeCovariateBalance(cloned, weighted))
+```
+
+## Standardized multi-analysis output
+
+The multi-analysis runner creates one folder per analysis containing
+`results.csv`, `weightDistribution.csv`, and an Andromeda cache.
+
+```{r analyses}
+analysis <- createCloneCensorWeightAnalysis(
+  analysisId = "sample-30-day-cox", arms = arms, gracePeriod = 30,
+  intervalLength = 30, modelType = "cox"
+)
+outputFolder <- tempfile("ccw-results-")
+results <- runCloneCensorWeightAnalyses(ccwData, list(analysis), outputFolder)
+results[[1]]$outcomeModel$summary
+list.files(file.path(outputFolder, "sample-30-day-cox"))
+```

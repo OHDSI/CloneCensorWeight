@@ -1,0 +1,51 @@
+---
+title: "Multiple Clone-Censor-Weight Analyses"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Multiple Clone-Censor-Weight Analyses}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(CloneCensorWeight)
+```
+
+The multi-analysis runner reuses the same extracted data while varying the
+grace period, person-time interval, or outcome model. This mirrors
+CohortMethod's analysis-list pattern while preserving CCW-specific strategy
+definitions.
+
+```{r specifications}
+ccwData <- createSampleCloneCensorWeightData(n = 200, seed = 42)
+arms <- list(
+  list(arm = "initiate", strategy = "initiate"),
+  list(arm = "never", strategy = "never")
+)
+analyses <- list(
+  createCloneCensorWeightAnalysis(
+    analysisId = "cox-30-day",
+    arms = arms,
+    gracePeriod = 30,
+    intervalLength = 30,
+    modelType = "cox"
+  ),
+  createCloneCensorWeightAnalysis(
+    analysisId = "logistic-60-day",
+    arms = arms,
+    gracePeriod = 60,
+    intervalLength = 14,
+    modelType = "logistic"
+  )
+)
+```
+
+Each analysis receives a dedicated output directory containing the model
+results, weight diagnostics, and serialized Andromeda cache.
+
+```{r run}
+outputFolder <- tempfile("ccw-multiple-")
+results <- runCloneCensorWeightAnalyses(ccwData, analyses, outputFolder)
+lapply(results, function(result) result$outcomeModel$summary)
+list.files(outputFolder, recursive = TRUE)
+```

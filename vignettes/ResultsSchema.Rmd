@@ -1,0 +1,55 @@
+---
+title: "CloneCensorWeight Results and Data Schema"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{CloneCensorWeight Results and Data Schema}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(CloneCensorWeight)
+```
+
+## Disk-backed data tables
+
+`CloneCensorWeightData` follows the FeatureExtraction/CohortMethod contract.
+The important tables are:
+
+* `cohorts`: eligible subjects before cloning, then subject-clone follow-up
+  with `cloneId`, `arm`, `survivalTime`, `event`, and
+  `artificiallyCensored`.
+* `outcomes`: subject-level outcome occurrences.
+* `covariates`: baseline covariates keyed by subject.
+* `covariateRef` and `analysisRef`: covariate metadata tables.
+
+```{r schema}
+ccwData <- createSampleCloneCensorWeightData(n = 20, seed = 7)
+list(
+  cohorts = names(dplyr::collect(ccwData$cohorts)),
+  outcomes = names(dplyr::collect(ccwData$outcomes)),
+  covariates = names(dplyr::collect(ccwData$covariates)),
+  covariateRef = names(dplyr::collect(ccwData$covariateRef)),
+  analysisRef = names(dplyr::collect(ccwData$analysisRef))
+)
+```
+
+## Analysis outputs
+
+```{r outputs}
+arms <- list(
+  list(arm = "initiate", strategy = "initiate"),
+  list(arm = "never", strategy = "never")
+)
+analysis <- createCloneCensorWeightAnalysis("schema-example", arms, 30)
+outputFolder <- tempfile("ccw-schema-")
+result <- runCloneCensorWeightAnalyses(ccwData, list(analysis), outputFolder)[[1]]
+result$outcomeModel$summary
+list.files(outputFolder, recursive = TRUE)
+```
+
+The CSV schema is intentionally small and portable: `results.csv` contains
+the estimand and confidence interval, while `weightDistribution.csv` records
+the cumulative stabilized-weight diagnostics. Large tables remain in the
+Andromeda cache and should be loaded with `loadCloneCensorWeightData()` rather
+than copied into ordinary R memory.

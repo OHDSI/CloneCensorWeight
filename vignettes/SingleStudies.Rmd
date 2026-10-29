@@ -1,0 +1,64 @@
+---
+title: "A Single Clone-Censor-Weight Study"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{A Single Clone-Censor-Weight Study}
+  %\VignetteEngine{knitr::rmarkdown}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+library(CloneCensorWeight)
+```
+
+## Study data
+
+The package expects a `CloneCensorWeightData` object with OMOP-derived cohort,
+outcome, and covariate tables. This vignette uses the reproducible fixture;
+the same object contract is returned by `getDbCloneCensorWeightData()` after
+database extraction.
+
+```{r data}
+ccwData <- createSampleCloneCensorWeightData(n = 200, seed = 2026)
+```
+
+## Trial strategies
+
+Subjects are cloned into two strategies: initiate treatment within 30 days or
+do not initiate during the grace period. A clone is artificially censored at
+the first protocol deviation.
+
+```{r cloning}
+arms <- list(
+  list(arm = "initiate", strategy = "initiate"),
+  list(arm = "never", strategy = "never")
+)
+cloned <- createClonesAndCensor(
+  cloneCensorWeightData = ccwData,
+  arms = arms,
+  gracePeriod = 30,
+  washoutPeriod = 0
+)
+dplyr::collect(cloned$cohorts) |> head()
+```
+
+## Censoring weights and outcome model
+
+```{r analysis}
+personTime <- discretizePersonTime(cloned, intervalLength = 30)
+weighted <- createCensoringWeights(personTime, cloned)
+weightSummary <- computeWeightDistribution(weighted)
+outcomeModel <- fitOutcomeModel(weighted, modelType = "cox")
+weightSummary
+outcomeModel$summary
+```
+
+The outcome model is fitted through Cyclops. Diagnostics are ordinary small R
+objects and can be plotted or saved independently of the disk-backed analysis
+tables.
+
+```{r diagnostics, eval=FALSE}
+plotWeightDistribution(weighted)
+plotKaplanMeier(weighted)
+plotCovariateBalance(computeCovariateBalance(cloned, weighted))
+```
