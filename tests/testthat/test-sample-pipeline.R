@@ -29,9 +29,10 @@ test_that("cloning and weighting produce valid analysis data", {
   weighted <- createCensoringWeights(personTime, cloned)
   expect_true(all(is.finite(weighted$weight)))
   expect_true(all(weighted$weight > 0))
-  model <- fitOutcomeModel(weighted, modelType = "cox")
+  model <- fitOutcomeModel(weighted, modelType = "cox",
+    fitOutcomeModelArgs = createFitOutcomeModelArgs("cox", "robust"))
   expect_s3_class(model, "CloneCensorWeightOutcomeModel")
-  expect_s3_class(model$model, "cyclopsFit")
+  expect_equal(model$varianceEstimator, "robust")
   expect_true(is.finite(model$summary$estimate))
 })
 

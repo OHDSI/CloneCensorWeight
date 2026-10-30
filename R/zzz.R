@@ -1,7 +1,9 @@
 utils::globalVariables(c(
   "arm",
+  "armValue",
   "covariate",
   "mean",
+  "subjectId",
   "survival",
   "time",
   "weight"

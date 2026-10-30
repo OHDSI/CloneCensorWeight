@@ -28,9 +28,10 @@ test_that("logistic models and diagnostics run", {
   data   <- createSampleCloneCensorWeightData(n = 40, seed = 11)
   cloned <- createClonesAndCensor(data, .testClonesArgs())
   weighted <- createCensoringWeights(discretizePersonTime(cloned, 30), cloned)
-  logisticModel <- fitOutcomeModel(weighted, "logistic")
+  logisticModel <- fitOutcomeModel(weighted, "logistic",
+    fitOutcomeModelArgs = createFitOutcomeModelArgs("logistic", "conventional"))
   expect_s3_class(logisticModel, "CloneCensorWeightOutcomeModel")
-  expect_s3_class(logisticModel$model, "cyclopsFit")
+  expect_true(!is.null(logisticModel$model))
   expect_true(is.data.frame(computeWeightDistribution(weighted)))
   expect_true(is.data.frame(computeCovariateBalance(cloned, weighted)))
   expect_s3_class(plotWeightDistribution(weighted), "ggplot")
@@ -38,6 +39,29 @@ test_that("logistic models and diagnostics run", {
   expect_s3_class(plotCovariateBalance(computeCovariateBalance(cloned, weighted)), "ggplot")
   expect_true(is.data.frame(computeCovariateBalance(cloned)))
   expect_true(nrow(discretizePersonTime(cloned, cutPoints = c(0, 30, 60, 120))) > 0)
+})
+
+test_that("robust and bootstrap variance estimators produce finite estimates", {
+  data     <- createSampleCloneCensorWeightData(n = 60, seed = 77)
+  cloned   <- createClonesAndCensor(data, .testClonesArgs())
+  weighted <- createCensoringWeights(discretizePersonTime(cloned, 30), cloned)
+
+  robustCox <- fitOutcomeModel(weighted, fitOutcomeModelArgs =
+    createFitOutcomeModelArgs("cox", "robust"))
+  expect_s3_class(robustCox, "CloneCensorWeightOutcomeModel")
+  expect_equal(robustCox$varianceEstimator, "robust")
+  expect_true(is.finite(robustCox$summary$estimate))
+  expect_true(robustCox$summary$lower95 < robustCox$summary$upper95)
+
+  convCox <- fitOutcomeModel(weighted, fitOutcomeModelArgs =
+    createFitOutcomeModelArgs("cox", "conventional"))
+  expect_s3_class(convCox$model, "cyclopsFit")
+
+  bootCox <- fitOutcomeModel(weighted, fitOutcomeModelArgs =
+    createFitOutcomeModelArgs("cox", "bootstrap", nBootstraps = 25L, seed = 1L))
+  expect_s3_class(bootCox, "CloneCensorWeightOutcomeModel")
+  expect_equal(bootCox$varianceEstimator, "bootstrap")
+  expect_true(is.finite(bootCox$summary$estimate))
 })
 
 test_that("invalid arguments fail early", {
