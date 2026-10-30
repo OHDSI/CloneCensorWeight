@@ -58,21 +58,52 @@ fitOutcomeModel <- function(personTime, modelType = "cox") {
 }
 
 #' Compute covariate means by clone arm
-#' @param cloneCensorWeightData A `CloneCensorWeightData` object.
-#' @param weights Optional weighted person-time data frame.
-#' @return A data frame of covariate means by arm.
+#'
+#' Computes unweighted covariate means separately for each arm, using the
+#' FeatureExtraction sparse covariate format (`rowId`, `covariateId`,
+#' `covariateValue`) stored in the data object.
+#'
+#' @param cloneCensorWeightData A `CloneCensorWeightData` object (after
+#'   cloning, so the `cohorts` table has an `arm` column).
+#' @param weights Optional weighted person-time data frame. When supplied, arm
+#'   membership is taken from its `(subjectId, arm)` pairs rather than from
+#'   the cohorts table.
+#' @return A data frame with columns `covariateId`, `covariate`, `arm`, and
+#'   `mean`.  Returns an empty data frame when no covariates are present.
 #' @export
 computeCovariateBalance <- function(cloneCensorWeightData, weights = NULL) {
   checkmate::assertClass(cloneCensorWeightData, "CloneCensorWeightData")
-  covariates <- .readCloneCensorWeightTable(cloneCensorWeightData, "covariates")
-  cohorts <- .readCloneCensorWeightTable(cloneCensorWeightData, "cohorts")
+  covariates   <- .readCloneCensorWeightTable(cloneCensorWeightData, "covariates")
+  covariateRef <- .readCloneCensorWeightTable(cloneCensorWeightData, "covariateRef")
+  cohorts      <- .readCloneCensorWeightTable(cloneCensorWeightData, "cohorts")
+
   if (!is.null(weights)) cohorts <- unique(weights[c("subjectId", "arm")])
   if (!"arm" %in% names(cohorts)) cohorts$arm <- "eligible"
-  numericNames <- setdiff(names(covariates)[vapply(covariates, is.numeric, logical(1))], "subjectId")
-  do.call(rbind, lapply(numericNames, function(name) {
-    means <- tapply(covariates[[name]][match(cohorts$subjectId, covariates$subjectId)],
-                    cohorts$arm, mean, na.rm = TRUE)
-    data.frame(covariate = name, arm = names(means), mean = as.numeric(means), stringsAsFactors = FALSE)
+
+  empty <- data.frame(covariateId = integer(), covariate = character(),
+                      arm = character(), mean = numeric(), stringsAsFactors = FALSE)
+
+  isSparse <- all(c("rowId", "covariateId", "covariateValue") %in% names(covariates))
+  if (!isSparse || nrow(covariates) == 0) return(empty)
+
+  joined <- merge(
+    covariates[, c("rowId", "covariateId", "covariateValue")],
+    cohorts[, c("subjectId", "arm"), drop = FALSE],
+    by.x = "rowId", by.y = "subjectId",
+    all.x = FALSE
+  )
+  if (nrow(joined) == 0) return(empty)
+
+  covariateIds <- sort(unique(joined$covariateId))
+  do.call(rbind, lapply(covariateIds, function(cid) {
+    sub   <- joined[joined$covariateId == cid, , drop = FALSE]
+    means <- tapply(sub$covariateValue, sub$arm, mean, na.rm = TRUE)
+    cname <- if (nrow(covariateRef) > 0 && cid %in% covariateRef$covariateId)
+      covariateRef$covariateName[covariateRef$covariateId == cid][1]
+    else paste0("cov_", cid)
+    data.frame(covariateId = cid, covariate = cname,
+               arm = names(means), mean = as.numeric(means),
+               stringsAsFactors = FALSE)
   }))
 }
 

@@ -138,13 +138,19 @@ createSampleCloneCensorWeightData <- function(n = 200, seed = 42) {
     stringsAsFactors = FALSE
   )
 
-  # Wide-format covariates (compatible with current Weighting.R).
-  # Will be replaced with FeatureExtraction sparse format in Phase 7.
+  ageYears  <- round(runif(n, 35, 85))
+  priorCond <- rbinom(n, 1, 0.35)
+  priorDrug <- rbinom(n, 1, 0.25)
+
+  # FeatureExtraction sparse format: one row per non-zero (subject, covariate) pair.
+  # Continuous covariates (age) have an entry for every subject; binary covariates
+  # only have entries for subjects where value = 1 (missing = 0 by convention).
+  condIdx <- which(priorCond == 1L)
+  drugIdx <- which(priorDrug == 1L)
   covariates <- data.frame(
-    subjectId      = seq_len(n),
-    age            = round(runif(n, 35, 85)),
-    priorCondition = rbinom(n, 1, 0.35),
-    priorDrug      = rbinom(n, 1, 0.25)
+    rowId          = c(seq_len(n),          condIdx,              drugIdx),
+    covariateId    = c(rep(1003L, n),        rep(2001L, length(condIdx)), rep(3001L, length(drugIdx))),
+    covariateValue = c(ageYears / 10,        rep(1.0,   length(condIdx)), rep(1.0,   length(drugIdx)))
   )
 
   covariateRef <- data.frame(
