@@ -7,13 +7,19 @@
 computeCovariateBalance(cloneCensorWeightData, weights = NULL)
 }
 \arguments{
-\item{cloneCensorWeightData}{A \code{CloneCensorWeightData} object.}
+\item{cloneCensorWeightData}{A \code{CloneCensorWeightData} object (after
+cloning, so the \code{cohorts} table has an \code{arm} column).}
 
-\item{weights}{Optional weighted person-time data frame.}
+\item{weights}{Optional weighted person-time data frame. When supplied, arm
+membership is taken from its \verb{(subjectId, arm)} pairs rather than from
+the cohorts table.}
 }
 \value{
-A data frame of covariate means by arm.
+A data frame with columns \code{covariateId}, \code{covariate}, \code{arm}, and
+\code{mean}.  Returns an empty data frame when no covariates are present.
 }
 \description{
-Compute covariate means by clone arm
+Computes unweighted covariate means separately for each arm, using the
+FeatureExtraction sparse covariate format (\code{rowId}, \code{covariateId},
+\code{covariateValue}) stored in the data object.
 }

@@ -4,18 +4,36 @@
 \alias{createCensoringWeights}
 \title{Calculate stabilized inverse probability of censoring weights}
 \usage{
-createCensoringWeights(personTime, cloneCensorWeightData, trim = c(0.01, 0.99))
+createCensoringWeights(
+  personTime,
+  cloneCensorWeightData,
+  createCensoringWeightsArgs = NULL
+)
 }
 \arguments{
 \item{personTime}{A person-time data frame from \code{\link[=discretizePersonTime]{discretizePersonTime()}}.}
 
-\item{cloneCensorWeightData}{The source data object containing covariates.}
+\item{cloneCensorWeightData}{The source data object containing baseline
+covariates.}
 
-\item{trim}{Optional two-element probability vector for trimming.}
+\item{createCensoringWeightsArgs}{An optional \code{CreateCensoringWeightsArgs}
+object from \code{\link[=createCreateCensoringWeightsArgs]{createCreateCensoringWeightsArgs()}}. If \code{NULL}, default
+trimming (\code{c(0.01, 0.99)}) and no hard cap are applied.}
 }
 \value{
-A person-time data frame with interval and cumulative weights.
+A person-time data frame augmented with \code{acIntervalWeight},
+\code{ccIntervalWeight}, \code{acWeight}, \code{ccWeight}, and the final trimmed/capped
+\code{weight} column.
 }
 \description{
-Calculate stabilized inverse probability of censoring weights
+Fits separate pooled logistic regression models for artificial censoring
+(per-protocol non-adherence) and classical censoring (loss to follow-up),
+then multiplies the resulting interval weights to form a cumulative combined
+weight per clone-interval.
+}
+\details{
+Stabilized weights use a marginal numerator
+(\code{P(uncensored | arm, interval)}) and a covariate-adjusted denominator
+(\code{P(uncensored | arm, interval, X)}).  When no covariates are present, both
+numerator and denominator are equivalent and all weights equal 1.
 }

@@ -291,20 +291,3 @@ plotCovariateBalance <- function(balance) {
     ggplot2::geom_point() + ggplot2::theme_minimal()
 }
 
-#' Plot weighted Kaplan-Meier curves
-#' @param personTime Weighted person-time data frame.
-#' @return A `ggplot2` plot.
-#' @export
-plotKaplanMeier <- function(personTime) {
-  checkmate::assertDataFrame(personTime)
-  weightVector <- personTime[["weight"]]
-  fit <- survival::survfit(survival::Surv(tstop, event) ~ arm, data = personTime,
-                           weights = weightVector)
-  plotData <- data.frame(time = fit$time, survival = fit$surv,
-                         arm = rep(names(fit$strata), fit$strata))
-  ggplot2::ggplot(plotData, ggplot2::aes(x = rlang::.data$time,
-                                         y = rlang::.data$survival,
-                                         colour = rlang::.data$arm)) +
-    ggplot2::geom_step() + ggplot2::theme_minimal() +
-    ggplot2::labs(x = "Days since trial start", y = "Survival probability")
-}

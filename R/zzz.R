@@ -1,10 +1,16 @@
 utils::globalVariables(c(
+  "absSmd",
+  "analysisId",
   "arm",
   "armValue",
   "covariate",
+  "lower",
   "mean",
+  "mdrr",
   "subjectId",
   "survival",
   "time",
-  "weight"
+  "upper",
+  "weight",
+  "Weighting"
 ))

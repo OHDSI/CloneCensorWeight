@@ -4,32 +4,39 @@
 \alias{createClonesAndCensor}
 \title{Create treatment-strategy clones and apply artificial censoring}
 \usage{
-createClonesAndCensor(cloneCensorWeightData, arms, gracePeriod, washoutPeriod)
+createClonesAndCensor(cloneCensorWeightData, createClonesAndCensorArgs)
 }
 \arguments{
-\item{cloneCensorWeightData}{An object of class
-\code{CloneCensorWeightData}, usually returned by
-\code{\link[=getDbCloneCensorWeightData]{getDbCloneCensorWeightData()}}.}
+\item{cloneCensorWeightData}{A \code{CloneCensorWeightData} object, usually
+the output of \code{\link[=createStudyPopulation]{createStudyPopulation()}}.}
 
-\item{arms}{A list defining the treatment strategies. Each arm must provide
-a unique \code{arm} identifier and a strategy definition understood by the
-package.}
-
-\item{gracePeriod}{A non-negative numeric scalar giving the number of days
-after \code{cohortStartDate} during which initiation is permitted.}
-
-\item{washoutPeriod}{A non-negative numeric scalar giving the required
-baseline lookback period in days.}
+\item{createClonesAndCensorArgs}{A \code{CreateClonesAndCensorArgs} object
+created by \code{\link[=createCreateClonesAndCensorArgs]{createCreateClonesAndCensorArgs()}}.}
 }
 \value{
 The input object with its \code{cohorts} table replaced by the cloned,
-artificially censored follow-up table. The table contains \code{subjectId},
+artificially censored follow-up table.  The table contains \code{subjectId},
 \code{cloneId}, \code{arm}, \code{cohortStartDate}, \code{cohortEndDate}, \code{survivalTime},
-\code{event}, and \code{artificiallyCensored}.
+\code{event}, \code{artificiallyCensored}, and \code{initiationDate}.
 }
 \description{
-Duplicates each eligible subject across the supplied treatment strategies,
-identifies protocol deviation relative to the grace period, and truncates
-follow-up at the first deviation. The resulting cohorts are retained in a
-disk-backed object and contain one row per subject-clone follow-up.
+Duplicates each eligible subject across both treatment-strategy arms,
+applies artificial censoring when observed behaviour deviates from the
+arm's protocol, and stores the resulting cloned cohort table back into
+the data object.
+}
+\details{
+The two censoring rules are determined by \code{strategyType} in each
+\code{ArmDefinition}:
+\itemize{
+\item \strong{\code{"initiateWithin"}} — a clone is artificially censored at day
+\code{gracePeriod} if treatment has \strong{not} started by then.
+\item \strong{\code{"deferBeyond"}} — a clone is artificially censored at the
+initiation date if treatment starts \strong{within} \code{gracePeriod} days.
+}
+
+The \code{event} flag is set when any row in the \code{outcomes} table falls within
+the clone's (possibly truncated) follow-up window.  For multi-outcome
+analyses the caller is responsible for filtering the outcomes table to the
+outcome of interest before calling this function.
 }

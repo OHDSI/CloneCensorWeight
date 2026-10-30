@@ -4,16 +4,25 @@
 \alias{fitOutcomeModel}
 \title{Fit a weighted clone-censor-weight outcome model}
 \usage{
-fitOutcomeModel(personTime, modelType = "cox")
+fitOutcomeModel(personTime, modelType = "cox", fitOutcomeModelArgs = NULL)
 }
 \arguments{
-\item{personTime}{Weighted person-time data frame.}
+\item{personTime}{Weighted person-time data frame from
+\code{\link[=createCensoringWeights]{createCensoringWeights()}}.}
 
-\item{modelType}{Either \code{"cox"} or \code{"logistic"}.}
+\item{modelType}{\code{"cox"} or \code{"logistic"}.  Ignored when
+\code{fitOutcomeModelArgs} is supplied.}
+
+\item{fitOutcomeModelArgs}{An optional \code{FitOutcomeModelArgs} object from
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}.  When supplied, \code{modelType} is taken from
+the args object.}
 }
 \value{
-A \code{CloneCensorWeightOutcomeModel} with estimates and model metadata.
+A \code{CloneCensorWeightOutcomeModel} list with elements \code{summary}
+(data frame), \code{model} (fitted model object), \code{estimand}, \code{armLevels},
+\code{clusterVariable}, and \code{varianceEstimator}.
 }
 \description{
-Fit a weighted clone-censor-weight outcome model
+Fits a weighted Cox or pooled logistic model with an appropriate variance
+estimator to account for within-subject clone correlation.
 }

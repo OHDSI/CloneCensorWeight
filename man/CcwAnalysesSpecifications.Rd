@@ -10,7 +10,7 @@ the Strategus module interface without requiring the Strategus package.
 Use \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecifications()}} to construct.
 }
 \section{Super class}{
-\code{AbstractSerializableSettings} -> \code{CcwAnalysesSpecifications}
+\code{\link[CloneCensorWeight:AbstractSerializableSettings]{AbstractSerializableSettings}} -> \code{CcwAnalysesSpecifications}
 }
 \section{Public fields}{
   \if{html}{\out{<div class="r6-fields">}}
@@ -32,7 +32,7 @@ Use \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecification
 }
 \if{html}{\out{<details open><summary>Inherited methods</summary>
 <ul>
-  <li><code>AbstractSerializableSettings$toJson()</code></li>
+  <li><span class="pkg-link" data-pkg="CloneCensorWeight" data-topic="AbstractSerializableSettings" data-id="toJson"><a href='../../CloneCensorWeight/html/AbstractSerializableSettings.html#method-AbstractSerializableSettings-toJson'><code>AbstractSerializableSettings$toJson()</code></a></span></li>
 </ul>
 </details>}}
 \if{html}{\out{<hr>}}

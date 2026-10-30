@@ -15,11 +15,16 @@ discretizePersonTime(
 
 \item{intervalLength}{Length of each interval in days.}
 
-\item{cutPoints}{Optional sorted vector of interval cut points.}
+\item{cutPoints}{Optional sorted vector of interval cut points (overrides
+\code{intervalLength}).}
 }
 \value{
-A data frame with one row per clone-interval.
+A data frame with one row per clone-interval containing columns
+\code{subjectId}, \code{cloneId}, \code{arm}, \code{interval}, \code{tstart}, \code{tstop},
+\code{personTime}, \code{acCensorInInterval}, \code{classicalCensorInInterval}, \code{event}.
 }
 \description{
-Discretize clone follow-up into person-time intervals
+Expands each clone's follow-up into a sequence of discrete intervals.  The
+resulting data frame drives all pooled logistic IPCW models and the weighted
+outcome analysis.
 }

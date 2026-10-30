@@ -8,7 +8,7 @@ R6 class representing a complete CCW analysis specification.
 Use \code{\link[=createCcwAnalysis]{createCcwAnalysis()}} to construct.
 }
 \section{Super class}{
-\code{AbstractSerializableSettings} -> \code{CcwAnalysis}
+\code{\link[CloneCensorWeight:AbstractSerializableSettings]{AbstractSerializableSettings}} -> \code{CcwAnalysis}
 }
 \section{Public fields}{
   \if{html}{\out{<div class="r6-fields">}}
@@ -40,7 +40,7 @@ Use \code{\link[=createCcwAnalysis]{createCcwAnalysis()}} to construct.
 }
 \if{html}{\out{<details open><summary>Inherited methods</summary>
 <ul>
-  <li><code>AbstractSerializableSettings$toJson()</code></li>
+  <li><span class="pkg-link" data-pkg="CloneCensorWeight" data-topic="AbstractSerializableSettings" data-id="toJson"><a href='../../CloneCensorWeight/html/AbstractSerializableSettings.html#method-AbstractSerializableSettings-toJson'><code>AbstractSerializableSettings$toJson()</code></a></span></li>
 </ul>
 </details>}}
 \if{html}{\out{<hr>}}

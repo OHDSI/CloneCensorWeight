@@ -8,7 +8,7 @@ R6 class representing a treatment strategy arm. Use
 \code{\link[=createArmDefinition]{createArmDefinition()}} to construct.
 }
 \section{Super class}{
-\code{AbstractSerializableSettings} -> \code{ArmDefinition}
+\code{\link[CloneCensorWeight:AbstractSerializableSettings]{AbstractSerializableSettings}} -> \code{ArmDefinition}
 }
 \section{Public fields}{
   \if{html}{\out{<div class="r6-fields">}}
@@ -33,8 +33,8 @@ R6 class representing a treatment strategy arm. Use
 }
 \if{html}{\out{<details open><summary>Inherited methods</summary>
 <ul>
-  <li><code>AbstractSerializableSettings$toJson()</code></li>
-  <li><code>AbstractSerializableSettings$toList()</code></li>
+  <li><span class="pkg-link" data-pkg="CloneCensorWeight" data-topic="AbstractSerializableSettings" data-id="toJson"><a href='../../CloneCensorWeight/html/AbstractSerializableSettings.html#method-AbstractSerializableSettings-toJson'><code>AbstractSerializableSettings$toJson()</code></a></span></li>
+  <li><span class="pkg-link" data-pkg="CloneCensorWeight" data-topic="AbstractSerializableSettings" data-id="toList"><a href='../../CloneCensorWeight/html/AbstractSerializableSettings.html#method-AbstractSerializableSettings-toList'><code>AbstractSerializableSettings$toList()</code></a></span></li>
 </ul>
 </details>}}
 \if{html}{\out{<hr>}}
