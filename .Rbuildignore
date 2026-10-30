@@ -1,6 +1,8 @@
 ^cohortmethod-reference$
 ^cohortmethod-reference/
 ^docs/
+^extras/
 ^\.Rcheck$
 ^\.git$
 ^\.Rproj\.user$
+^NEWS\.md$

@@ -1,0 +1,378 @@
+---
+title: "Single Clone-Censor-Weight Study"
+author: "William J. O'Brien"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+vignette: >
+  %\VignetteIndexEntry{Single Clone-Censor-Weight Study}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, comment = "#>")
+```
+
+```{r libraries, message=FALSE, warning=FALSE}
+library(CloneCensorWeight)
+```
+
+# Study design
+
+## Clinical question
+
+**Among adults with rheumatoid arthritis, psoriatic arthritis, or ulcerative
+colitis who newly initiate a JAK inhibitor, does receiving the recombinant
+zoster vaccine (RZV, Shingrix) within 3 months of JAK inhibitor initiation
+reduce incident herpes zoster over 2 years, compared with no vaccination
+during that window?**
+
+## Why this question requires CCW
+
+JAK inhibitors substantially increase herpes zoster risk. Clinical guidelines
+recommend RZV prior to or at the time of JAK inhibitor initiation, but
+real-world vaccination rates are low and timing is variable. A naive
+comparison of vaccinated vs. unvaccinated JAK inhibitor users is vulnerable
+to two problems.
+
+**Immortal time bias.** A patient who receives RZV on day 60 has survived 60
+days without herpes zoster before entering the "vaccinated" group. Assigning
+all their follow-up to the vaccinated group credits the vaccine with 60 days
+of event-free time it did not cause.
+
+**Confounding by indication.** Patients who receive RZV tend to be older,
+more engaged with preventive care, and treated by more proactive providers —
+all of which independently predict herpes zoster risk. Standard baseline
+covariate adjustment cannot correct for confounding that evolves over the
+follow-up window.
+
+CCW addresses both problems. Every patient is cloned into both arms
+simultaneously at cohort entry, so baseline balance is guaranteed. A clone
+is censored only when its observed behavior deviates from its assigned
+protocol. Inverse probability of censoring weighting corrects for the
+informative nature of that censoring.
+
+## Target trial
+
+| Element | Specification |
+|---|---|
+| Eligibility | Adults with RA, PsA, or UC; new JAK inhibitor user (none in prior 365 days); no prior RZV in past 5 years; ≥ 365 days prior observation |
+| Arm 1 | Receive first dose of RZV within 90 days of JAK inhibitor start |
+| Arm 2 | No RZV within the first 90 days (vaccination after day 90 is permitted) |
+| Assignment | Cloning at JAK inhibitor start date |
+| Follow-up | Until herpes zoster, death, disenrollment, or 730 days |
+| Outcome | Incident herpes zoster |
+| Causal contrast | Per-protocol effect of early vaccination vs. deferred or no vaccination |
+
+---
+
+# Cloning mechanics: a minimal example
+
+Before specifying the full analysis, it helps to see exactly what cloning
+does to a small, hand-crafted cohort.  The five subjects below cover every
+scenario that arises with a 90-day grace period.
+
+```{r toy-data}
+library(dplyr)
+
+toy_cohorts <- data.frame(
+  subjectId       = 1:5,
+  cohortStartDate = as.Date("2020-01-01"),
+  cohortEndDate   = as.Date("2021-01-01"),   # 366 days (leap year)
+  initiationDate  = as.Date(c(
+    "2020-02-15",  # Subject 1 — vaccinated on day  45 (within grace period)
+    "2020-05-01",  # Subject 2 — vaccinated on day 121 (after grace period)
+    NA,            # Subject 3 — never vaccinated
+    "2020-03-01",  # Subject 4 — vaccinated on day  60; herpes zoster at day 213
+    NA             # Subject 5 — never vaccinated; herpes zoster at day 152
+  ))
+)
+
+toy_outcomes <- data.frame(
+  subjectId   = c(4L, 5L),
+  outcomeDate = as.Date(c("2020-08-01", "2020-06-01")),
+  outcomeId   = c(1L, 1L)
+)
+
+toy <- createCloneCensorWeightData(toy_cohorts, toy_outcomes)
+```
+
+The raw cohort table shows when (if ever) each subject initiated treatment —
+the only piece of information the cloning algorithm requires.
+
+```{r toy-cohort-table}
+dplyr::collect(toy$cohorts) |>
+  mutate(
+    initiationDay = as.integer(initiationDate - cohortStartDate),
+    outcomeDay    = c(NA, NA, NA, 213L, 152L)
+  ) |>
+  select(subjectId, initiationDay, outcomeDay) |>
+  knitr::kable(
+    col.names = c("Subject", "Vaccination day", "Outcome day"),
+    caption   = "NA = never vaccinated / no outcome"
+  )
+```
+
+Now define the two arms and run the cloning step.
+
+```{r toy-arms}
+arm_initiate <- createArmDefinition(
+  armId        = "rzv_within90",
+  strategyType = "initiateWithin",
+  gracePeriod  = 90,
+  label        = "RZV within 90 days"
+)
+
+arm_defer <- createArmDefinition(
+  armId        = "no_rzv_within90",
+  strategyType = "deferBeyond",
+  gracePeriod  = 90,
+  label        = "No RZV within 90 days"
+)
+```
+
+```{r toy-clone}
+cloned <- createClonesAndCensor(
+  toy,
+  arms         = list(arm_initiate, arm_defer),
+  gracePeriod  = 90,
+  washoutPeriod = 0
+)
+```
+
+```{r toy-clone-table}
+dplyr::collect(cloned$cohorts) |>
+  select(subjectId, arm, survivalTime, artificiallyCensored, event) |>
+  arrange(subjectId, arm) |>
+  knitr::kable(
+    col.names = c("Subject", "Arm", "Survival days", "Artificially censored", "Event"),
+    caption   = paste(
+      "Each subject appears twice — once per arm.",
+      "survivalTime is the number of days the clone is under observation.",
+      "artificiallyCensored = 1 when the clone's observed behaviour",
+      "deviated from its assigned protocol."
+    )
+  )
+```
+
+Reading across the table clarifies several key properties of CCW:
+
+- **Guaranteed balance at baseline.** Every subject enters both arms on the
+  same date with the same prior history; there is no baseline confounding by
+  construction.
+
+- **Complementary censoring.** Subjects 2, 3, and 5 follow the `no_rzv_within90`
+  protocol and are censored from arm `rzv_within90` at day 90. Subjects 1 and 4
+  follow the `rzv_within90` protocol and are censored from arm `no_rzv_within90`
+  at their initiation day.  After day 90 every subject's observed behavior is
+  consistent with exactly one arm.
+
+- **Outcome credit goes to the arm that earned it.** Subject 4 received RZV on
+  day 60 and developed herpes zoster on day 213. That outcome appears only in the
+  `rzv_within90` arm — the `no_rzv_within90` clone was already censored at
+  day 60.  The mirror image holds for Subject 5: because they never vaccinated,
+  their outcome on day 152 accrues entirely to the `no_rzv_within90` arm.
+
+- **IPCW corrects for informative censoring.** The artificial censoring above is
+  not random: subjects who are healthy and well-managed are more likely to receive
+  RZV promptly, so the subjects who *survive* in the `rzv_within90` arm are a
+  selected group.  The inverse probability of censoring weights estimated in the
+  next phase reweight each arm back to the uncensored target population.
+
+---
+
+# Creating the analysis settings
+
+Every analytical choice in a CCW study is captured in a hierarchy of R6
+settings objects. This design allows specifications to be validated at
+construction time, serialized to JSON, and shared or reproduced across
+sites and Strategus pipelines before any data are touched.
+
+## Treatment strategy arms
+
+`createArmDefinition()` specifies the protocol a clone in each arm is
+assigned to follow. The `strategyType` determines the censoring rule applied
+when observed data deviate from the protocol:
+
+- `"initiateWithin"` — censored if treatment has **not** occurred by day
+  `gracePeriod`.
+- `"deferBeyond"` — censored if treatment occurs **within** day
+  `gracePeriod`; initiation after that window is consistent with the
+  strategy.
+
+Together these form a grace period comparison: once the 90-day window
+closes, every patient's observed behavior is consistent with exactly one arm.
+
+```{r arms}
+armVaccinate <- createArmDefinition(
+  armId        = "rzv_within90",
+  strategyType = "initiateWithin",
+  gracePeriod  = 90,
+  label        = "RZV within 90 days of JAK inhibitor start"
+)
+
+armDeferred <- createArmDefinition(
+  armId        = "no_rzv_within90",
+  strategyType = "deferBeyond",
+  gracePeriod  = 90,
+  label        = "No RZV within 90 days"
+)
+```
+
+## Data extraction
+
+```{r db-args}
+# Exclude RZV concept IDs so the treatment does not appear as a predictor
+# in the IPCW models.
+rzvConceptIds <- c(1160056L, 1160057L)
+
+dbArgs <- createGetDbCloneCensorWeightDataArgs(
+  washoutPeriod     = 365,
+  covariateSettings = FeatureExtraction::createDefaultCovariateSettings(
+    excludedCovariateConceptIds = rzvConceptIds,
+    addDescendantsToExclude     = TRUE
+  )
+)
+```
+
+## Study population
+
+```{r pop-args}
+studyPopArgs <- createCreateStudyPopulationArgs(
+  removeSubjectsWithPriorOutcome = TRUE,
+  priorOutcomeLookback           = 365,
+  minDaysAtRisk                  = 1,
+  riskWindowEnd                  = 730,
+  endAnchor                      = "cohort start"
+)
+```
+
+## Cloning and censoring
+
+```{r clones-args}
+clonesArgs <- createCreateClonesAndCensorArgs(
+  arms           = list(armVaccinate, armDeferred),
+  intervalLength = 30
+)
+```
+
+## IPCW weights
+
+```{r weights-args}
+weightsArgs <- createCreateCensoringWeightsArgs(
+  trim      = c(0.01, 0.99),
+  maxWeight = 10
+)
+```
+
+## Outcome model
+
+```{r outcome-args}
+outcomeModelArgs <- createFitOutcomeModelArgs(
+  modelType         = "cox",
+  varianceEstimator = "robust"
+)
+```
+
+## Full analysis specification
+
+`createCcwAnalysis()` assembles all step-level objects into a single,
+validated, serializable specification.
+
+```{r analysis}
+analysis <- createCcwAnalysis(
+  analysisId                     = "main_90day",
+  description                    = "Primary: RZV within 90 days vs. deferred",
+  getDbCloneCensorWeightDataArgs = dbArgs,
+  createStudyPopulationArgs      = studyPopArgs,
+  createClonesAndCensorArgs      = clonesArgs,
+  createCensoringWeightsArgs     = weightsArgs,
+  fitOutcomeModelArgs            = outcomeModelArgs
+)
+```
+
+## Target cohort and outcomes
+
+`createTargetArmOutcome()` links the analysis to specific cohort definition
+IDs in the database. Negative control outcomes are included alongside the
+primary outcome to support empirical calibration.
+
+```{r tao}
+#  101      New JAK inhibitor users with RA, PsA, or UC
+#  102      First dose of RZV — used for both arms; strategyType determines
+#           how each arm interprets initiation events
+#  201      Incident herpes zoster (primary outcome)
+#  301-320  Negative control outcomes for empirical calibration
+
+tao <- createTargetArmOutcome(
+  targetId                    = 101L,
+  arm1CohortId                = 102L,
+  arm2CohortId                = 102L,
+  outcomeIds                  = c(201L, 301:320),
+  excludedCovariateConceptIds = rzvConceptIds
+)
+```
+
+## Top-level specifications
+
+`createCcwAnalysesSpecifications()` combines all analyses and target-arm-outcome
+definitions into the object accepted by `runCcwAnalyses()`.
+
+```{r specs}
+specs <- createCcwAnalysesSpecifications(
+  ccwAnalysisList      = list(analysis),
+  targetArmOutcomeList = list(tao)
+)
+```
+
+---
+
+# Saving and sharing the specification
+
+The full specification can be written to JSON and shared across sites or
+checked into version control. `loadCcwAnalysisList()` reconstructs all R6
+objects from the file, including nested arm definitions.
+
+```{r save-load}
+analysisFile <- tempfile(fileext = ".json")
+taoFile      <- tempfile(fileext = ".json")
+
+saveCcwAnalysisList(list(analysis), analysisFile)
+saveTargetArmOutcomeList(list(tao), taoFile)
+
+reloaded <- loadCcwAnalysisList(analysisFile)
+
+reloaded[[1]]$analysisId
+reloaded[[1]]$createClonesAndCensorArgs$arms[[1]]$armId
+reloaded[[1]]$createClonesAndCensorArgs$arms[[1]]$gracePeriod
+reloaded[[1]]$fitOutcomeModelArgs$varianceEstimator
+```
+
+```{r show-json}
+cat(readLines(analysisFile), sep = "\n")
+```
+
+---
+
+# References
+
+Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on modern
+methods: trial emulation in the presence of immortal-time bias. Insights
+from the GUARDIAN studies. *International Journal of Epidemiology*. 2024.
+<https://pmc.ncbi.nlm.nih.gov/articles/PMC11623977/>
+
+Hernán MA, Robins JM. Using Big Data to Emulate a Target Trial When a
+Randomized Trial Is Not Available. *American Journal of Epidemiology*.
+2016;183(8):758–764.
+
+Hernán MA, Sauer BC, Hernández-Díaz S, Platt R, Shrier I. Specifying a
+target trial prevents immortal time bias and other self-inflicted injuries
+in observational analyses. *Journal of Clinical Epidemiology*. 2016;79:70–75.
+
+Dagnew AF, Abbing-Karahagopian V, Folschweiller N, et al. Immunogenicity
+and safety of the recombinant zoster vaccine in immunocompromised adults:
+ZOSTER-056 randomized trial. *Annals of Internal Medicine*. 2022.

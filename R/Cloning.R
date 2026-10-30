@@ -33,26 +33,37 @@ createClonesAndCensor <- function(cloneCensorWeightData,
   outcomes <- .readCloneCensorWeightTable(cloneCensorWeightData, "outcomes")
   checkmate::assertSubset(c("subjectId", "cohortStartDate", "cohortEndDate", "initiationDate"),
                           names(cohorts))
-  armIds <- vapply(arms, function(arm) as.character(arm$arm), character(1))
+  # Support both ArmDefinition R6 objects (armId / strategyType) and legacy
+  # plain lists (arm / strategy).  Per-arm gracePeriod overrides the scalar.
+  armIds <- vapply(arms, function(arm) {
+    id <- arm$armId %||% arm$arm
+    if (is.null(id)) stop("Each arm must have an 'armId' or 'arm' field.", call. = FALSE)
+    as.character(id)
+  }, character(1))
   checkmate::assert_true(!anyNA(armIds) && !anyDuplicated(armIds))
 
   cloneRows <- lapply(seq_along(arms), function(index) {
     arm <- arms[[index]]
-    strategy <- tolower(as.character(arm$strategy %||% arm$type %||% arm$arm))
+    strategy <- tolower(as.character(
+      arm$strategyType %||% arm$strategy %||% arm$type %||% arm$arm
+    ))
+    armGracePeriod <- arm$gracePeriod %||% gracePeriod
     initiationDay <- as.numeric(as.Date(cohorts$initiationDate) - as.Date(cohorts$cohortStartDate))
-    isInitiateArm <- strategy %in% c("initiate", "within", "treated", "arm1")
+    isInitiateArm <- strategy %in% c("initiatewithin", "initiate", "within", "treated", "arm1")
     followsStrategy <- if (isInitiateArm) {
-      !is.na(initiationDay) & initiationDay >= 0 & initiationDay <= gracePeriod
+      !is.na(initiationDay) & initiationDay >= 0 & initiationDay <= armGracePeriod
     } else {
-      is.na(initiationDay) | initiationDay > gracePeriod
+      is.na(initiationDay) | initiationDay > armGracePeriod
     }
     censorDay <- if (isInitiateArm) {
-      ifelse(!is.na(initiationDay) & initiationDay > gracePeriod, gracePeriod, NA_real_)
+      # Censor at gracePeriod whenever the subject did NOT initiate within the window:
+      # either never initiated (NA) or initiated after the grace period.
+      ifelse(is.na(initiationDay) | initiationDay > armGracePeriod, armGracePeriod, NA_real_)
     } else {
-      ifelse(!is.na(initiationDay) & initiationDay <= gracePeriod, pmax(initiationDay, 0), NA_real_)
+      ifelse(!is.na(initiationDay) & initiationDay <= armGracePeriod, pmax(initiationDay, 0), NA_real_)
     }
-    originalEnd <- as.Date(cohorts$cohortEndDate)
-    censorDate <- as.Date(cohorts$cohortStartDate) + censorDay
+    originalEnd  <- as.Date(cohorts$cohortEndDate)
+    censorDate   <- as.Date(cohorts$cohortStartDate) + censorDay
     censorDate[is.na(censorDay)] <- originalEnd[is.na(censorDay)]
     endDate <- pmin(originalEnd, censorDate)
     event <- vapply(seq_len(nrow(cohorts)), function(row) {
@@ -74,5 +85,3 @@ createClonesAndCensor <- function(cloneCensorWeightData,
   cloneCensorWeightData[["cohorts"]] <- do.call(rbind, cloneRows)
   cloneCensorWeightData
 }
-
-`%||%` <- function(left, right) if (!is.null(left)) left else right

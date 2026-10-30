@@ -29,17 +29,11 @@ test_that("logistic models and diagnostics run", {
   expect_s3_class(plotCovariateBalance(computeCovariateBalance(cloned, weighted)), "ggplot")
   expect_true(is.data.frame(computeCovariateBalance(cloned)))
   expect_true(nrow(discretizePersonTime(cloned, cutPoints = c(0, 30, 60, 120))) > 0)
-  analysis <- createCloneCensorWeightAnalysis("api", arms, 30)
-  expect_equal(analysis$toList()[["analysisId"]], "api")
-  outputFolder <- tempfile("ccw-api-")
-  results <- runCloneCensorWeightAnalyses(data, list(analysis), outputFolder)
-  expect_true("api" %in% names(results))
-  expect_true(file.exists(file.path(outputFolder, "api", "results.csv")))
 })
 
 test_that("invalid arguments fail early", {
   data <- createSampleCloneCensorWeightData(n = 5)
   expect_error(createClonesAndCensor(data, list(list(arm = "one")), 30, 0))
   expect_error(discretizePersonTime(data, intervalLength = 0))
-  expect_error(createCloneCensorWeightAnalysis("bad", list(), 30))
+  expect_error(createArmDefinition(armId = "a", strategyType = "invalid"))
 })

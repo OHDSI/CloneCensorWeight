@@ -15,5 +15,8 @@ createSampleCloneCensorWeightData(n = 200, seed = 42)
 A \code{CloneCensorWeightData} object.
 }
 \description{
-Create a sample clone-censor-weight data set
+Generates a small synthetic data set useful for offline testing and
+demonstrations. The covariates table uses a wide format (one column per
+predictor) compatible with the current weighting code; it will be updated to
+FeatureExtraction sparse format in a later phase.
 }

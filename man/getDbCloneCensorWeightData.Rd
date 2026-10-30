@@ -2,55 +2,64 @@
 % Please edit documentation in R/CloneCensorWeightData.R
 \name{getDbCloneCensorWeightData}
 \alias{getDbCloneCensorWeightData}
-\title{Extract data for clone-censor-weight analysis}
+\title{Extract data for a clone-censor-weight analysis}
 \usage{
 getDbCloneCensorWeightData(
   connectionDetails,
   cdmDatabaseSchema,
+  tempEmulationSchema = getOption("sqlRenderTempEmulationSchema"),
   targetDatabaseSchema,
   targetTable,
   targetId,
   outcomeDatabaseSchema,
   outcomeTable,
   outcomeIds,
-  covariateSettings,
   exposureDatabaseSchema,
   exposureTable,
   exposureId,
+  getDbCloneCensorWeightDataArgs,
   cdmVersion = "5"
 )
 }
 \arguments{
-\item{connectionDetails}{A \code{ConnectionDetails} object.}
+\item{connectionDetails}{A \code{ConnectionDetails} object created by
+\code{\link[DatabaseConnector:createConnectionDetails]{DatabaseConnector::createConnectionDetails()}}.}
 
-\item{cdmDatabaseSchema}{CDM schema.}
+\item{cdmDatabaseSchema}{Schema containing the OMOP CDM tables.}
 
-\item{targetDatabaseSchema}{Target cohort schema.}
+\item{tempEmulationSchema}{Schema for temp-table emulation on platforms
+that require it (Oracle, BigQuery). Defaults to
+\code{getOption("sqlRenderTempEmulationSchema")}.}
 
-\item{targetTable}{Target cohort table.}
+\item{targetDatabaseSchema}{Schema containing the target cohort table.}
 
-\item{targetId}{Target cohort identifier.}
+\item{targetTable}{Target cohort table name.}
 
-\item{outcomeDatabaseSchema}{Outcome cohort schema.}
+\item{targetId}{Target cohort definition identifier.}
 
-\item{outcomeTable}{Outcome cohort table.}
+\item{outcomeDatabaseSchema}{Schema containing the outcome cohort table.}
 
-\item{outcomeIds}{Outcome cohort identifiers.}
+\item{outcomeTable}{Outcome cohort table name.}
 
-\item{covariateSettings}{FeatureExtraction covariate settings.}
+\item{outcomeIds}{Integer vector of outcome cohort definition identifiers.}
 
-\item{exposureDatabaseSchema}{Exposure cohort schema.}
+\item{exposureDatabaseSchema}{Schema containing the exposure cohort table.}
 
-\item{exposureTable}{Exposure cohort table.}
+\item{exposureTable}{Exposure cohort table name.}
 
-\item{exposureId}{Exposure cohort identifier.}
+\item{exposureId}{Exposure cohort definition identifier.}
 
-\item{cdmVersion}{OMOP CDM version.}
+\item{getDbCloneCensorWeightDataArgs}{A
+\code{GetDbCloneCensorWeightDataArgs} object created by
+\code{\link[=createGetDbCloneCensorWeightDataArgs]{createGetDbCloneCensorWeightDataArgs()}}.}
+
+\item{cdmVersion}{OMOP CDM version string. Passed to FeatureExtraction.}
 }
 \value{
 A \code{CloneCensorWeightData} object.
 }
 \description{
-Extracts eligible subjects, treatment initiation markers, outcomes, and
-baseline covariates from an OMOP CDM database.
+Connects to an OMOP CDM database, retrieves eligible subjects, treatment
+initiation markers, outcomes, and baseline covariates via FeatureExtraction,
+and assembles them into a disk-backed \code{CloneCensorWeightData} object.
 }

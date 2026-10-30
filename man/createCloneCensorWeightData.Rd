@@ -13,7 +13,8 @@ createCloneCensorWeightData(
 )
 }
 \arguments{
-\item{cohorts}{A data frame with subject and trial-entry follow-up columns.}
+\item{cohorts}{A data frame with columns \code{subjectId}, \code{cohortStartDate},
+\code{cohortEndDate}, and \code{initiationDate}.}
 
 \item{outcomes}{A data frame of outcome occurrences.}
 

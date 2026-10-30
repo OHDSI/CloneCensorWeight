@@ -1,1 +1,8 @@
-utils::globalVariables(c("arm", "covariate", "mean", "survival", "weight"))
+utils::globalVariables(c(
+  "arm",
+  "covariate",
+  "mean",
+  "survival",
+  "time",
+  "weight"
+))
