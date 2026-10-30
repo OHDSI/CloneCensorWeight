@@ -136,12 +136,11 @@ arm_defer <- createArmDefinition(
 ```
 
 ```{r toy-clone}
-cloned <- createClonesAndCensor(
-  toy,
-  arms         = list(arm_initiate, arm_defer),
-  gracePeriod  = 90,
-  washoutPeriod = 0
+toy_clonesArgs <- createCreateClonesAndCensorArgs(
+  arms           = list(arm_initiate, arm_defer),
+  intervalLength = 30
 )
+cloned <- createClonesAndCensor(toy, toy_clonesArgs)
 ```
 
 ```{r toy-clone-table}

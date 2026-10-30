@@ -14,9 +14,14 @@ test_that("sample data has a post-CDM contract", {
 
 test_that("cloning and weighting produce valid analysis data", {
   data <- createSampleCloneCensorWeightData(n = 40, seed = 2)
-  arms <- list(list(arm = "initiate", strategy = "initiate"),
-               list(arm = "never", strategy = "never"))
-  cloned <- createClonesAndCensor(data, arms, gracePeriod = 30, washoutPeriod = 0)
+  clonesArgs <- createCreateClonesAndCensorArgs(
+    arms = list(
+      createArmDefinition("initiate", "initiateWithin", gracePeriod = 30),
+      createArmDefinition("never",    "deferBeyond",    gracePeriod = 30)
+    ),
+    intervalLength = 30
+  )
+  cloned <- createClonesAndCensor(data, clonesArgs)
   cohorts <- dplyr::collect(cloned$cohorts)
   expect_equal(nrow(cohorts), 80)
   expect_true(any(cohorts$artificiallyCensored == 1))

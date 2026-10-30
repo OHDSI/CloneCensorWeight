@@ -13,11 +13,20 @@ test_that("zero-outcome samples retain valid schemas", {
                     names(dplyr::collect(data$outcomes))))
 })
 
+# Shared arms for this test block
+.testClonesArgs <- function() {
+  createCreateClonesAndCensorArgs(
+    arms = list(
+      createArmDefinition("initiate", "initiateWithin", gracePeriod = 30),
+      createArmDefinition("never",    "deferBeyond",    gracePeriod = 30)
+    ),
+    intervalLength = 30
+  )
+}
+
 test_that("logistic models and diagnostics run", {
-  data <- createSampleCloneCensorWeightData(n = 40, seed = 11)
-  arms <- list(list(arm = "initiate", strategy = "initiate"),
-               list(arm = "never", strategy = "never"))
-  cloned <- createClonesAndCensor(data, arms, 30, 0)
+  data   <- createSampleCloneCensorWeightData(n = 40, seed = 11)
+  cloned <- createClonesAndCensor(data, .testClonesArgs())
   weighted <- createCensoringWeights(discretizePersonTime(cloned, 30), cloned)
   logisticModel <- fitOutcomeModel(weighted, "logistic")
   expect_s3_class(logisticModel, "CloneCensorWeightOutcomeModel")
@@ -33,7 +42,8 @@ test_that("logistic models and diagnostics run", {
 
 test_that("invalid arguments fail early", {
   data <- createSampleCloneCensorWeightData(n = 5)
-  expect_error(createClonesAndCensor(data, list(list(arm = "one")), 30, 0))
+  # createClonesAndCensor now requires CreateClonesAndCensorArgs R6 object
+  expect_error(createClonesAndCensor(data, list(arm = "one")))
   expect_error(discretizePersonTime(data, intervalLength = 0))
   expect_error(createArmDefinition(armId = "a", strategyType = "invalid"))
 })
