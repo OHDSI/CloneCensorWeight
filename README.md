@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 <!-- badges: end -->
 
-**CloneCensorWeight** is an OHDSI [HADES](https://ohdsi.github.io/Hades/) R package for
+**CloneCensorWeight** is an OHDSI R package for
 **clone-censor-weight (CCW) target trial emulation** in the
 [OMOP Common Data Model](https://ohdsi.github.io/CommonDataModel/).
 
@@ -189,15 +189,6 @@ results$ccw_outcome_model[, c("analysis_id", "estimate", "lower_95", "upper_95",
 | [Multiple Analyses](vignettes/MultipleAnalyses.Rmd) | Sensitivity analyses with `runCcwAnalysesOnData()` |
 | [Simulation Studies](vignettes/Simulation.Rmd) | Power analysis and pipeline validation with `simulateCcwData()` |
 | [Developer Guide](vignettes/DeveloperGuide.Rmd) | Internal architecture and data structures at each pipeline step |
-
----
-
-## HADES
-
-CloneCensorWeight is part of [HADES](https://ohdsi.github.io/Hades/) — the
-OHDSI Health Analytics Data-to-Evidence Suite.
-
-<img src="https://ohdsi.github.io/Hades/images/hadesBadge.png" width="200" alt="HADES"/>
 
 ---
 
