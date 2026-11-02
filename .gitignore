@@ -6,3 +6,4 @@
 *.tar.gz
 .DS_Store
 cohortmethod-reference/
+docs/
