@@ -85,16 +85,15 @@ remotes::install_github("ohdsi/CloneCensorWeight")
 
 ## Quick Start
 
-The fastest way to explore the package is with the built-in sample data — no
-database connection required.
+### With sample data (no database required)
 
 ```r
 library(CloneCensorWeight)
 
-# 1. Load sample data (or use simulateCcwData() for a fully synthetic dataset)
+# 1. Load built-in synthetic data
 ccwData <- createSampleCloneCensorWeightData(n = 500, seed = 42)
 
-# 2. Define the two treatment arms (e.g. vaccinate within 90 days vs. defer)
+# 2. Define the two treatment arms
 arms <- list(
   createArmDefinition("vaccinate", "initiateWithin", gracePeriod = 90),
   createArmDefinition("defer",     "deferBeyond",    gracePeriod = 90)
@@ -117,6 +116,35 @@ print(model$summary)
 #>   estimate lower95 upper95 pValue
 #>      0.812   0.651   1.013  0.065
 ```
+
+### With a real CDM
+
+Cohort IDs are specified when extracting data from the database.
+`indexCohortId` is the eligible population (e.g. new users of a drug of
+interest); `targetCohortId` / `comparatorCohortId` identify the treatment
+exposure cohort whose `cohort_start_date` marks treatment initiation.
+
+```r
+ccwData <- getDbCloneCensorWeightData(
+  connectionDetails      = connectionDetails,
+  cdmDatabaseSchema      = "cdm",
+  targetDatabaseSchema   = "results",
+  targetTable            = "cohort",
+  targetId               = 101L,   # indexCohortId  — eligible population
+  exposureDatabaseSchema = "results",
+  exposureTable          = "cohort",
+  exposureId             = 102L,   # targetCohortId — treatment initiation events
+  outcomeDatabaseSchema  = "results",
+  outcomeTable           = "cohort",
+  outcomeIds             = c(201L, 301L:320L),
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(
+    washoutPeriod     = 365,
+    covariateSettings = FeatureExtraction::createDefaultCovariateSettings()
+  )
+)
+```
+
+The rest of the pipeline is identical to the sample-data example above.
 
 ---
 
@@ -142,7 +170,12 @@ analysisList <- list(
   )
 )
 
-tao   <- createTargetComparatorOutcome(indexCohortId = 1L, targetCohortId = 1L, comparatorCohortId = 1L, outcomeIds = 1L)
+tao <- createTargetComparatorOutcome(
+  indexCohortId      = 1L,   # eligible population cohort (sample data uses 1)
+  targetCohortId     = 1L,   # treatment-exposure cohort
+  comparatorCohortId = 1L,   # comparator cohort (same ID; arm strategy distinguishes them)
+  outcomeIds         = 1L
+)
 specs <- createCcwAnalysesSpecifications(analysisList, list(tao))
 
 runCcwAnalysesOnData(ccwData, specs, outputFolder = "results", databaseId = "synpuf")
