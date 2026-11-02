@@ -1,0 +1,304 @@
+---
+title: "Simulation Studies with CloneCensorWeight"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulation Studies with CloneCensorWeight}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", warning = FALSE)
+library(CloneCensorWeight)
+```
+
+`simulateCcwData()` generates synthetic OMOP-like cohorts with a
+piecewise-exponential data-generating process, configurable confounding,
+and a known true hazard ratio.  Because the truth is known, simulated data
+are the right tool for three tasks:
+
+1. **Validating the pipeline** — confirm the CCW estimate recovers the true HR.
+2. **Demonstrating the role of IPCW** — show that skipping the weighting step
+   introduces bias when confounding is present.
+3. **Monte Carlo power analysis** — characterise operating characteristics
+   (bias, RMSE, CI coverage, power) before running on real data.
+
+---
+
+# The data-generating process
+
+## Parameters
+
+| Parameter | Role |
+|---|---|
+| `treatmentPrevalence` | Marginal probability of treatment initiation |
+| `trueHazardRatio` | True causal effect of treatment on the outcome hazard |
+| `confoundingStrength` | How strongly the same covariates predict both treatment and outcome |
+| `baselineHazard` | Baseline hazard per 30-day interval for an untreated subject with average covariates |
+| `censorRate` | Loss-to-follow-up rate per interval |
+
+The confounding mechanism is explicit: the same linear predictor that
+drives treatment propensity also shifts the baseline hazard, so a naive
+comparison will be biased whenever `confoundingStrength > 0`.
+
+## Simulating a single dataset
+
+```{r single-data}
+set.seed(1)
+dat <- simulateCcwData(
+  n                   = 600,
+  nCovariates         = 8,
+  treatmentPrevalence = 0.45,
+  trueHazardRatio     = 0.70,   # treatment reduces hazard by 30 %
+  baselineHazard      = 0.025,
+  censorRate          = 0.010,
+  confoundingStrength = 0.70,
+  gracePeriod         = 30,
+  maxFollowUpDays     = 365,
+  seed                = 1
+)
+```
+
+```{r single-counts}
+cohorts  <- dplyr::collect(dat$cohorts)
+outcomes <- dplyr::collect(dat$outcomes)
+
+cat(sprintf(
+  "%d subjects | %d initiators (%.0f%%) | %d events (%.0f%%)\n",
+  nrow(cohorts),
+  sum(!is.na(cohorts$initiationDate)),
+  100 * mean(!is.na(cohorts$initiationDate)),
+  nrow(outcomes),
+  100 * nrow(outcomes) / nrow(cohorts)
+))
+```
+
+---
+
+# Running the full CCW pipeline
+
+```{r pipeline}
+popArgs <- createCreateStudyPopulationArgs(
+  riskWindowEnd                  = 365,
+  endAnchor                      = "cohort start",
+  removeSubjectsWithPriorOutcome = FALSE
+)
+
+cloneArgs <- createCreateClonesAndCensorArgs(
+  arms = list(
+    createArmDefinition("initiate", "initiateWithin", gracePeriod = 30),
+    createArmDefinition("never",    "deferBeyond",    gracePeriod = 30)
+  ),
+  intervalLength = 30
+)
+
+createStudyPopulation(dat, outcomeId = 1L, popArgs)
+cloned   <- createClonesAndCensor(dat, cloneArgs)
+pt       <- discretizePersonTime(cloned, intervalLength = 30)
+weighted <- createCensoringWeights(pt, cloned)
+```
+
+```{r weight-summary}
+wSummary <- summary(weighted$weight[weighted$weight > 0])
+print(wSummary)
+```
+
+The distribution of IPCW weights reflects how much re-weighting is needed
+to restore balance.  Values far from 1 indicate stronger informative censoring.
+
+```{r ccw-model}
+modelArgs <- createFitOutcomeModelArgs("cox", "robust")
+model_ccw <- fitOutcomeModel(weighted, fitOutcomeModelArgs = modelArgs)
+
+s <- model_ccw$summary
+cat(sprintf(
+  "CCW estimate:  HR = %.3f  (95%% CI %.3f–%.3f)  p = %.3f\n",
+  s$estimate, s$lower95, s$upper95, s$pValue
+))
+cat(sprintf("True HR: 0.700\n"))
+```
+
+---
+
+# The role of IPCW: what happens without weighting?
+
+Setting all IPCW weights to 1 is equivalent to a naive clone-only analysis
+that ignores informative censoring.  With `confoundingStrength = 0.70`,
+subjects who remain uncensored in each arm are a selected subset — and that
+selection is not random.
+
+```{r unweighted-model}
+# Override weights to 1 — keeps the cloning structure, discards IPCW
+pt_naive         <- weighted
+pt_naive$weight  <- 1
+
+model_naive <- fitOutcomeModel(pt_naive, fitOutcomeModelArgs = modelArgs)
+
+sn <- model_naive$summary
+cat(sprintf(
+  "Naive estimate: HR = %.3f  (95%% CI %.3f–%.3f)  p = %.3f\n",
+  sn$estimate, sn$lower95, sn$upper95, sn$pValue
+))
+```
+
+```{r comparison-table}
+comparison <- data.frame(
+  Method    = c("CCW (with IPCW)", "Naive (weight = 1)", "Truth"),
+  HR        = c(s$estimate,  sn$estimate, 0.700),
+  Lower95   = c(s$lower95,   sn$lower95,  NA),
+  Upper95   = c(s$upper95,   sn$upper95,  NA),
+  stringsAsFactors = FALSE
+)
+knitr::kable(comparison, digits = 3,
+             col.names = c("Method", "HR", "Lower 95%", "Upper 95%"),
+             caption = "CCW vs. naive estimate. True HR = 0.70.")
+```
+
+The naive estimate is attenuated toward the null (or biased away from the
+truth) because the covariates that drive treatment initiation also affect
+outcome risk.  IPCW restores the intended comparison.
+
+---
+
+# Covariate balance
+
+IPCW should also reduce covariate imbalance between the arms.
+
+```{r balance}
+smd_before <- computeStandardizedDifferences(dat)
+smd_after  <- computeStandardizedDifferences(dat, weights = weighted)
+
+cat("Max |SMD| before weighting:", round(max(abs(smd_before$smd)), 3), "\n")
+cat("Max |SMD| after  weighting:", round(max(abs(smd_after$smd)),  3), "\n")
+```
+
+```{r love-plot, fig.width=6, fig.height=3.5}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  plotLovePlot(smd_before, smd_after)
+}
+```
+
+---
+
+# Kaplan–Meier curves
+
+```{r km, fig.width=6, fig.height=4}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  plotKaplanMeier(weighted)
+}
+```
+
+---
+
+# Monte Carlo operating characteristics
+
+`runSimulation()` automates repeated simulation and estimation so you can
+characterise bias, RMSE, CI coverage, and power before running the analysis
+on real data.
+
+## Under the null (HR = 1): type I error
+
+```{r null-sim, cache=FALSE}
+sim_null <- suppressWarnings(
+  runSimulation(
+    nSims               = 25,
+    n                   = 250,
+    trueHazardRatio     = 1.00,
+    baselineHazard      = 0.025,
+    censorRate          = 0.010,
+    confoundingStrength = 0.70,
+    gracePeriod         = 30,
+    seed                = 42
+  )
+)
+
+summarizeSimulation(sim_null, trueHazardRatio = 1.00)
+```
+
+Coverage should be near 95% and power (= type I error here) near 5% when
+the method is correctly calibrated.  With only 25 replications, Monte Carlo
+error is substantial; production studies use ≥ 1 000.
+
+## Under the alternative (HR = 0.7): power
+
+```{r alt-sim, cache=FALSE}
+sim_alt <- suppressWarnings(
+  runSimulation(
+    nSims               = 25,
+    n                   = 250,
+    trueHazardRatio     = 0.70,
+    baselineHazard      = 0.025,
+    censorRate          = 0.010,
+    confoundingStrength = 0.70,
+    gracePeriod         = 30,
+    seed                = 42
+  )
+)
+
+summarizeSimulation(sim_alt, trueHazardRatio = 0.70)
+```
+
+```{r sim-table}
+null_summary <- summarizeSimulation(sim_null, trueHazardRatio = 1.00)
+alt_summary  <- summarizeSimulation(sim_alt,  trueHazardRatio = 0.70)
+
+results_df <- data.frame(
+  Scenario        = c("Null (HR = 1.0)", "Alternative (HR = 0.7)"),
+  Convergence     = c(null_summary$convergenceRate, alt_summary$convergenceRate),
+  Bias            = c(null_summary$bias,            alt_summary$bias),
+  RMSE            = c(null_summary$rmse,            alt_summary$rmse),
+  Coverage        = c(null_summary$coverage,        alt_summary$coverage),
+  Power           = c(null_summary$power,           alt_summary$power),
+  stringsAsFactors = FALSE
+)
+
+knitr::kable(results_df, digits = 3,
+             caption = paste("Operating characteristics from 25 replications",
+                             "(n = 250 per replication). Increase nSims ≥ 1000",
+                             "for production power analyses."))
+```
+
+## Estimate distribution
+
+```{r estimate-dist, fig.width=6, fig.height=3.5}
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  conv_null <- sim_null[sim_null$converged, ]
+  conv_alt  <- sim_alt[sim_alt$converged, ]
+
+  plotData <- rbind(
+    data.frame(logRr = conv_null$logRr, Scenario = "Null (HR = 1.0)"),
+    data.frame(logRr = conv_alt$logRr,  Scenario = "Alt  (HR = 0.7)")
+  )
+
+  ggplot2::ggplot(plotData, ggplot2::aes(x = exp(logRr), fill = Scenario)) +
+    ggplot2::geom_density(alpha = 0.4) +
+    ggplot2::geom_vline(xintercept = c(0.70, 1.00),
+                        linetype = "dashed", colour = "grey40") +
+    ggplot2::scale_x_continuous(limits = c(0.2, 2.5)) +
+    ggplot2::labs(x = "Estimated HR", y = "Density",
+                  title = "Sampling distributions of the CCW estimator") +
+    ggplot2::theme_minimal() +
+    ggplot2::theme(legend.position = "bottom")
+}
+```
+
+The dashed lines mark the true HRs.  The null distribution should be
+centred on 1 (no bias); the alternative distribution should be centred on
+0.7 and shifted left relative to the null, with overlap inversely
+proportional to power.
+
+---
+
+# Guidance for production simulation studies
+
+| Setting | Recommendation |
+|---|---|
+| `nSims` | ≥ 1 000 for stable power estimates; ≥ 500 for coverage |
+| `n` | Match expected study size or sweep over a range |
+| `confoundingStrength` | Calibrate to domain knowledge about the indication |
+| `baselineHazard` | Set from published incidence rates for the outcome |
+| `censorRate` | Set from observed loss-to-follow-up rates in pilot data |
+| `fitOutcomeModelArgs` | Use the same settings as the planned real analysis |
+
+Parallel execution is straightforward: split the `seed` range across
+workers and `rbind()` the results.

@@ -78,7 +78,7 @@ dropResultsDataModel <- function(connection, databaseSchema, tablePrefix = "") {
 #' Upload analysis results to the results data model
 #'
 #' Inserts a named list of result data frames — typically produced by
-#' [runAnalysis()] — into the corresponding `ccw_*` tables.  The `analysisId`
+#' [runCcwAnalyses()] — into the corresponding `ccw_*` tables.  The `analysisId`
 #' is stamped onto every row before insertion so results from multiple studies
 #' can coexist in the same schema.
 #'

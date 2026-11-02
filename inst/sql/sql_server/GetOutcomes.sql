@@ -1,9 +1,9 @@
 -- Outcome events for subjects in the temp cohort table (#ccw_cohorts).
 --
 -- Parameters:
---   @outcome_database_schema   Schema containing the outcome cohort table
---   @outcome_table             Outcome cohort table name
---   @outcome_ids               Comma-separated outcome cohort definition IDs
+-- @outcome_database_schema Schema containing the outcome cohort table
+-- @outcome_table Outcome cohort table name
+-- @outcome_ids Comma-separated outcome cohort definition IDs
 
 SELECT
   o.subject_id,

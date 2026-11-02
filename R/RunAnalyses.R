@@ -1,6 +1,6 @@
 #' Run a full suite of CCW target trial emulation analyses
 #'
-#' Iterates over every combination of `TargetArmOutcome` × `CcwAnalysis` ×
+#' Iterates over every combination of `TargetComparatorOutcome` × `CcwAnalysis` ×
 #' outcome in `ccwAnalysesSpecifications`, executes the full clone-censor-weight
 #' pipeline for each, and appends results to CSV files in `outputFolder`.
 #'
@@ -44,7 +44,7 @@
 #'   result row.
 #' @param databaseName Human-readable data source name.
 #' @param negativeControlOutcomeIds Integer vector of outcome IDs (a subset of
-#'   the `outcomeIds` in each `TargetArmOutcome`) to treat as negative controls
+#'   the `outcomeIds` in each `TargetComparatorOutcome`) to treat as negative controls
 #'   for empirical calibration.  Leave empty to skip calibration.
 #' @param cdmVersion OMOP CDM version string passed to FeatureExtraction.
 #'
@@ -106,13 +106,13 @@ runCcwAnalyses <- function(connectionDetails,
           tempEmulationSchema     = tempEmulationSchema,
           targetDatabaseSchema    = targetDatabaseSchema,
           targetTable             = targetTable,
-          targetId                = tao$targetId,
+          targetId                = tao$indexCohortId,
           outcomeDatabaseSchema   = outcomeDatabaseSchema,
           outcomeTable            = outcomeTable,
           outcomeIds              = tao$outcomeIds,
           exposureDatabaseSchema  = exposureDatabaseSchema,
           exposureTable           = exposureTable,
-          exposureId              = tao$arm1CohortId,
+          exposureId              = tao$targetCohortId,
           getDbCloneCensorWeightDataArgs = analysis$getDbCloneCensorWeightDataArgs,
           cdmVersion              = cdmVersion
         ),
@@ -145,10 +145,51 @@ runCcwAnalyses <- function(connectionDetails,
   invisible(outputFolder)
 }
 
+#' Run CCW analyses on a pre-loaded data object
+#'
+#' A convenience wrapper around the internal pipeline that accepts an already
+#' loaded `CloneCensorWeightData` object instead of database connection
+#' details.  Useful for vignettes, simulation studies with [simulateCcwData()],
+#' and integration testing without a live CDM connection.
+#'
+#' @param data A `CloneCensorWeightData` object, e.g. from
+#'   [createSampleCloneCensorWeightData()] or [simulateCcwData()].
+#' @inheritParams runCcwAnalyses
+#'
+#' @return Invisibly, the path to `outputFolder`.
+#' @export
+runCcwAnalysesOnData <- function(data,
+                                 ccwAnalysesSpecifications,
+                                 outputFolder,
+                                 databaseId                = "unknown",
+                                 databaseName              = databaseId,
+                                 negativeControlOutcomeIds = integer(0)) {
+  checkmate::assertClass(data, "CloneCensorWeightData")
+  checkmate::assertR6(ccwAnalysesSpecifications, "CcwAnalysesSpecifications")
+  checkmate::assertString(outputFolder)
+  checkmate::assertIntegerish(negativeControlOutcomeIds, any.missing = FALSE)
+
+  if (!dir.exists(outputFolder)) dir.create(outputFolder, recursive = TRUE)
+
+  specs <- ccwAnalysesSpecifications
+  for (tao in specs$targetArmOutcomeList) {
+    for (analysis in specs$ccwAnalysisList) {
+      .runForData(
+        data                      = data,
+        tao                       = tao,
+        analysis                  = analysis,
+        outputFolder              = outputFolder,
+        databaseId                = databaseId,
+        databaseName              = databaseName,
+        negativeControlOutcomeIds = negativeControlOutcomeIds
+      )
+    }
+  }
+  invisible(outputFolder)
+}
+
 # ---------------------------------------------------------------------------
 # Internal: run the full analysis pipeline on a pre-loaded data object.
-# Exposed as a non-exported function so integration tests can call it without
-# a database connection.
 # ---------------------------------------------------------------------------
 
 .runForData <- function(data,
@@ -166,7 +207,7 @@ runCcwAnalyses <- function(connectionDetails,
   outcomeResults <- list()
 
   for (outcomeId in tao$outcomeIds) {
-    compositeId <- .makeCompositeId(analysis$analysisId, tao$targetId, outcomeId)
+    compositeId <- .makeCompositeId(analysis$analysisId, tao$indexCohortId, outcomeId)
 
     if (.alreadyRun(compositeId, outputFolder)) {
       ParallelLogger::logInfo(sprintf("Skipping '%s' (already in output)", compositeId))
@@ -285,8 +326,8 @@ runCcwAnalyses <- function(connectionDetails,
 }
 
 # Build the composite analysis ID string.
-.makeCompositeId <- function(analysisId, targetId, outcomeId) {
-  paste0(analysisId, "_t", targetId, "_o", outcomeId)
+.makeCompositeId <- function(analysisId, indexCohortId, outcomeId) {
+  paste0(analysisId, "_t", indexCohortId, "_o", outcomeId)
 }
 
 # TRUE if the composite ID already appears in ccw_outcome_model.csv.

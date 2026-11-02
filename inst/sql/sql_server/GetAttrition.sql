@@ -12,37 +12,37 @@ SELECT
 FROM (
 
   SELECT
-    1                                         AS step_order,
-    'Target cohort after washout period'      AS description,
-    COUNT(DISTINCT subject_id)                AS n_subjects,
-    0                                         AS n_excluded
+    1 AS step_order,
+    'Target cohort after washout period' AS description,
+    COUNT(DISTINCT subject_id) AS n_subjects,
+    0 AS n_excluded
   FROM #ccw_cohorts
 
   UNION ALL
 
   SELECT
-    2                                         AS step_order,
-    'Clones created (both arms)'              AS description,
-    COUNT(*)                                  AS n_subjects,
-    0                                         AS n_excluded
+    2 AS step_order,
+    'Clones created (both arms)' AS description,
+    COUNT(*) AS n_subjects,
+    0 AS n_excluded
   FROM #ccw_clones
 
   UNION ALL
 
   SELECT
-    3                                         AS step_order,
-    'Artificially censored clones'            AS description,
-    SUM(artificially_censored)                AS n_subjects,
-    SUM(artificially_censored)                AS n_excluded
+    3 AS step_order,
+    'Artificially censored clones' AS description,
+    SUM(artificially_censored) AS n_subjects,
+    SUM(artificially_censored) AS n_excluded
   FROM #ccw_clones
 
   UNION ALL
 
   SELECT
-    4                                         AS step_order,
+    4 AS step_order,
     'Clones retained after artificial censoring' AS description,
-    SUM(1 - artificially_censored)            AS n_subjects,
-    0                                         AS n_excluded
+    SUM(1 - artificially_censored) AS n_subjects,
+    0 AS n_excluded
   FROM #ccw_clones
 
 ) attrition

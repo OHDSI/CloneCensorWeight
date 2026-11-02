@@ -8,7 +8,7 @@
 #' @importClassesFrom FeatureExtraction CovariateData
 #' @importClassesFrom Andromeda Andromeda
 #' @importFrom rlang .data
-#' @importFrom stats ave rbinom runif sample.int
+#' @importFrom stats ave rbinom runif
 #' @export
 setClass("CloneCensorWeightData", contains = "CovariateData")
 
@@ -213,7 +213,7 @@ loadCloneCensorWeightData <- function(file) {
 #'   `getOption("sqlRenderTempEmulationSchema")`.
 #' @param targetDatabaseSchema Schema containing the target cohort table.
 #' @param targetTable Target cohort table name.
-#' @param targetId Target cohort definition identifier.
+#' @param targetId Index cohort definition identifier.
 #' @param outcomeDatabaseSchema Schema containing the outcome cohort table.
 #' @param outcomeTable Outcome cohort table name.
 #' @param outcomeIds Integer vector of outcome cohort definition identifiers.

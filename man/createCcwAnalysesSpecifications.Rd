@@ -4,26 +4,26 @@
 \alias{createCcwAnalysesSpecifications}
 \title{Create a CCW analyses specifications object}
 \usage{
-createCcwAnalysesSpecifications(ccwAnalysisList, targetArmOutcomeList)
+createCcwAnalysesSpecifications(ccwAnalysisList, targetComparatorOutcomeList)
 }
 \arguments{
 \item{ccwAnalysisList}{A list of \code{CcwAnalysis} objects.}
 
-\item{targetArmOutcomeList}{A list of \code{TargetArmOutcome} objects.}
+\item{targetComparatorOutcomeList}{A list of \code{TargetComparatorOutcome} objects.}
 }
 \value{
 A \code{CcwAnalysesSpecifications} object.
 }
 \description{
 Combines a list of \code{\link[=createCcwAnalysis]{createCcwAnalysis()}} objects and a list of
-\code{\link[=createTargetArmOutcome]{createTargetArmOutcome()}} objects into a top-level specification that
+\code{\link[=createTargetComparatorOutcome]{createTargetComparatorOutcome()}} objects into a top-level specification that
 can be passed to \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} or serialized for a Strategus module.
 }
 \examples{
 \dontrun{
 specs <- createCcwAnalysesSpecifications(
   ccwAnalysisList      = list(analysis1, analysis2),
-  targetArmOutcomeList = list(tao1)
+  targetComparatorOutcomeList = list(tao1)
 )
 specs$toJson()
 }

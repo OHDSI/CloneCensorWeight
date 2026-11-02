@@ -55,7 +55,7 @@ result row.}
 \item{databaseName}{Human-readable data source name.}
 
 \item{negativeControlOutcomeIds}{Integer vector of outcome IDs (a subset of
-the \code{outcomeIds} in each \code{TargetArmOutcome}) to treat as negative controls
+the \code{outcomeIds} in each \code{TargetComparatorOutcome}) to treat as negative controls
 for empirical calibration.  Leave empty to skip calibration.}
 
 \item{cdmVersion}{OMOP CDM version string passed to FeatureExtraction.}
@@ -64,7 +64,7 @@ for empirical calibration.  Leave empty to skip calibration.}
 Invisibly, the path to \code{outputFolder}.
 }
 \description{
-Iterates over every combination of \code{TargetArmOutcome} × \code{CcwAnalysis} ×
+Iterates over every combination of \code{TargetComparatorOutcome} × \code{CcwAnalysis} ×
 outcome in \code{ccwAnalysesSpecifications}, executes the full clone-censor-weight
 pipeline for each, and appends results to CSV files in \code{outputFolder}.
 }

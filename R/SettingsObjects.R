@@ -867,23 +867,24 @@ loadCcwAnalysisList <- function(file) {
 
 
 # -------------------------------------------------------------------------
-# TargetArmOutcome
+# TargetComparatorOutcome
 # -------------------------------------------------------------------------
 
-#' @title TargetArmOutcome class
-#' @description R6 class representing a target cohort, exposure cohort pair,
-#'   and associated outcomes. Use [createTargetArmOutcome()] to construct.
+#' @title TargetComparatorOutcome class
+#' @description R6 class representing an index population cohort, treatment and
+#'   comparator exposure cohorts, and associated outcomes. Use
+#'   [createTargetComparatorOutcome()] to construct.
 #' @export
-TargetArmOutcome <- R6::R6Class(
-  "TargetArmOutcome",
+TargetComparatorOutcome <- R6::R6Class(
+  "TargetComparatorOutcome",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field targetId Eligible population cohort definition ID.
-    targetId                    = NULL,
-    #' @field arm1CohortId Exposure cohort ID for arm 1.
-    arm1CohortId                = NULL,
-    #' @field arm2CohortId Exposure cohort ID for arm 2.
-    arm2CohortId                = NULL,
+    #' @field indexCohortId Index (eligible population) cohort definition ID.
+    indexCohortId               = NULL,
+    #' @field targetCohortId Treatment exposure cohort definition ID.
+    targetCohortId           = NULL,
+    #' @field comparatorCohortId Comparator exposure cohort definition ID.
+    comparatorCohortId          = NULL,
     #' @field outcomeIds Outcome cohort definition IDs.
     outcomeIds                  = NULL,
     #' @field excludedCovariateConceptIds Concept IDs to exclude from covariates.
@@ -891,22 +892,22 @@ TargetArmOutcome <- R6::R6Class(
     #' @field includedCovariateConceptIds Concept IDs to include in covariates.
     includedCovariateConceptIds = NULL,
 
-    #' @description Create a `TargetArmOutcome`.
-    #' @param targetId Eligible population cohort definition ID.
-    #' @param arm1CohortId Arm 1 exposure cohort ID.
-    #' @param arm2CohortId Arm 2 exposure cohort ID.
+    #' @description Create a `TargetComparatorOutcome`.
+    #' @param indexCohortId Index (eligible population) cohort definition ID.
+    #' @param targetCohortId Treatment exposure cohort definition ID.
+    #' @param comparatorCohortId Comparator exposure cohort definition ID.
     #' @param outcomeIds Outcome cohort IDs.
     #' @param excludedCovariateConceptIds Excluded concept IDs.
     #' @param includedCovariateConceptIds Included concept IDs.
-    initialize = function(targetId                    = NULL,
-                          arm1CohortId                = NULL,
-                          arm2CohortId                = NULL,
+    initialize = function(indexCohortId               = NULL,
+                          targetCohortId           = NULL,
+                          comparatorCohortId          = NULL,
                           outcomeIds                  = NULL,
                           excludedCovariateConceptIds = integer(0),
                           includedCovariateConceptIds = integer(0)) {
-      self$targetId                    <- targetId
-      self$arm1CohortId                <- arm1CohortId
-      self$arm2CohortId                <- arm2CohortId
+      self$indexCohortId               <- indexCohortId
+      self$targetCohortId           <- targetCohortId
+      self$comparatorCohortId          <- comparatorCohortId
       self$outcomeIds                  <- outcomeIds
       self$excludedCovariateConceptIds <- excludedCovariateConceptIds %||% integer(0)
       self$includedCovariateConceptIds <- includedCovariateConceptIds %||% integer(0)
@@ -917,11 +918,11 @@ TargetArmOutcome <- R6::R6Class(
     #' @return Invisibly returns `self`.
     validate = function() {
       errs <- checkmate::makeAssertCollection()
-      checkmate::assertNumeric(self$targetId, len = 1, any.missing = FALSE,
+      checkmate::assertNumeric(self$indexCohortId, len = 1, any.missing = FALSE,
                                add = errs)
-      checkmate::assertNumeric(self$arm1CohortId, len = 1, any.missing = FALSE,
+      checkmate::assertNumeric(self$targetCohortId, len = 1, any.missing = FALSE,
                                add = errs)
-      checkmate::assertNumeric(self$arm2CohortId, len = 1, any.missing = FALSE,
+      checkmate::assertNumeric(self$comparatorCohortId, len = 1, any.missing = FALSE,
                                add = errs)
       checkmate::assertNumeric(self$outcomeIds, min.len = 1, any.missing = FALSE,
                                add = errs)
@@ -937,16 +938,20 @@ TargetArmOutcome <- R6::R6Class(
 
 #' Create a target arm outcome specification
 #'
-#' Defines the cohorts involved in a CCW analysis: the eligible target
-#' population, the two exposure cohorts (one per arm), and the outcome cohorts.
+#' Defines the cohorts involved in a CCW analysis: the eligible index
+#' population, the treatment and comparator exposure cohorts, and the outcome
+#' cohorts.
 #'
-#' @param targetId Cohort definition ID for the eligible population (e.g. new
-#'   JAK inhibitor users).
-#' @param arm1CohortId Cohort definition ID for the arm 1 exposure (e.g. RZV
-#'   recipients).
-#' @param arm2CohortId Cohort definition ID for the arm 2 exposure. For a
-#'   `"deferBeyond"` arm this is the same exposure cohort as arm 1 — the arm
-#'   strategy determines how initiation events are interpreted.
+#' @param indexCohortId Cohort definition ID for the eligible index population
+#'   (e.g. new JAK inhibitor users). This is the base cohort from which both
+#'   arms are cloned.
+#' @param targetCohortId Cohort definition ID for the treatment exposure
+#'   (e.g. RZV recipients). Used to determine initiation dates for the
+#'   treatment arm.
+#' @param comparatorCohortId Cohort definition ID for the comparator exposure.
+#'   For a `"deferBeyond"` comparator this is typically the same cohort as
+#'   `targetCohortId` — the arm strategy determines how initiation events
+#'   are interpreted.
 #' @param outcomeIds One or more outcome cohort definition IDs. Include both
 #'   the primary outcome and negative control outcomes.
 #' @param excludedCovariateConceptIds Concept IDs to exclude from the covariate
@@ -954,29 +959,29 @@ TargetArmOutcome <- R6::R6Class(
 #' @param includedCovariateConceptIds Concept IDs to restrict the covariate set
 #'   to. Usually left empty.
 #'
-#' @return A `TargetArmOutcome` object.
+#' @return A `TargetComparatorOutcome` object.
 #'
 #' @examples
 #' \dontrun{
-#' tao <- createTargetArmOutcome(
-#'   targetId     = 101,
-#'   arm1CohortId = 102,
-#'   arm2CohortId = 102,
-#'   outcomeIds   = c(201, 301:320)
+#' tao <- createTargetComparatorOutcome(
+#'   indexCohortId      = 101,
+#'   targetCohortId  = 102,
+#'   comparatorCohortId = 102,
+#'   outcomeIds         = c(201, 301:320)
 #' )
 #' }
 #'
 #' @export
-createTargetArmOutcome <- function(targetId,
-                                   arm1CohortId,
-                                   arm2CohortId,
+createTargetComparatorOutcome <- function(indexCohortId,
+                                   targetCohortId,
+                                   comparatorCohortId,
                                    outcomeIds,
                                    excludedCovariateConceptIds = integer(0),
                                    includedCovariateConceptIds = integer(0)) {
-  obj <- TargetArmOutcome$new(
-    targetId                    = targetId,
-    arm1CohortId                = arm1CohortId,
-    arm2CohortId                = arm2CohortId,
+  obj <- TargetComparatorOutcome$new(
+    indexCohortId               = indexCohortId,
+    targetCohortId           = targetCohortId,
+    comparatorCohortId          = comparatorCohortId,
     outcomeIds                  = outcomeIds,
     excludedCovariateConceptIds = excludedCovariateConceptIds,
     includedCovariateConceptIds = includedCovariateConceptIds
@@ -987,21 +992,21 @@ createTargetArmOutcome <- function(targetId,
 
 #' Save a list of target arm outcomes to a JSON file
 #'
-#' @param targetArmOutcomeList A list of `TargetArmOutcome` objects.
+#' @param targetComparatorOutcomeList A list of `TargetComparatorOutcome` objects.
 #' @param file Path to the output JSON file.
 #'
 #' @return Invisibly returns `file`.
 #'
 #' @examples
 #' \dontrun{
-#' saveTargetArmOutcomeList(taoList, "targetArmOutcomes.json")
+#' saveTargetComparatorOutcomeList(taoList, "targetArmOutcomes.json")
 #' }
 #'
 #' @export
-saveTargetArmOutcomeList <- function(targetArmOutcomeList, file) {
-  checkmate::assertList(targetArmOutcomeList, min.len = 1)
+saveTargetComparatorOutcomeList <- function(targetComparatorOutcomeList, file) {
+  checkmate::assertList(targetComparatorOutcomeList, min.len = 1)
   checkmate::assertCharacter(file, len = 1)
-  json <- jsonlite::toJSON(lapply(targetArmOutcomeList, function(t) t$toList()),
+  json <- jsonlite::toJSON(lapply(targetComparatorOutcomeList, function(t) t$toList()),
                            auto_unbox = TRUE, null = "null", pretty = TRUE)
   writeLines(json, file)
   invisible(file)
@@ -1009,24 +1014,24 @@ saveTargetArmOutcomeList <- function(targetArmOutcomeList, file) {
 
 #' Load a list of target arm outcomes from a JSON file
 #'
-#' @param file Path to a JSON file created by [saveTargetArmOutcomeList()].
+#' @param file Path to a JSON file created by [saveTargetComparatorOutcomeList()].
 #'
-#' @return A list of `TargetArmOutcome` objects.
+#' @return A list of `TargetComparatorOutcome` objects.
 #'
 #' @examples
 #' \dontrun{
-#' taoList <- loadTargetArmOutcomeList("targetArmOutcomes.json")
+#' taoList <- loadTargetComparatorOutcomeList("targetArmOutcomes.json")
 #' }
 #'
 #' @export
-loadTargetArmOutcomeList <- function(file) {
+loadTargetComparatorOutcomeList <- function(file) {
   checkmate::assertFileExists(file)
   rawList <- jsonlite::fromJSON(file, simplifyVector = FALSE)
   lapply(rawList, function(x) {
-    createTargetArmOutcome(
-      targetId                    = x$targetId,
-      arm1CohortId                = x$arm1CohortId,
-      arm2CohortId                = x$arm2CohortId,
+    createTargetComparatorOutcome(
+      indexCohortId               = x$indexCohortId,
+      targetCohortId           = x$targetCohortId,
+      comparatorCohortId          = x$comparatorCohortId,
       outcomeIds                  = unlist(x$outcomeIds),
       excludedCovariateConceptIds = unlist(x$excludedCovariateConceptIds) %||% integer(0),
       includedCovariateConceptIds = unlist(x$includedCovariateConceptIds) %||% integer(0)
@@ -1051,15 +1056,15 @@ CcwAnalysesSpecifications <- R6::R6Class(
   public = list(
     #' @field ccwAnalysisList List of `CcwAnalysis` objects.
     ccwAnalysisList      = NULL,
-    #' @field targetArmOutcomeList List of `TargetArmOutcome` objects.
-    targetArmOutcomeList = NULL,
+    #' @field targetComparatorOutcomeList List of `TargetComparatorOutcome` objects.
+    targetComparatorOutcomeList = NULL,
 
     #' @description Create a `CcwAnalysesSpecifications`.
     #' @param ccwAnalysisList List of `CcwAnalysis` objects.
-    #' @param targetArmOutcomeList List of `TargetArmOutcome` objects.
-    initialize = function(ccwAnalysisList = NULL, targetArmOutcomeList = NULL) {
+    #' @param targetComparatorOutcomeList List of `TargetComparatorOutcome` objects.
+    initialize = function(ccwAnalysisList = NULL, targetComparatorOutcomeList = NULL) {
       self$ccwAnalysisList      <- ccwAnalysisList
-      self$targetArmOutcomeList <- targetArmOutcomeList
+      self$targetComparatorOutcomeList <- targetComparatorOutcomeList
       invisible(self)
     },
 
@@ -1068,7 +1073,7 @@ CcwAnalysesSpecifications <- R6::R6Class(
     toList = function() {
       list(
         ccwAnalysisList      = lapply(self$ccwAnalysisList, function(a) a$toList()),
-        targetArmOutcomeList = lapply(self$targetArmOutcomeList, function(t) t$toList())
+        targetComparatorOutcomeList = lapply(self$targetComparatorOutcomeList, function(t) t$toList())
       )
     },
 
@@ -1077,7 +1082,7 @@ CcwAnalysesSpecifications <- R6::R6Class(
     validate = function() {
       errs <- checkmate::makeAssertCollection()
       checkmate::assertList(self$ccwAnalysisList, min.len = 1, add = errs)
-      checkmate::assertList(self$targetArmOutcomeList, min.len = 1, add = errs)
+      checkmate::assertList(self$targetComparatorOutcomeList, min.len = 1, add = errs)
       checkmate::reportAssertions(errs)
       analysisIds <- vapply(self$ccwAnalysisList,
                             function(a) a$analysisId, character(1))
@@ -1093,11 +1098,11 @@ CcwAnalysesSpecifications <- R6::R6Class(
 #' Create a CCW analyses specifications object
 #'
 #' Combines a list of [createCcwAnalysis()] objects and a list of
-#' [createTargetArmOutcome()] objects into a top-level specification that
+#' [createTargetComparatorOutcome()] objects into a top-level specification that
 #' can be passed to [runCcwAnalyses()] or serialized for a Strategus module.
 #'
 #' @param ccwAnalysisList A list of `CcwAnalysis` objects.
-#' @param targetArmOutcomeList A list of `TargetArmOutcome` objects.
+#' @param targetComparatorOutcomeList A list of `TargetComparatorOutcome` objects.
 #'
 #' @return A `CcwAnalysesSpecifications` object.
 #'
@@ -1105,16 +1110,16 @@ CcwAnalysesSpecifications <- R6::R6Class(
 #' \dontrun{
 #' specs <- createCcwAnalysesSpecifications(
 #'   ccwAnalysisList      = list(analysis1, analysis2),
-#'   targetArmOutcomeList = list(tao1)
+#'   targetComparatorOutcomeList = list(tao1)
 #' )
 #' specs$toJson()
 #' }
 #'
 #' @export
-createCcwAnalysesSpecifications <- function(ccwAnalysisList, targetArmOutcomeList) {
+createCcwAnalysesSpecifications <- function(ccwAnalysisList, targetComparatorOutcomeList) {
   obj <- CcwAnalysesSpecifications$new(
     ccwAnalysisList      = ccwAnalysisList,
-    targetArmOutcomeList = targetArmOutcomeList
+    targetComparatorOutcomeList = targetComparatorOutcomeList
   )
   obj$validate()
   obj

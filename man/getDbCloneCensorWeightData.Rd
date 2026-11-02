@@ -35,7 +35,7 @@ that require it (Oracle, BigQuery). Defaults to
 
 \item{targetTable}{Target cohort table name.}
 
-\item{targetId}{Target cohort definition identifier.}
+\item{targetId}{Index cohort definition identifier.}
 
 \item{outcomeDatabaseSchema}{Schema containing the outcome cohort table.}
 

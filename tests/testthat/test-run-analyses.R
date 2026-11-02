@@ -24,11 +24,11 @@ make_analysis <- function(id = "main") {
 }
 
 make_tao <- function() {
-  createTargetArmOutcome(
-    targetId     = 1L,
-    arm1CohortId = 2L,
-    arm2CohortId = 2L,
-    outcomeIds   = c(10L, 11L, 12L)
+  createTargetComparatorOutcome(
+    indexCohortId      = 1L,
+    targetCohortId  = 2L,
+    comparatorCohortId = 2L,
+    outcomeIds         = c(10L, 11L, 12L)
   )
 }
 

@@ -29,7 +29,7 @@ Invisibly \code{NULL}.  Called for its side-effect.
 }
 \description{
 Inserts a named list of result data frames — typically produced by
-\code{\link[=runAnalysis]{runAnalysis()}} — into the corresponding \verb{ccw_*} tables.  The \code{analysisId}
+\code{\link[=runCcwAnalyses]{runCcwAnalyses()}} — into the corresponding \verb{ccw_*} tables.  The \code{analysisId}
 is stamped onto every row before insertion so results from multiple studies
 can coexist in the same schema.
 }

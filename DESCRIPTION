@@ -16,9 +16,8 @@ Description: Implements clone-censor-weight target trial emulation for
     follows the OHDSI HADES framework and provides data extraction,
     cloning, artificial and classical inverse probability of censoring
     weighting, clustered-variance outcome models, covariate balance
-    diagnostics, empirical calibration, and a Strategus-compatible
-    module interface.
-License: Apache License (>= 2)
+    diagnostics, and empirical calibration.
+License: Apache License (>= 2) | file LICENSE
 Encoding: UTF-8
 LazyData: false
 Roxygen: list(markdown = TRUE)
@@ -42,9 +41,12 @@ Imports:
     survival,
     utils
 Suggests:
+    Capr,
+    CohortGenerator,
     Eunomia,
     ggplot2,
     knitr,
+    PhenotypeLibrary,
     ResultModelManager,
     rmarkdown,
     testthat (>= 3.0.0),

@@ -17,7 +17,7 @@ Use \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecification
   \describe{
     \item{\code{ccwAnalysisList}}{List of \code{CcwAnalysis} objects.}
 
-    \item{\code{targetArmOutcomeList}}{List of \code{TargetArmOutcome} objects.}
+    \item{\code{targetComparatorOutcomeList}}{List of \code{TargetComparatorOutcome} objects.}
   }
   \if{html}{\out{</div>}}
 }
@@ -44,7 +44,7 @@ Use \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecification
     \if{html}{\out{<div class="r">}}
     \preformatted{CcwAnalysesSpecifications$new(
   ccwAnalysisList = NULL,
-  targetArmOutcomeList = NULL
+  targetComparatorOutcomeList = NULL
 )}
     \if{html}{\out{</div>}}
   }
@@ -52,7 +52,7 @@ Use \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecification
     \if{html}{\out{<div class="arguments">}}
     \describe{
       \item{\code{ccwAnalysisList}}{List of \code{CcwAnalysis} objects.}
-      \item{\code{targetArmOutcomeList}}{List of \code{TargetArmOutcome} objects.}
+      \item{\code{targetComparatorOutcomeList}}{List of \code{TargetComparatorOutcome} objects.}
     }
     \if{html}{\out{</div>}}
   }

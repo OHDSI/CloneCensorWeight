@@ -4,6 +4,7 @@ output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{Multiple Clone-Censor-Weight Analyses}
   %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
 ```{r setup, include=FALSE}
@@ -11,41 +12,128 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 library(CloneCensorWeight)
 ```
 
-The multi-analysis runner reuses the same extracted data while varying the
-grace period, person-time interval, or outcome model. This mirrors
-CohortMethod's analysis-list pattern while preserving CCW-specific strategy
-definitions.
+Running multiple analysis specifications over the same data is a core
+workflow for sensitivity analyses — comparing different grace periods,
+interval lengths, variance estimators, or outcome definitions without
+re-extracting data from the CDM.
 
-```{r specifications}
-ccwData <- createSampleCloneCensorWeightData(n = 200, seed = 42)
-arms <- list(
-  list(arm = "initiate", strategy = "initiate"),
-  list(arm = "never", strategy = "never")
-)
-analyses <- list(
-  createCloneCensorWeightAnalysis(
-    analysisId = "cox-30-day",
-    arms = arms,
-    gracePeriod = 30,
-    intervalLength = 30,
-    modelType = "cox"
-  ),
-  createCloneCensorWeightAnalysis(
-    analysisId = "logistic-60-day",
-    arms = arms,
-    gracePeriod = 60,
-    intervalLength = 14,
-    modelType = "logistic"
+## Data
+
+We use the built-in sample data for illustration.  In a real study
+`createSampleCloneCensorWeightData()` is replaced by
+`getDbCloneCensorWeightData()`.
+
+```{r data}
+ccwData <- createSampleCloneCensorWeightData(n = 300, seed = 42)
+```
+
+## Defining multiple analysis specifications
+
+Each `CcwAnalysis` object captures every analytical choice: arm strategy,
+interval length, IPCW settings, and outcome model.  Here we define three
+analyses varying the grace period.
+
+```{r specs}
+makeAnalysis <- function(id, gracePeriod) {
+  createCcwAnalysis(
+    analysisId = id,
+    description = paste("Grace period:", gracePeriod, "days"),
+    createStudyPopulationArgs = createCreateStudyPopulationArgs(
+      riskWindowEnd  = 365,
+      endAnchor      = "cohort start",
+      removeSubjectsWithPriorOutcome = FALSE
+    ),
+    createClonesAndCensorArgs = createCreateClonesAndCensorArgs(
+      arms = list(
+        createArmDefinition("initiate", "initiateWithin", gracePeriod = gracePeriod),
+        createArmDefinition("never",    "deferBeyond",    gracePeriod = gracePeriod)
+      ),
+      intervalLength = 30
+    ),
+    createCensoringWeightsArgs = createCreateCensoringWeightsArgs(),
+    fitOutcomeModelArgs        = createFitOutcomeModelArgs("cox", "robust")
   )
+}
+
+analysisList <- list(
+  makeAnalysis("gp30",  gracePeriod = 30),
+  makeAnalysis("gp60",  gracePeriod = 60),
+  makeAnalysis("gp90",  gracePeriod = 90)
 )
 ```
 
-Each analysis receives a dedicated output directory containing the model
-results, weight diagnostics, and serialized Andromeda cache.
+The `TargetComparatorOutcome` object links the analysis to cohort IDs.
+For the sample data all subjects share `indexCohortId = 1`.
 
-```{r run}
-outputFolder <- tempfile("ccw-multiple-")
-results <- runCloneCensorWeightAnalyses(ccwData, analyses, outputFolder)
-lapply(results, function(result) result$outcomeModel$summary)
-list.files(outputFolder, recursive = TRUE)
+```{r tao}
+tao <- createTargetComparatorOutcome(
+  indexCohortId      = 1L,
+  targetCohortId     = 1L,
+  comparatorCohortId = 1L,
+  outcomeIds         = c(1L)
+)
+
+specs <- createCcwAnalysesSpecifications(
+  ccwAnalysisList      = analysisList,
+  targetArmOutcomeList = list(tao)
+)
+```
+
+## Running all analyses
+
+`runCcwAnalysesOnData()` iterates over every combination of
+`TargetComparatorOutcome` × `CcwAnalysis` × outcome and appends results to CSV
+files in `outputFolder`.  Resume logic means a partially-completed run can
+be restarted without re-doing finished analyses.
+
+```{r run, warning=FALSE}
+outputFolder <- tempfile("ccw_multi_")
+suppressWarnings(
+  runCcwAnalysesOnData(
+    data                      = ccwData,
+    ccwAnalysesSpecifications = specs,
+    outputFolder              = outputFolder,
+    databaseId                = "sample"
+  )
+)
+list.files(outputFolder)
+```
+
+## Reading back results
+
+```{r read}
+results <- importFromCsv(outputFolder)
+names(results)
+```
+
+The outcome model table has one row per analysis × outcome combination.
+
+```{r om-table}
+om <- results$ccw_outcome_model
+om[, c("analysis_id", "model_type", "estimate", "lower_95", "upper_95", "p_value")]
+```
+
+## Comparing estimates across grace periods
+
+```{r compare}
+om$gracePeriod <- sub("gp", "", sub("_.*", "", om$analysis_id))
+om$gracePeriod <- factor(om$gracePeriod, levels = c("30", "60", "90"))
+om[order(om$gracePeriod), c("gracePeriod", "estimate", "lower_95", "upper_95")]
+```
+
+## Serialising the specification
+
+The full specification can be written to JSON for sharing or version control.
+
+```{r save-load}
+analysisFile <- tempfile(fileext = ".json")
+saveCcwAnalysisList(analysisList, analysisFile)
+
+reloaded <- loadCcwAnalysisList(analysisFile)
+vapply(reloaded, function(a) a$analysisId, character(1))
+```
+
+```{r cleanup, include=FALSE}
+unlink(outputFolder, recursive = TRUE)
+unlink(analysisFile)
 ```

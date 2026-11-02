@@ -14,210 +14,295 @@ vignette: >
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, comment = "#>")
+knitr::opts_chunk$set(echo = TRUE, eval = FALSE, comment = "#>")
 ```
 
-```{r libraries, message=FALSE, warning=FALSE}
-library(CloneCensorWeight)
+```{r load-packages, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
+#library(CloneCensorWeight)
+devtools::load_all()
+library(Capr)
 ```
 
-# Study design
+# Introduction
+
+This vignette demonstrates how to run a single clone-censor-weight (CCW)
+target trial emulation using the `CloneCensorWeight` package. We use the OHDSI
+[Capr](https://ohdsi.github.io/Capr/) package to define cohorts in R and
+[CohortGenerator](https://ohdsi.github.io/CohortGenerator/) to instantiate
+them on a database before running the analysis.
 
 ## Clinical question
 
-**Among adults with rheumatoid arthritis, psoriatic arthritis, or ulcerative
-colitis who newly initiate a JAK inhibitor, does receiving the recombinant
-zoster vaccine (RZV, Shingrix) within 3 months of JAK inhibitor initiation
-reduce incident herpes zoster over 2 years, compared with no vaccination
-during that window?**
+**Among adults with rheumatoid arthritis (RA), psoriatic arthritis (PsA), or
+ulcerative colitis (UC) who newly initiate a JAK inhibitor, does receiving the
+recombinant zoster vaccine (RZV, Shingrix) within 90 days of JAK inhibitor
+initiation reduce incident herpes zoster over two years, compared with no
+vaccination during that window?**
 
-## Why this question requires CCW
+## Why CCW is needed
 
-JAK inhibitors substantially increase herpes zoster risk. Clinical guidelines
-recommend RZV prior to or at the time of JAK inhibitor initiation, but
-real-world vaccination rates are low and timing is variable. A naive
-comparison of vaccinated vs. unvaccinated JAK inhibitor users is vulnerable
-to two problems.
+JAK inhibitors substantially increase herpes zoster risk. A naive comparison
+of vaccinated vs. unvaccinated JAK inhibitor users is biased for two reasons.
 
-**Immortal time bias.** A patient who receives RZV on day 60 has survived 60
-days without herpes zoster before entering the "vaccinated" group. Assigning
-all their follow-up to the vaccinated group credits the vaccine with 60 days
-of event-free time it did not cause.
+**Immortal time bias.** A patient vaccinated on day 60 has survived 60 days
+without herpes zoster before entering the "vaccinated" group; a naive analysis
+credits the vaccine with those event-free days.
 
-**Confounding by indication.** Patients who receive RZV tend to be older,
-more engaged with preventive care, and treated by more proactive providers —
-all of which independently predict herpes zoster risk. Standard baseline
-covariate adjustment cannot correct for confounding that evolves over the
-follow-up window.
+**Informative censoring.** Within the CCW framework, a clone assigned to the
+"vaccinate within 90 days" arm is artificially censored when the patient has
+not yet vaccinated. Because healthier, more care-engaged patients are more
+likely to vaccinate promptly, the subjects who *survive* in the vaccinated arm
+are a positively selected subset. Inverse probability of censoring weighting
+(IPCW) corrects for this selection.
 
-CCW addresses both problems. Every patient is cloned into both arms
-simultaneously at cohort entry, so baseline balance is guaranteed. A clone
-is censored only when its observed behavior deviates from its assigned
-protocol. Inverse probability of censoring weighting corrects for the
-informative nature of that censoring.
+CCW addresses both problems. Every patient is cloned into both arms at cohort
+entry, so baseline balance is guaranteed. Each clone is censored only when its
+observed behavior deviates from its assigned protocol. IPCW restores the
+target population.
 
-## Target trial
+## Target trial specification
 
 | Element | Specification |
 |---|---|
-| Eligibility | Adults with RA, PsA, or UC; new JAK inhibitor user (none in prior 365 days); no prior RZV in past 5 years; ≥ 365 days prior observation |
-| Arm 1 | Receive first dose of RZV within 90 days of JAK inhibitor start |
-| Arm 2 | No RZV within the first 90 days (vaccination after day 90 is permitted) |
+| Eligibility | Adults with RA, PsA, or UC; new JAK inhibitor user (no use in prior 365 days); no prior RZV in past 5 years; ≥ 365 days prior observation |
+| Treatment arm | Receive first dose of RZV within 90 days of JAK inhibitor start |
+| Comparator arm | No RZV within the first 90 days |
 | Assignment | Cloning at JAK inhibitor start date |
 | Follow-up | Until herpes zoster, death, disenrollment, or 730 days |
-| Outcome | Incident herpes zoster |
-| Causal contrast | Per-protocol effect of early vaccination vs. deferred or no vaccination |
+| Primary outcome | Incident herpes zoster |
+| Causal contrast | Per-protocol effect of early vaccination vs. deferred/no vaccination |
 
 ---
 
-# Cloning mechanics: a minimal example
+# Connecting to the database
 
-Before specifying the full analysis, it helps to see exactly what cloning
-does to a small, hand-crafted cohort.  The five subjects below cover every
-scenario that arises with a 90-day grace period.
+`CloneCensorWeight` uses `DatabaseConnector` to communicate with the CDM.
+Adjust the connection details for your platform.
 
-```{r toy-data}
-library(dplyr)
+```{r connect}
+library(CloneCensorWeight)
+library(Capr)
+library(CohortGenerator)
 
-toy_cohorts <- data.frame(
-  subjectId       = 1:5,
-  cohortStartDate = as.Date("2020-01-01"),
-  cohortEndDate   = as.Date("2021-01-01"),   # 366 days (leap year)
-  initiationDate  = as.Date(c(
-    "2020-02-15",  # Subject 1 — vaccinated on day  45 (within grace period)
-    "2020-05-01",  # Subject 2 — vaccinated on day 121 (after grace period)
-    NA,            # Subject 3 — never vaccinated
-    "2020-03-01",  # Subject 4 — vaccinated on day  60; herpes zoster at day 213
-    NA             # Subject 5 — never vaccinated; herpes zoster at day 152
-  ))
+connectionDetails <- DatabaseConnector::createConnectionDetails(
+  dbms    = "postgresql",
+  server  = "localhost/ohdsi",
+  user    = "joe",
+  password = "supersecret"
 )
 
-toy_outcomes <- data.frame(
-  subjectId   = c(4L, 5L),
-  outcomeDate = as.Date(c("2020-08-01", "2020-06-01")),
-  outcomeId   = c(1L, 1L)
-)
+cdmDatabaseSchema    <- "cdm_v54"
+cohortDatabaseSchema <- "scratch"
+cohortTable          <- "ccw_jak_rzv"
 
-toy <- createCloneCensorWeightData(toy_cohorts, toy_outcomes)
+options(sqlRenderTempEmulationSchema = NULL)
 ```
 
-The raw cohort table shows when (if ever) each subject initiated treatment —
-the only piece of information the cloning algorithm requires.
+---
 
-```{r toy-cohort-table}
-dplyr::collect(toy$cohorts) |>
-  mutate(
-    initiationDay = as.integer(initiationDate - cohortStartDate),
-    outcomeDay    = c(NA, NA, NA, 213L, 152L)
-  ) |>
-  select(subjectId, initiationDay, outcomeDay) |>
-  knitr::kable(
-    col.names = c("Subject", "Vaccination day", "Outcome day"),
-    caption   = "NA = never vaccinated / no outcome"
-  )
-```
+# Defining cohorts with Capr
 
-Now define the two arms and run the cloning step.
+We define four cohort types:
 
-```{r toy-arms}
-arm_initiate <- createArmDefinition(
-  armId        = "rzv_within90",
-  strategyType = "initiateWithin",
-  gracePeriod  = 90,
-  label        = "RZV within 90 days"
+1. **Index cohort** — new JAK inhibitor users with an autoimmune indication
+2. **Exposure cohort** — first dose of RZV (used for both arms)
+3. **Primary outcome cohort** — incident herpes zoster
+4. **Negative control outcome cohorts** — for empirical calibration
+
+Concept IDs can be browsed and verified at
+[Athena](https://athena.ohdsi.org/).
+
+## Concept sets
+
+```{r concept-sets}
+# JAK inhibitors (tofacitinib, baricitinib, upadacitinib, filgotinib,
+# abrocitinib — include all descendants to capture branded formulations)
+jakInhibitors <- cs(
+  descendants(42873017L,  # tofacitinib
+              1510448L,   # baricitinib
+              2213473L,   # upadacitinib
+              2109604L,   # filgotinib
+              2215702L),  # abrocitinib
+  name = "JAK inhibitors"
 )
 
-arm_defer <- createArmDefinition(
-  armId        = "no_rzv_within90",
-  strategyType = "deferBeyond",
-  gracePeriod  = 90,
-  label        = "No RZV within 90 days"
+# Autoimmune indications
+rheumatoidArthritis <- cs(descendants(80809L),  name = "Rheumatoid arthritis")
+psoriaticArthritis  <- cs(descendants(73553L),  name = "Psoriatic arthritis")
+ulcerativeColitis   <- cs(descendants(81893L),  name = "Ulcerative colitis")
+
+# Recombinant zoster vaccine (Shingrix only — excludes live zoster vaccine)
+rzv <- cs(
+  descendants(1160056L,   # recombinant zoster vaccine antigen
+              1160057L),  # zoster vaccine recombinant
+  name = "Recombinant zoster vaccine (Shingrix)"
 )
+
+# Herpes zoster
+herpesZoster <- cs(descendants(4067760L), name = "Herpes zoster")
 ```
 
-```{r toy-clone}
-toy_clonesArgs <- createCreateClonesAndCensorArgs(
-  arms           = list(arm_initiate, arm_defer),
-  intervalLength = 30
-)
-cloned <- createClonesAndCensor(toy, toy_clonesArgs)
-```
+## Index cohort: new JAK inhibitor users
 
-```{r toy-clone-table}
-dplyr::collect(cloned$cohorts) |>
-  select(subjectId, arm, survivalTime, artificiallyCensored, event) |>
-  arrange(subjectId, arm) |>
-  knitr::kable(
-    col.names = c("Subject", "Arm", "Survival days", "Artificially censored", "Event"),
-    caption   = paste(
-      "Each subject appears twice — once per arm.",
-      "survivalTime is the number of days the clone is under observation.",
-      "artificiallyCensored = 1 when the clone's observed behaviour",
-      "deviated from its assigned protocol."
+Eligible patients must have an autoimmune indication (RA, PsA, or UC) on or
+before their JAK inhibitor start date, at least 365 days of prior observation,
+no JAK inhibitor use in the prior 365 days, and no prior RZV in the past
+5 years.
+
+```{r index-cohort}
+jakNewUsers <- cohort(
+  entry = entry(
+    drugExposure(jakInhibitors, firstOccurrence()),
+    observationWindow = continuousObservation(priorDays = 365L)
+  ),
+  attrition = attrition(
+    "Autoimmune indication" = withAny(
+      atLeast(1, conditionOccurrence(rheumatoidArthritis),
+              duringInterval(eventStarts(-Inf, 0))),
+      atLeast(1, conditionOccurrence(psoriaticArthritis),
+              duringInterval(eventStarts(-Inf, 0))),
+      atLeast(1, conditionOccurrence(ulcerativeColitis),
+              duringInterval(eventStarts(-Inf, 0)))
+    ),
+    "No prior JAK inhibitor" = withAll(
+      exactly(0, drugExposure(jakInhibitors),
+              duringInterval(eventStarts(-365L, -1L)))
+    ),
+    "No prior RZV" = withAll(
+      exactly(0, drugExposure(rzv),
+              duringInterval(eventStarts(-1825L, -1L)))  # 5 years
     )
-  )
+  ),
+  exit = exit(endStrategy = observationExit())
+)
 ```
 
-Reading across the table clarifies several key properties of CCW:
+## Exposure cohort: RZV vaccination
 
-- **Guaranteed balance at baseline.** Every subject enters both arms on the
-  same date with the same prior history; there is no baseline confounding by
-  construction.
+This cohort captures any RZV dose. It is used by both arms: the `initiateWithin`
+strategy will look for events in this cohort that fall within the grace period,
+and the `deferBeyond` strategy will look for events that fall after it.
 
-- **Complementary censoring.** Subjects 2, 3, and 5 follow the `no_rzv_within90`
-  protocol and are censored from arm `rzv_within90` at day 90. Subjects 1 and 4
-  follow the `rzv_within90` protocol and are censored from arm `no_rzv_within90`
-  at their initiation day.  After day 90 every subject's observed behavior is
-  consistent with exactly one arm.
+```{r exposure-cohort}
+rzvCohort <- cohort(
+  entry = entry(
+    drugExposure(rzv, firstOccurrence()),
+    observationWindow = continuousObservation(priorDays = 0L)
+  ),
+  exit = exit(endStrategy = fixedExit(index = "startDate", offsetDays = 0L))
+)
+```
 
-- **Outcome credit goes to the arm that earned it.** Subject 4 received RZV on
-  day 60 and developed herpes zoster on day 213. That outcome appears only in the
-  `rzv_within90` arm — the `no_rzv_within90` clone was already censored at
-  day 60.  The mirror image holds for Subject 5: because they never vaccinated,
-  their outcome on day 152 accrues entirely to the `no_rzv_within90` arm.
+## Outcome cohort: incident herpes zoster
 
-- **IPCW corrects for informative censoring.** The artificial censoring above is
-  not random: subjects who are healthy and well-managed are more likely to receive
-  RZV promptly, so the subjects who *survive* in the `rzv_within90` arm are a
-  selected group.  The inverse probability of censoring weights estimated in the
-  next phase reweight each arm back to the uncensored target population.
+We restrict to first-ever herpes zoster diagnoses, excluding patients with any
+prior herpes zoster to ensure incident cases only.
+
+```{r outcome-cohort}
+herpesZosterCohort <- cohort(
+  entry = entry(
+    conditionOccurrence(herpesZoster, firstOccurrence()),
+    observationWindow = continuousObservation(priorDays = 0L)
+  ),
+  attrition = attrition(
+    "No prior herpes zoster" = withAll(
+      exactly(0, conditionOccurrence(herpesZoster),
+              duringInterval(eventStarts(-Inf, -1L)))
+    )
+  ),
+  exit = exit(endStrategy = fixedExit(index = "startDate", offsetDays = 0L))
+)
+```
+
+## Assembling the cohort set
+
+`makeCohortSet()` assigns sequential cohort definition IDs and returns a
+data frame compatible with `CohortGenerator`.
+
+```{r cohort-set}
+# Cohort IDs: 1 = JAK new users, 2 = RZV, 3 = herpes zoster
+# makeCohortSet() derives cohort names from the R variable names
+allCohorts <- makeCohortSet(jakNewUsers, rzvCohort, herpesZosterCohort)
+```
+
+For a real study, include 20–50 negative control outcome cohorts alongside
+the primary outcome cohort to support empirical calibration. These can be
+pulled from the OHDSI `PhenotypeLibrary`:
+
+```{r negative-controls, eval=FALSE}
+library(PhenotypeLibrary)
+
+# Example: fetch a set of negative control outcomes known to be unaffected
+# by JAK inhibitor use
+negativeControlIds <- c(372924L, 73560L, 201606L)  # illustrative IDs only
+ncCohorts <- getPlCohortDefinitionSet(negativeControlIds)
+
+allCohorts <- dplyr::bind_rows(allCohorts, ncCohorts)
+```
 
 ---
 
-# Creating the analysis settings
+# Generating cohorts
 
-Every analytical choice in a CCW study is captured in a hierarchy of R6
-settings objects. This design allows specifications to be validated at
-construction time, serialized to JSON, and shared or reproduced across
-sites and Strategus pipelines before any data are touched.
+With cohort definitions in hand, we use `CohortGenerator` to create the
+cohort tables and instantiate all cohorts on the CDM.
+
+```{r generate}
+cohortTableNames <- CohortGenerator::getCohortTableNames(cohortTable)
+
+CohortGenerator::createCohortTables(
+  connectionDetails    = connectionDetails,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTableNames     = cohortTableNames
+)
+
+CohortGenerator::generateCohortSet(
+  connectionDetails    = connectionDetails,
+  cdmDatabaseSchema    = cdmDatabaseSchema,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTableNames     = cohortTableNames,
+  cohortDefinitionSet  = allCohorts
+)
+```
+
+Check cohort counts before proceeding. Very low counts in either the index
+or outcome cohort are an early warning that concept sets may need refinement.
+
+```{r counts}
+CohortGenerator::getCohortCounts(
+  connectionDetails    = connectionDetails,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTable          = cohortTableNames$cohortTable
+)
+```
+
+---
+
+# Defining the CCW analysis
+
+Every analytical choice is captured in a hierarchy of settings objects that
+can be validated, serialized to JSON, and reproduced across sites.
 
 ## Treatment strategy arms
 
-`createArmDefinition()` specifies the protocol a clone in each arm is
-assigned to follow. The `strategyType` determines the censoring rule applied
-when observed data deviate from the protocol:
-
-- `"initiateWithin"` — censored if treatment has **not** occurred by day
-  `gracePeriod`.
-- `"deferBeyond"` — censored if treatment occurs **within** day
-  `gracePeriod`; initiation after that window is consistent with the
-  strategy.
-
-Together these form a grace period comparison: once the 90-day window
-closes, every patient's observed behavior is consistent with exactly one arm.
+`createArmDefinition()` specifies the protocol each clone is assigned to follow.
 
 ```{r arms}
+# RZV concept IDs to exclude from IPCW covariates so the vaccine does not
+# predict its own censoring
+rzvConceptIds <- c(1160056L, 1160057L)
+
 armVaccinate <- createArmDefinition(
-  armId        = "rzv_within90",
+  armId        = "rzv_within_90",
   strategyType = "initiateWithin",
-  gracePeriod  = 90,
+  gracePeriod  = 90L,
   label        = "RZV within 90 days of JAK inhibitor start"
 )
 
 armDeferred <- createArmDefinition(
-  armId        = "no_rzv_within90",
+  armId        = "no_rzv_within_90",
   strategyType = "deferBeyond",
-  gracePeriod  = 90,
+  gracePeriod  = 90L,
   label        = "No RZV within 90 days"
 )
 ```
@@ -225,12 +310,8 @@ armDeferred <- createArmDefinition(
 ## Data extraction
 
 ```{r db-args}
-# Exclude RZV concept IDs so the treatment does not appear as a predictor
-# in the IPCW models.
-rzvConceptIds <- c(1160056L, 1160057L)
-
 dbArgs <- createGetDbCloneCensorWeightDataArgs(
-  washoutPeriod     = 365,
+  washoutPeriod     = 365L,
   covariateSettings = FeatureExtraction::createDefaultCovariateSettings(
     excludedCovariateConceptIds = rzvConceptIds,
     addDescendantsToExclude     = TRUE
@@ -243,26 +324,26 @@ dbArgs <- createGetDbCloneCensorWeightDataArgs(
 ```{r pop-args}
 studyPopArgs <- createCreateStudyPopulationArgs(
   removeSubjectsWithPriorOutcome = TRUE,
-  priorOutcomeLookback           = 365,
-  minDaysAtRisk                  = 1,
-  riskWindowEnd                  = 730,
+  priorOutcomeLookback           = 365L,
+  minDaysAtRisk                  = 1L,
+  riskWindowEnd                  = 730L,
   endAnchor                      = "cohort start"
 )
 ```
 
 ## Cloning and censoring
 
-```{r clones-args}
-clonesArgs <- createCreateClonesAndCensorArgs(
+```{r clone-args}
+cloneArgs <- createCreateClonesAndCensorArgs(
   arms           = list(armVaccinate, armDeferred),
-  intervalLength = 30
+  intervalLength = 30L
 )
 ```
 
 ## IPCW weights
 
-```{r weights-args}
-weightsArgs <- createCreateCensoringWeightsArgs(
+```{r weight-args}
+weightArgs <- createCreateCensoringWeightsArgs(
   trim      = c(0.01, 0.99),
   maxWeight = 10
 )
@@ -270,8 +351,8 @@ weightsArgs <- createCreateCensoringWeightsArgs(
 
 ## Outcome model
 
-```{r outcome-args}
-outcomeModelArgs <- createFitOutcomeModelArgs(
+```{r model-args}
+modelArgs <- createFitOutcomeModelArgs(
   modelType         = "cox",
   varianceEstimator = "robust"
 )
@@ -279,47 +360,37 @@ outcomeModelArgs <- createFitOutcomeModelArgs(
 
 ## Full analysis specification
 
-`createCcwAnalysis()` assembles all step-level objects into a single,
-validated, serializable specification.
-
 ```{r analysis}
 analysis <- createCcwAnalysis(
   analysisId                     = "main_90day",
   description                    = "Primary: RZV within 90 days vs. deferred",
   getDbCloneCensorWeightDataArgs = dbArgs,
   createStudyPopulationArgs      = studyPopArgs,
-  createClonesAndCensorArgs      = clonesArgs,
-  createCensoringWeightsArgs     = weightsArgs,
-  fitOutcomeModelArgs            = outcomeModelArgs
+  createClonesAndCensorArgs      = cloneArgs,
+  createCensoringWeightsArgs     = weightArgs,
+  fitOutcomeModelArgs            = modelArgs
 )
 ```
 
-## Target cohort and outcomes
+## Target–arm–outcome linkage
 
-`createTargetArmOutcome()` links the analysis to specific cohort definition
-IDs in the database. Negative control outcomes are included alongside the
-primary outcome to support empirical calibration.
+`createTargetComparatorOutcome()` links cohort IDs to the analysis. The
+`indexCohortId` is the JAK inhibitor new-user cohort. Both arms use the same
+`targetCohortId` and `comparatorCohortId` (the RZV cohort) — the arm
+strategy determines how each clone interprets initiation events from that
+cohort.
 
 ```{r tao}
-#  101      New JAK inhibitor users with RA, PsA, or UC
-#  102      First dose of RZV — used for both arms; strategyType determines
-#           how each arm interprets initiation events
-#  201      Incident herpes zoster (primary outcome)
-#  301-320  Negative control outcomes for empirical calibration
-
-tao <- createTargetArmOutcome(
-  targetId                    = 101L,
-  arm1CohortId                = 102L,
-  arm2CohortId                = 102L,
-  outcomeIds                  = c(201L, 301:320),
+tao <- createTargetComparatorOutcome(
+  indexCohortId               = 1L,   # JAK inhibitor new users
+  targetCohortId           = 2L,   # RZV (treatment arm)
+  comparatorCohortId          = 2L,   # RZV (comparator arm, deferBeyond)
+  outcomeIds                  = c(3L, negativeControlIds),
   excludedCovariateConceptIds = rzvConceptIds
 )
 ```
 
-## Top-level specifications
-
-`createCcwAnalysesSpecifications()` combines all analyses and target-arm-outcome
-definitions into the object accepted by `runCcwAnalyses()`.
+## Top-level specification
 
 ```{r specs}
 specs <- createCcwAnalysesSpecifications(
@@ -330,48 +401,137 @@ specs <- createCcwAnalysesSpecifications(
 
 ---
 
-# Saving and sharing the specification
+# Running the analysis
 
-The full specification can be written to JSON and shared across sites or
-checked into version control. `loadCcwAnalysisList()` reconstructs all R6
-objects from the file, including nested arm definitions.
+`runCcwAnalyses()` iterates over every target–arm–outcome × analysis
+combination, runs the full CCW pipeline, and writes results to CSV files in
+`outputFolder`. If the run is interrupted, re-running the same call will skip
+any combinations already written.
 
-```{r save-load}
-analysisFile <- tempfile(fileext = ".json")
-taoFile      <- tempfile(fileext = ".json")
+```{r run}
+outputFolder <- "jak_rzv_results"
 
-saveCcwAnalysisList(list(analysis), analysisFile)
-saveTargetArmOutcomeList(list(tao), taoFile)
-
-reloaded <- loadCcwAnalysisList(analysisFile)
-
-reloaded[[1]]$analysisId
-reloaded[[1]]$createClonesAndCensorArgs$arms[[1]]$armId
-reloaded[[1]]$createClonesAndCensorArgs$arms[[1]]$gracePeriod
-reloaded[[1]]$fitOutcomeModelArgs$varianceEstimator
+runCcwAnalyses(
+  connectionDetails       = connectionDetails,
+  cdmDatabaseSchema       = cdmDatabaseSchema,
+  targetDatabaseSchema    = cohortDatabaseSchema,
+  targetTable             = cohortTableNames$cohortTable,
+  outcomeDatabaseSchema   = cohortDatabaseSchema,
+  outcomeTable            = cohortTableNames$cohortTable,
+  exposureDatabaseSchema  = cohortDatabaseSchema,
+  exposureTable           = cohortTableNames$cohortTable,
+  ccwAnalysesSpecifications = specs,
+  outputFolder            = outputFolder,
+  databaseId              = "synpuf",
+  negativeControlOutcomeIds = negativeControlIds
+)
 ```
 
-```{r show-json}
-cat(readLines(analysisFile), sep = "\n")
+---
+
+# Diagnostics
+
+## Attrition
+
+```{r attrition}
+ccwData <- loadCloneCensorWeightData(file.path(outputFolder, "ccwData_main_90day_t1"))
+getAttritionTable(ccwData)
+```
+
+## Covariate balance
+
+IPCW should reduce covariate imbalance between the arms. The Love plot
+displays standardized mean differences (SMD) for all baseline covariates
+before and after weighting. Well-balanced covariates have |SMD| < 0.1.
+
+```{r balance, fig.width=7, fig.height=4.5}
+results <- importFromCsv(outputFolder)
+smd     <- results$ccw_standardized_difference
+
+smd_before <- smd[smd$weighted == 0, ]
+smd_after  <- smd[smd$weighted == 1, ]
+
+plotLovePlot(smd_before, smd_after)
+```
+
+## Kaplan–Meier curves
+
+```{r km, fig.width=7, fig.height=4.5}
+plotKaplanMeier(results$ccw_kaplan_meier)
+```
+
+## Minimum detectable relative risk
+
+```{r mdrr}
+plotMdrr(results$ccw_power_mdrr)
+```
+
+---
+
+# Empirical calibration
+
+When negative control outcomes are supplied via `negativeControlOutcomeIds`,
+`runCcwAnalyses()` automatically fits a systematic error model and returns
+calibrated p-values and confidence intervals alongside the uncalibrated
+estimates. To inspect the calibration:
+
+```{r calibration, fig.width=6, fig.height=5}
+plotCalibration(
+  logRr   = log(results$ccw_outcome_model$estimate),
+  seLogRr = (log(results$ccw_outcome_model$upper_95) -
+             log(results$ccw_outcome_model$lower_95)) / (2 * qnorm(0.975)),
+  trueLogRr = 0  # negative controls have true HR = 1
+)
+```
+
+---
+
+# Results
+
+```{r results}
+om <- results$ccw_outcome_model
+om[om$analysis_id == "main_90day_t1_o3",
+   c("analysis_id", "model_type", "estimate", "lower_95", "upper_95",
+     "p_value", "calibrated_p_value")]
+```
+
+---
+
+# Saving and sharing the specification
+
+The full analysis specification can be serialized to JSON for sharing across
+sites or checking into version control.
+
+```{r save}
+analysisFile <- "jak_rzv_analysis_list.json"
+taoFile      <- "jak_rzv_tao_list.json"
+
+saveCcwAnalysisList(list(analysis), analysisFile)
+saveTargetComparatorOutcomeList(list(tao), taoFile)
+```
+
+To reconstruct the specification in a new session:
+
+```{r load}
+reloadedAnalyses <- loadCcwAnalysisList(analysisFile)
+reloadedTao      <- loadTargetComparatorOutcomeList(taoFile)
 ```
 
 ---
 
 # References
 
-Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on modern
-methods: trial emulation in the presence of immortal-time bias. Insights
-from the GUARDIAN studies. *International Journal of Epidemiology*. 2024.
-<https://pmc.ncbi.nlm.nih.gov/articles/PMC11623977/>
-
 Hernán MA, Robins JM. Using Big Data to Emulate a Target Trial When a
-Randomized Trial Is Not Available. *American Journal of Epidemiology*.
-2016;183(8):758–764.
+Randomized Trial Is Not Available. *Am J Epidemiol.* 2016;183(8):758–764.
 
 Hernán MA, Sauer BC, Hernández-Díaz S, Platt R, Shrier I. Specifying a
 target trial prevents immortal time bias and other self-inflicted injuries
-in observational analyses. *Journal of Clinical Epidemiology*. 2016;79:70–75.
+in observational analyses. *J Clin Epidemiol.* 2016;79:70–75.
 
-Dagnew AF, Abbing-Karahagopian V, Folschweiller N, et al. Immunogenicity
-and safety of the recombinant zoster vaccine in immunocompromised adults:
-ZOSTER-056 randomized trial. *Annals of Internal Medicine*. 2022.
+Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on modern
+methods: trial emulation in the presence of immortal-time bias. *Int J
+Epidemiol.* 2024.
+
+Dagnew AF, et al. Immunogenicity and safety of the recombinant zoster
+vaccine in immunocompromised adults: ZOSTER-056 randomized trial. *Ann
+Intern Med.* 2022.

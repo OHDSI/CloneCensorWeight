@@ -6,3 +6,4 @@
 ^\.git$
 ^\.Rproj\.user$
 ^NEWS\.md$
+^\.agent-shell$
