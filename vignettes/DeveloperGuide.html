@@ -1,0 +1,986 @@
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="utf-8" />
+<meta name="generator" content="pandoc" />
+<meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
+
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+
+
+
+<title>Developer Guide</title>
+
+<script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
+// be compatible with the behavior of Pandoc < 2.8).
+document.addEventListener('DOMContentLoaded', function(e) {
+  var hs = document.querySelectorAll("div.section[class*='level'] > :first-child");
+  var i, h, a;
+  for (i = 0; i < hs.length; i++) {
+    h = hs[i];
+    if (!/^h[1-6]$/i.test(h.tagName)) continue;  // it should be a header h1-h6
+    a = h.attributes;
+    while (a.length > 0) h.removeAttribute(a[0].name);
+  }
+});
+</script>
+
+<style type="text/css">
+code{white-space: pre-wrap;}
+span.smallcaps{font-variant: small-caps;}
+span.underline{text-decoration: underline;}
+div.column{display: inline-block; vertical-align: top; width: 50%;}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+</style>
+
+
+
+<style type="text/css">
+code {
+white-space: pre;
+}
+.sourceCode {
+overflow: visible;
+}
+</style>
+<style type="text/css" data-origin="pandoc">
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+{ counter-reset: source-line 0; }
+pre.numberSource code > span
+{ position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+{ content: counter(source-line);
+position: relative; left: -1em; text-align: right; vertical-align: baseline;
+border: none; display: inline-block;
+-webkit-touch-callout: none; -webkit-user-select: none;
+-khtml-user-select: none; -moz-user-select: none;
+-ms-user-select: none; user-select: none;
+padding: 0 4px; width: 4em;
+color: #aaaaaa;
+}
+pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa; padding-left: 4px; }
+div.sourceCode
+{ }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+code span.al { color: #ff0000; font-weight: bold; } 
+code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.at { color: #7d9029; } 
+code span.bn { color: #40a070; } 
+code span.bu { color: #008000; } 
+code span.cf { color: #007020; font-weight: bold; } 
+code span.ch { color: #4070a0; } 
+code span.cn { color: #880000; } 
+code span.co { color: #60a0b0; font-style: italic; } 
+code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.do { color: #ba2121; font-style: italic; } 
+code span.dt { color: #902000; } 
+code span.dv { color: #40a070; } 
+code span.er { color: #ff0000; font-weight: bold; } 
+code span.ex { } 
+code span.fl { color: #40a070; } 
+code span.fu { color: #06287e; } 
+code span.im { color: #008000; font-weight: bold; } 
+code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } 
+code span.kw { color: #007020; font-weight: bold; } 
+code span.op { color: #666666; } 
+code span.ot { color: #007020; } 
+code span.pp { color: #bc7a00; } 
+code span.sc { color: #4070a0; } 
+code span.ss { color: #bb6688; } 
+code span.st { color: #4070a0; } 
+code span.va { color: #19177c; } 
+code span.vs { color: #4070a0; } 
+code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } 
+</style>
+<script>
+// apply pandoc div.sourceCode style to pre.sourceCode instead
+(function() {
+  var sheets = document.styleSheets;
+  for (var i = 0; i < sheets.length; i++) {
+    if (sheets[i].ownerNode.dataset["origin"] !== "pandoc") continue;
+    try { var rules = sheets[i].cssRules; } catch (e) { continue; }
+    var j = 0;
+    while (j < rules.length) {
+      var rule = rules[j];
+      // check if there is a div.sourceCode rule
+      if (rule.type !== rule.STYLE_RULE || rule.selectorText !== "div.sourceCode") {
+        j++;
+        continue;
+      }
+      var style = rule.style.cssText;
+      // check if color or background-color is set
+      if (rule.style.color === '' && rule.style.backgroundColor === '') {
+        j++;
+        continue;
+      }
+      // replace div.sourceCode by a pre.sourceCode rule
+      sheets[i].deleteRule(j);
+      sheets[i].insertRule('pre.sourceCode{' + style + '}', j);
+    }
+  }
+})();
+</script>
+
+
+
+
+<style type="text/css">body {
+background-color: #fff;
+margin: 1em auto;
+max-width: 700px;
+overflow: visible;
+padding-left: 2em;
+padding-right: 2em;
+font-family: "Open Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+font-size: 14px;
+line-height: 1.35;
+}
+#TOC {
+clear: both;
+margin: 0 0 10px 10px;
+padding: 4px;
+width: 400px;
+border: 1px solid #CCCCCC;
+border-radius: 5px;
+background-color: #f6f6f6;
+font-size: 13px;
+line-height: 1.3;
+}
+#TOC .toctitle {
+font-weight: bold;
+font-size: 15px;
+margin-left: 5px;
+}
+#TOC ul {
+padding-left: 40px;
+margin-left: -1.5em;
+margin-top: 5px;
+margin-bottom: 5px;
+}
+#TOC ul ul {
+margin-left: -2em;
+}
+#TOC li {
+line-height: 16px;
+}
+table {
+margin: 1em auto;
+border-width: 1px;
+border-color: #DDDDDD;
+border-style: outset;
+border-collapse: collapse;
+}
+table th {
+border-width: 2px;
+padding: 5px;
+border-style: inset;
+}
+table td {
+border-width: 1px;
+border-style: inset;
+line-height: 18px;
+padding: 5px 5px;
+}
+table, table th, table td {
+border-left-style: none;
+border-right-style: none;
+}
+table thead, table tr.even {
+background-color: #f7f7f7;
+}
+p {
+margin: 0.5em 0;
+}
+blockquote {
+background-color: #f6f6f6;
+padding: 0.25em 0.75em;
+}
+hr {
+border-style: solid;
+border: none;
+border-top: 1px solid #777;
+margin: 28px 0;
+}
+dl {
+margin-left: 0;
+}
+dl dd {
+margin-bottom: 13px;
+margin-left: 13px;
+}
+dl dt {
+font-weight: bold;
+}
+ul {
+margin-top: 0;
+}
+ul li {
+list-style: circle outside;
+}
+ul ul {
+margin-bottom: 0;
+}
+pre, code {
+background-color: #f7f7f7;
+border-radius: 3px;
+color: #333;
+white-space: pre-wrap; 
+}
+pre {
+border-radius: 3px;
+margin: 5px 0px 10px 0px;
+padding: 10px;
+}
+pre:not([class]) {
+background-color: #f7f7f7;
+}
+code {
+font-family: Consolas, Monaco, 'Courier New', monospace;
+font-size: 85%;
+}
+p > code, li > code {
+padding: 2px 0px;
+}
+div.figure {
+text-align: center;
+}
+img {
+background-color: #FFFFFF;
+padding: 2px;
+border: 1px solid #DDDDDD;
+border-radius: 3px;
+border: 1px solid #CCCCCC;
+margin: 0 5px;
+}
+h1 {
+margin-top: 0;
+font-size: 35px;
+line-height: 40px;
+}
+h2 {
+border-bottom: 4px solid #f7f7f7;
+padding-top: 10px;
+padding-bottom: 2px;
+font-size: 145%;
+}
+h3 {
+border-bottom: 2px solid #f7f7f7;
+padding-top: 10px;
+font-size: 120%;
+}
+h4 {
+border-bottom: 1px solid #f7f7f7;
+margin-left: 8px;
+font-size: 105%;
+}
+h5, h6 {
+border-bottom: 1px solid #ccc;
+font-size: 105%;
+}
+a {
+color: #0033dd;
+text-decoration: none;
+}
+a:hover {
+color: #6666ff; }
+a:visited {
+color: #800080; }
+a:visited:hover {
+color: #BB00BB; }
+a[href^="http:"] {
+text-decoration: underline; }
+a[href^="https:"] {
+text-decoration: underline; }
+
+code > span.kw { color: #555; font-weight: bold; } 
+code > span.dt { color: #902000; } 
+code > span.dv { color: #40a070; } 
+code > span.bn { color: #d14; } 
+code > span.fl { color: #d14; } 
+code > span.ch { color: #d14; } 
+code > span.st { color: #d14; } 
+code > span.co { color: #888888; font-style: italic; } 
+code > span.ot { color: #007020; } 
+code > span.al { color: #ff0000; font-weight: bold; } 
+code > span.fu { color: #900; font-weight: bold; } 
+code > span.er { color: #a61717; background-color: #e3d2d2; } 
+</style>
+
+
+
+
+</head>
+
+<body>
+
+
+
+
+<h1 class="title toc-ignore">Developer Guide</h1>
+
+
+
+<p>This guide explains the internal architecture of the
+CloneCensorWeight package for developers who want to extend, debug, or
+contribute to it. It follows the data and control flow from the settings
+layer all the way through to the results CSV files, with annotated data
+samples at every step.</p>
+<p>All samples below are generated from the built-in
+<code>createSampleCloneCensorWeightData()</code> function and require no
+database connection.</p>
+<hr />
+<div id="the-settings-layer-rsettingsobjects.r" class="section level2">
+<h2>1. The settings layer (<code>R/SettingsObjects.R</code>)</h2>
+<div id="class-hierarchy" class="section level3">
+<h3>1.1 Class hierarchy</h3>
+<p>All settings objects inherit from
+<code>AbstractSerializableSettings</code>, an R6 base class that
+provides three methods:</p>
+<ul>
+<li><code>$toList()</code> — serializes public fields to a plain named
+list, excluding functions.</li>
+<li><code>$toJson()</code> — calls <code>toList()</code> and passes the
+result to <code>jsonlite::toJSON()</code>.</li>
+<li><code>$validate()</code> — a no-op in the base class, overridden to
+call <code>checkmate</code> assertions in each subclass.</li>
+</ul>
+<p>The concrete settings classes, in the order they are used in the
+pipeline, are:</p>
+<table>
+<colgroup>
+<col width="33%" />
+<col width="33%" />
+<col width="33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Class</th>
+<th>Constructor</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>ArmDefinition</code></td>
+<td><code>createArmDefinition()</code></td>
+<td>Describes one treatment strategy</td>
+</tr>
+<tr class="even">
+<td><code>GetDbCloneCensorWeightDataArgs</code></td>
+<td><code>createGetDbCloneCensorWeightDataArgs()</code></td>
+<td>CDM extraction args</td>
+</tr>
+<tr class="odd">
+<td><code>CreateStudyPopulationArgs</code></td>
+<td><code>createCreateStudyPopulationArgs()</code></td>
+<td>Eligibility &amp; risk window</td>
+</tr>
+<tr class="even">
+<td><code>CreateClonesAndCensorArgs</code></td>
+<td><code>createCreateClonesAndCensorArgs()</code></td>
+<td>Arms + interval length</td>
+</tr>
+<tr class="odd">
+<td><code>CreateCensoringWeightsArgs</code></td>
+<td><code>createCreateCensoringWeightsArgs()</code></td>
+<td>IPCW trim / cap / formula</td>
+</tr>
+<tr class="even">
+<td><code>FitOutcomeModelArgs</code></td>
+<td><code>createFitOutcomeModelArgs()</code></td>
+<td>Model type + variance estimator</td>
+</tr>
+<tr class="odd">
+<td><code>CcwAnalysis</code></td>
+<td><code>createCcwAnalysis()</code></td>
+<td>Bundles all the above into one spec</td>
+</tr>
+<tr class="even">
+<td><code>TargetComparatorOutcome</code></td>
+<td><code>createTargetComparatorOutcome()</code></td>
+<td>Cohort IDs + outcome IDs</td>
+</tr>
+<tr class="odd">
+<td><code>CcwAnalysesSpecifications</code></td>
+<td><code>createCcwAnalysesSpecifications()</code></td>
+<td>Top-level container for runner</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="armdefinition" class="section level3">
+<h3>1.2 ArmDefinition</h3>
+<p>An arm defines what it means to <em>comply</em> with the assigned
+treatment strategy during the grace period.</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" tabindex="-1"></a><span class="co"># &quot;initiateWithin&quot;: clone is artificially censored if treatment has NOT occurred</span></span>
+<span id="cb1-2"><a href="#cb1-2" tabindex="-1"></a><span class="co"># by day gracePeriod.  Models a protocol that requires prompt treatment.</span></span>
+<span id="cb1-3"><a href="#cb1-3" tabindex="-1"></a>arm1 <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(<span class="st">&quot;vaccinate&quot;</span>, <span class="st">&quot;initiateWithin&quot;</span>, <span class="at">gracePeriod =</span> <span class="dv">90</span>)</span>
+<span id="cb1-4"><a href="#cb1-4" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" tabindex="-1"></a><span class="co"># &quot;deferBeyond&quot;: clone is artificially censored if treatment DOES occur within</span></span>
+<span id="cb1-6"><a href="#cb1-6" tabindex="-1"></a><span class="co"># gracePeriod days.  Models a protocol that requires deferring treatment.</span></span>
+<span id="cb1-7"><a href="#cb1-7" tabindex="-1"></a>arm2 <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(<span class="st">&quot;defer&quot;</span>, <span class="st">&quot;deferBeyond&quot;</span>, <span class="at">gracePeriod =</span> <span class="dv">90</span>)</span></code></pre></div>
+<p><code>CreateClonesAndCensorArgs</code> holds exactly two
+<code>ArmDefinition</code> objects and validates that their
+<code>armId</code> values are distinct.</p>
+</div>
+<div id="targetcomparatoroutcome" class="section level3">
+<h3>1.3 TargetComparatorOutcome</h3>
+<p>This object links three cohorts to the analysis:</p>
+<ul>
+<li><code>indexCohortId</code> — the eligible population (e.g. new JAK
+inhibitor users). Every subject in this cohort will be cloned into both
+arms.</li>
+<li><code>targetCohortId</code> — the treatment-exposure cohort
+(e.g. RZV recipients). Its <code>cohort_start_date</code> is used as the
+initiation date.</li>
+<li><code>comparatorCohortId</code> — the comparator-exposure cohort.
+For a <code>&quot;deferBeyond&quot;</code> comparator this is typically the same
+as <code>targetCohortId</code> because the arm strategy alone determines
+how an initiation event is interpreted.</li>
+</ul>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a>tao <span class="ot">&lt;-</span> <span class="fu">createTargetComparatorOutcome</span>(</span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a>  <span class="at">indexCohortId      =</span> <span class="dv">101</span><span class="dt">L</span>,</span>
+<span id="cb2-3"><a href="#cb2-3" tabindex="-1"></a>  <span class="at">targetCohortId     =</span> <span class="dv">102</span><span class="dt">L</span>,</span>
+<span id="cb2-4"><a href="#cb2-4" tabindex="-1"></a>  <span class="at">comparatorCohortId =</span> <span class="dv">102</span><span class="dt">L</span>,</span>
+<span id="cb2-5"><a href="#cb2-5" tabindex="-1"></a>  <span class="at">outcomeIds         =</span> <span class="fu">c</span>(<span class="dv">201</span><span class="dt">L</span>, <span class="dv">301</span><span class="dt">L</span><span class="sc">:</span><span class="dv">320</span><span class="dt">L</span>)  <span class="co"># primary + negative controls</span></span>
+<span id="cb2-6"><a href="#cb2-6" tabindex="-1"></a>)</span></code></pre></div>
+</div>
+<div id="serialization-round-trip" class="section level3">
+<h3>1.4 Serialization round-trip</h3>
+<p><code>CcwAnalysis$toList()</code> recursively calls
+<code>toList()</code> on every nested args object.
+<code>GetDbCloneCensorWeightDataArgs</code> overrides
+<code>toList()</code> with special handling for
+<code>covariateSettings</code> because FeatureExtraction objects carry
+their class in an attribute rather than a list field;
+<code>.convertAttrToMember()</code> saves that class string as
+<code>attr_class</code>, and <code>.convertMemberToAttr()</code>
+restores it on load.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="fu">saveCcwAnalysisList</span>(analysisList, <span class="st">&quot;analyses.json&quot;</span>)</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>reloaded <span class="ot">&lt;-</span> <span class="fu">loadCcwAnalysisList</span>(<span class="st">&quot;analyses.json&quot;</span>)</span></code></pre></div>
+<p><code>loadCcwAnalysisList()</code> calls
+<code>.reconstructCcwAnalysis()</code>, which reconstructs every nested
+object by calling the appropriate <code>create*</code> constructor. The
+<code>%||%</code> null-coalescing operator (defined in
+<code>R/zzz.R</code>) provides defaults for fields that may be absent in
+JSON produced by older package versions.</p>
+<hr />
+</div>
+</div>
+<div id="the-data-layer-rclonecensorweightdata.r" class="section level2">
+<h2>2. The data layer (<code>R/CloneCensorWeightData.R</code>)</h2>
+<div id="clonecensorweightdata" class="section level3">
+<h3>2.1 <code>CloneCensorWeightData</code></h3>
+<p><code>CloneCensorWeightData</code> is an S4 class that extends
+<code>FeatureExtraction::CovariateData</code>, which itself extends
+<code>Andromeda::Andromeda</code>. Andromeda is a disk-backed SQLite
+database, so the object can hold arbitrarily large tables without
+exhausting RAM.</p>
+<p>The five tables inside the object are:</p>
+<table>
+<colgroup>
+<col width="33%" />
+<col width="33%" />
+<col width="33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Table</th>
+<th>Key columns</th>
+<th>Populated by</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>cohorts</code></td>
+<td><code>subjectId</code>, <code>cohortStartDate</code>,
+<code>cohortEndDate</code>, <code>initiationDate</code></td>
+<td><code>getDbCloneCensorWeightData()</code></td>
+</tr>
+<tr class="even">
+<td><code>outcomes</code></td>
+<td><code>subjectId</code>, <code>outcomeDate</code>,
+<code>outcomeId</code></td>
+<td><code>getDbCloneCensorWeightData()</code></td>
+</tr>
+<tr class="odd">
+<td><code>covariates</code></td>
+<td><code>rowId</code>, <code>covariateId</code>,
+<code>covariateValue</code></td>
+<td>FeatureExtraction (sparse format)</td>
+</tr>
+<tr class="even">
+<td><code>covariateRef</code></td>
+<td><code>covariateId</code>, <code>covariateName</code>,
+<code>analysisId</code>, <code>conceptId</code></td>
+<td>FeatureExtraction</td>
+</tr>
+<tr class="odd">
+<td><code>analysisRef</code></td>
+<td><code>analysisId</code>, <code>analysisName</code>,
+<code>domainId</code>, …</td>
+<td>FeatureExtraction</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div id="sample-raw-data" class="section level3">
+<h3>2.2 Sample: raw data</h3>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>data <span class="ot">&lt;-</span> <span class="fu">createSampleCloneCensorWeightData</span>(<span class="at">n =</span> <span class="dv">6</span>, <span class="at">seed =</span> <span class="dv">42</span>)</span>
+<span id="cb4-2"><a href="#cb4-2" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(data<span class="sc">$</span>cohorts)</span></code></pre></div>
+<pre><code># A tibble: 6 × 4
+  subjectId cohortStartDate cohortEndDate initiationDate
+      &lt;int&gt; &lt;date&gt;          &lt;date&gt;        &lt;date&gt;
+1         1 2020-01-17      2020-09-08    2020-04-09
+2         2 2020-01-05      2020-08-03    2020-04-02
+3         3 2020-01-01      2020-05-18    NA
+4         4 2020-01-25      2020-08-29    2020-02-12
+5         5 2020-01-10      2020-05-02    2020-01-16
+6         6 2020-01-04      2020-06-30    2020-03-22</code></pre>
+<p><code>initiationDate</code> is <code>NA</code> for subject 3, who
+never received the treatment. This drives the artificial-censoring logic
+in the next step.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(data<span class="sc">$</span>covariates)</span></code></pre></div>
+<pre><code># A tibble: 12 × 3
+   rowId covariateId covariateValue
+   &lt;int&gt;       &lt;int&gt;          &lt;dbl&gt;
+ 1     1        1003            6.6   # age in decades (continuous)
+ 2     2        1003            5.4
+ 3     3        1003            5.7
+ 4     4        1003            3.7
+ 5     5        1003            8.4
+ 6     6        1003            5.7
+ 7     1        2001            1     # prior condition (binary, 1 = present)
+ 8     2        2001            1
+ 9     4        2001            1
+10     3        3001            1     # prior drug (binary)</code></pre>
+<p>The covariates table is in FeatureExtraction <strong>sparse
+format</strong>: each row is one
+<code>(subject, covariate, value)</code> triple. Subjects absent for a
+binary covariate have no row — the convention is that absence means
+zero.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(data<span class="sc">$</span>covariateRef)</span></code></pre></div>
+<pre><code># A tibble: 3 × 4
+  covariateId covariateName           analysisId conceptId
+        &lt;int&gt; &lt;chr&gt;                        &lt;int&gt;     &lt;int&gt;
+1        1003 age in decades                   1         0
+2        2001 prior condition in 365d          2         0
+3        3001 prior drug in 365d               3         0</code></pre>
+</div>
+<div id="getdbclonecensorweightdata-cdm-path" class="section level3">
+<h3>2.3 <code>getDbCloneCensorWeightData()</code> (CDM path)</h3>
+<p>When running against a real CDM this function:</p>
+<ol style="list-style-type: decimal">
+<li>Executes <code>GetCohorts.sql</code> to retrieve eligible subjects
+with initiation dates via a <code>LEFT JOIN</code> to the exposure
+cohort table.</li>
+<li>Uploads results to a temp table (<code>#ccw_cohorts</code>) used by
+downstream SQL and FeatureExtraction.</li>
+<li>Executes <code>GetOutcomes.sql</code> to retrieve outcome
+records.</li>
+<li>Calls <code>FeatureExtraction::getDbCovariateData()</code> pointing
+at <code>#ccw_cohorts</code>.</li>
+<li>Assembles all four components via
+<code>createCloneCensorWeightData()</code>.</li>
+</ol>
+<p>All tables are read back from disk via
+<code>.readCloneCensorWeightTable()</code>, which calls
+<code>dplyr::collect()</code> to materialize a lazy Andromeda table into
+a plain data frame.</p>
+<hr />
+</div>
+</div>
+<div id="the-pipeline" class="section level2">
+<h2>3. The pipeline</h2>
+<div id="step-1-createstudypopulation" class="section level3">
+<h3>Step 1 — <code>createStudyPopulation()</code></h3>
+<p>Applies subject-level exclusion criteria: prior-outcome removal,
+risk-window trimming, and minimum days-at-risk filtering. Modifies the
+<code>cohorts</code> table in place. In this example no subjects are
+excluded, so the table is unchanged — the step has effect when
+<code>removeSubjectsWithPriorOutcome = TRUE</code> or when the risk
+window end is earlier than natural follow-up.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" tabindex="-1"></a>popArgs <span class="ot">&lt;-</span> <span class="fu">createCreateStudyPopulationArgs</span>(</span>
+<span id="cb10-2"><a href="#cb10-2" tabindex="-1"></a>  <span class="at">removeSubjectsWithPriorOutcome =</span> <span class="cn">FALSE</span>,</span>
+<span id="cb10-3"><a href="#cb10-3" tabindex="-1"></a>  <span class="at">riskWindowEnd =</span> <span class="dv">365</span>,</span>
+<span id="cb10-4"><a href="#cb10-4" tabindex="-1"></a>  <span class="at">endAnchor     =</span> <span class="st">&quot;cohort start&quot;</span></span>
+<span id="cb10-5"><a href="#cb10-5" tabindex="-1"></a>)</span>
+<span id="cb10-6"><a href="#cb10-6" tabindex="-1"></a><span class="fu">createStudyPopulation</span>(data, <span class="at">outcomeId =</span> <span class="dv">1</span><span class="dt">L</span>, popArgs)</span></code></pre></div>
+<p>The cohorts table after this step looks the same as the raw table —
+columns are unchanged; trimmed follow-up would be visible in
+<code>cohortEndDate</code> if any risk-window truncation occurred.</p>
+<hr />
+</div>
+<div id="step-2-createclonesandcensor" class="section level3">
+<h3>Step 2 — <code>createClonesAndCensor()</code></h3>
+<p>Executes <code>CreateClones.sql</code> via <code>SqlRender</code>,
+passing arm ID, strategy, and grace period. Each subject is duplicated;
+artificial censoring is applied per the arm strategy.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" tabindex="-1"></a>arms <span class="ot">&lt;-</span> <span class="fu">list</span>(</span>
+<span id="cb11-2"><a href="#cb11-2" tabindex="-1"></a>  <span class="fu">createArmDefinition</span>(<span class="st">&quot;vaccinate&quot;</span>, <span class="st">&quot;initiateWithin&quot;</span>, <span class="at">gracePeriod =</span> <span class="dv">90</span>),</span>
+<span id="cb11-3"><a href="#cb11-3" tabindex="-1"></a>  <span class="fu">createArmDefinition</span>(<span class="st">&quot;defer&quot;</span>,     <span class="st">&quot;deferBeyond&quot;</span>,    <span class="at">gracePeriod =</span> <span class="dv">90</span>)</span>
+<span id="cb11-4"><a href="#cb11-4" tabindex="-1"></a>)</span>
+<span id="cb11-5"><a href="#cb11-5" tabindex="-1"></a>cloneArgs <span class="ot">&lt;-</span> <span class="fu">createCreateClonesAndCensorArgs</span>(<span class="at">arms =</span> arms, <span class="at">intervalLength =</span> <span class="dv">30</span>)</span>
+<span id="cb11-6"><a href="#cb11-6" tabindex="-1"></a>cloned    <span class="ot">&lt;-</span> <span class="fu">createClonesAndCensor</span>(data, cloneArgs)</span>
+<span id="cb11-7"><a href="#cb11-7" tabindex="-1"></a></span>
+<span id="cb11-8"><a href="#cb11-8" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(cloned<span class="sc">$</span>cohorts)</span></code></pre></div>
+<pre><code># A tibble: 12 × 9
+   subjectId cloneId     arm    cohortStartDate cohortEndDate survivalTime event
+       &lt;int&gt; &lt;chr&gt;       &lt;chr&gt;  &lt;date&gt;          &lt;date&gt;               &lt;dbl&gt; &lt;int&gt;
+ 1         1 1_vaccinate vacci… 2020-01-17      2020-09-08             235     0
+ 2         2 2_vaccinate vacci… 2020-01-05      2020-08-03             211     0
+ 3         3 3_vaccinate vacci… 2020-01-01      2020-03-31              90     0  # censored at day 90
+ 4         4 4_vaccinate vacci… 2020-01-25      2020-08-29             217     0
+ 5         5 5_vaccinate vacci… 2020-01-10      2020-05-02             113     0
+ 6         6 6_vaccinate vacci… 2020-01-04      2020-06-30             178     0
+ 7         1 1_defer     defer  2020-01-17      2020-04-09              83     0  # censored at initiation
+ 8         2 2_defer     defer  2020-01-05      2020-04-02              88     0
+ 9         3 3_defer     defer  2020-01-01      2020-05-18             138     0  # never initiated = stays
+10         4 4_defer     defer  2020-01-25      2020-02-12              18     0  # initiated day 18 = censored
+11         5 5_defer     defer  2020-01-10      2020-01-16               6     0
+12         6 6_defer     defer  2020-01-04      2020-03-22              78     0
+# ℹ 2 more variables: artificiallyCensored &lt;int&gt;, initiationDate &lt;date&gt;</code></pre>
+<p>Key things to notice:</p>
+<ul>
+<li>Subject 3 had no <code>initiationDate</code>. In the
+<strong>vaccinate</strong> arm (<code>initiateWithin</code>), they are
+artificially censored at day 90 (the grace period limit). In the
+<strong>defer</strong> arm (<code>deferBeyond</code>), they are
+<em>not</em> censored because they never initiated — they comply by
+deferring.</li>
+<li>Subject 4 initiated on day 18. In the <strong>defer</strong> arm,
+initiating within the 90-day window violates the protocol, so that clone
+is censored at the initiation date.</li>
+<li><code>cloneId</code> is a string of the form
+<code>&quot;{subjectId}_{armId}&quot;</code>. It uniquely identifies a clone
+throughout the rest of the pipeline.</li>
+</ul>
+<hr />
+</div>
+<div id="step-3-discretizepersontime" class="section level3">
+<h3>Step 3 — <code>discretizePersonTime()</code></h3>
+<p>Expands each clone’s single row into a sequence of fixed-length
+intervals. The resulting data frame drives all downstream IPCW models
+and the outcome analysis.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" tabindex="-1"></a>pt <span class="ot">&lt;-</span> <span class="fu">discretizePersonTime</span>(cloned, <span class="at">intervalLength =</span> <span class="dv">30</span>)</span></code></pre></div>
+<p>Subject 1 has 235 days of follow-up: 7 complete 30-day intervals plus
+one partial interval of 25 days. Their <code>defer</code> clone was
+artificially censored at day 83: 2 complete intervals plus one partial
+of 23 days.</p>
+<pre><code>   subjectId     cloneId       arm interval tstart tstop personTime
+1          1 1_vaccinate vaccinate        1      0    30         30
+2          1 1_vaccinate vaccinate        2     30    60         30
+3          1 1_vaccinate vaccinate        3     60    90         30
+4          1 1_vaccinate vaccinate        4     90   120         30
+5          1 1_vaccinate vaccinate        5    120   150         30
+6          1 1_vaccinate vaccinate        6    150   180         30
+7          1 1_vaccinate vaccinate        7    180   210         30
+8          1 1_vaccinate vaccinate        8    210   235         25   # final, classical censor
+
+38         1     1_defer     defer        1      0    30         30
+39         1     1_defer     defer        2     30    60         30
+40         1     1_defer     defer        3     60    83         23   # final, artificially censored
+   acCensorInInterval classicalCensorInInterval event
+1                   0                         0     0
+...
+8                   0                         1     0   # lost to follow-up (vaccinate arm)
+...
+40                  1                         0     0   # artificially censored (defer arm)</code></pre>
+<p>The three indicator columns (<code>acCensorInInterval</code>,
+<code>classicalCensorInInterval</code>, <code>event</code>) are mutually
+exclusive and are only 1 in the <strong>final</strong> interval of each
+clone.</p>
+<hr />
+</div>
+<div id="step-4-createcensoringweights" class="section level3">
+<h3>Step 4 — <code>createCensoringWeights()</code></h3>
+<p>Fits stabilized IPCW models and attaches cumulative weights to each
+row.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" tabindex="-1"></a>weightsArgs <span class="ot">&lt;-</span> <span class="fu">createCreateCensoringWeightsArgs</span>(<span class="at">trim =</span> <span class="fu">c</span>(<span class="fl">0.01</span>, <span class="fl">0.99</span>), <span class="at">maxWeight =</span> <span class="dv">10</span>)</span>
+<span id="cb15-2"><a href="#cb15-2" tabindex="-1"></a>weighted    <span class="ot">&lt;-</span> <span class="fu">createCensoringWeights</span>(pt, cloned, weightsArgs)</span></code></pre></div>
+<p>Selected columns from the output:</p>
+<pre><code>   subjectId     cloneId       arm interval tstart tstop
+1          1 1_vaccinate vaccinate        1      0    30
+2          1 1_vaccinate vaccinate        2     30    60
+...
+9          1     1_defer     defer        1      0    30
+10         1     1_defer     defer        2     30    60
+11         1     1_defer     defer        3     60    83
+
+   acIntervalWeight ccIntervalWeight  acWeight  ccWeight    weight
+1         0.9932394        0.9992828 0.9932394 0.9992828 0.9925271
+2         0.9958678        0.9976506 0.9891351 0.9969351 0.9861035
+...
+9         1.0508066        0.9790972 1.0508066 0.9790972 1.0288418
+10        1.0754368        0.9345884 1.1300761 0.9150529 1.0340794
+11        1.0248913        0.9935305 1.1582051 0.9091330 1.0529625</code></pre>
+<p>Column meanings:</p>
+<ul>
+<li><code>acIntervalWeight</code> — single-interval stabilized weight
+for artificial censoring:
+<code>P(uncensored | arm, interval) / P(uncensored | arm, interval, X)</code>.</li>
+<li><code>ccIntervalWeight</code> — same for classical
+(loss-to-follow-up) censoring.</li>
+<li><code>acWeight</code> — cumulative product of
+<code>acIntervalWeight</code> within the clone.</li>
+<li><code>ccWeight</code> — cumulative product of
+<code>ccIntervalWeight</code> within the clone.</li>
+<li><code>weight</code> — <code>acWeight × ccWeight</code>, then trimmed
+to percentile limits and capped at <code>maxWeight</code>.</li>
+</ul>
+<p>The four fitted model objects are stored as attributes:</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" tabindex="-1"></a><span class="fu">attr</span>(weighted, <span class="st">&quot;acNumeratorModel&quot;</span>)    <span class="co"># marginal AC model</span></span>
+<span id="cb17-2"><a href="#cb17-2" tabindex="-1"></a><span class="fu">attr</span>(weighted, <span class="st">&quot;acDenominatorModel&quot;</span>)  <span class="co"># covariate-adjusted AC model</span></span>
+<span id="cb17-3"><a href="#cb17-3" tabindex="-1"></a><span class="fu">attr</span>(weighted, <span class="st">&quot;ccNumeratorModel&quot;</span>)    <span class="co"># marginal CC model</span></span>
+<span id="cb17-4"><a href="#cb17-4" tabindex="-1"></a><span class="fu">attr</span>(weighted, <span class="st">&quot;ccDenominatorModel&quot;</span>)  <span class="co"># covariate-adjusted CC model</span></span></code></pre></div>
+<p><code>fitPooledLogistic()</code> tries Cyclops (L1 penalized
+logistic) first and falls back to <code>stats::glm()</code> if Cyclops
+is unavailable.</p>
+<hr />
+</div>
+<div id="step-5-fitoutcomemodel" class="section level3">
+<h3>Step 5 — <code>fitOutcomeModel()</code></h3>
+<p>Fits a weighted regression with a binary arm indicator as the sole
+exposure variable.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb18-1"><a href="#cb18-1" tabindex="-1"></a>modelArgs <span class="ot">&lt;-</span> <span class="fu">createFitOutcomeModelArgs</span>(<span class="st">&quot;cox&quot;</span>, <span class="st">&quot;robust&quot;</span>)</span>
+<span id="cb18-2"><a href="#cb18-2" tabindex="-1"></a>model     <span class="ot">&lt;-</span> <span class="fu">fitOutcomeModel</span>(weighted, <span class="at">fitOutcomeModelArgs =</span> modelArgs)</span>
+<span id="cb18-3"><a href="#cb18-3" tabindex="-1"></a>model<span class="sc">$</span>summary</span></code></pre></div>
+<pre><code>  modelType term estimate   lower95  upper95    pValue logLikelihood
+      cox    arm  1.353    0.493    3.712     0.557      -83.14</code></pre>
+<p>The <code>&quot;robust&quot;</code> path uses <code>survival::coxph()</code>
+with <code>survival::cluster(subjectId)</code> so that
+<code>vcov()</code> returns the Lin-Wei-Ying sandwich variance, which
+accounts for the within-subject correlation between a subject’s two
+clones.</p>
+<p>The three variance paths:</p>
+<table>
+<colgroup>
+<col width="33%" />
+<col width="33%" />
+<col width="33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th><code>varianceEstimator</code></th>
+<th>Mechanism</th>
+<th>Use case</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>&quot;robust&quot;</code></td>
+<td>Lin-Wei-Ying sandwich via <code>cluster()</code></td>
+<td>Default; fast; appropriate for most studies</td>
+</tr>
+<tr class="even">
+<td><code>&quot;bootstrap&quot;</code></td>
+<td>Subject-level cluster bootstrap</td>
+<td>Makes fewer distributional assumptions; slower</td>
+</tr>
+<tr class="odd">
+<td><code>&quot;conventional&quot;</code></td>
+<td>Profile-likelihood CIs from Cyclops</td>
+<td>Ignores clone correlation; not for publication</td>
+</tr>
+</tbody>
+</table>
+<hr />
+</div>
+</div>
+<div id="covariate-balance-rbalance.r" class="section level2">
+<h2>4. Covariate balance (<code>R/Balance.R</code>)</h2>
+<p><code>computeStandardizedDifferences()</code> computes the SMD for
+each baseline covariate between arms. Call it twice — before and after
+IPCW — to assess whether weighting reduced confounding.</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb20-1"><a href="#cb20-1" tabindex="-1"></a>smdBefore <span class="ot">&lt;-</span> <span class="fu">computeStandardizedDifferences</span>(cloned)</span>
+<span id="cb20-2"><a href="#cb20-2" tabindex="-1"></a>smdAfter  <span class="ot">&lt;-</span> <span class="fu">computeStandardizedDifferences</span>(cloned, <span class="at">weights =</span> weighted)</span></code></pre></div>
+<p><strong>Before IPCW:</strong></p>
+<pre><code>  covariateId               covariate meanArm1   sdArm1 meanArm2   sdArm2     smd   absSmd
+1        1003          age in decades    5.831    1.400    5.788    1.444   0.030    0.030
+2        2001 prior condition in 365d    0.269    0.444    0.353    0.478  -0.182    0.182
+3        3001      prior drug in 365d    0.423    0.494    0.118    0.322   0.732    0.732</code></pre>
+<p><strong>After IPCW:</strong></p>
+<pre><code>  covariateId               covariate meanArm1   sdArm1 meanArm2   sdArm2     smd   absSmd
+1        1003          age in decades    5.848    1.420    5.824    1.428   0.017    0.017
+2        2001 prior condition in 365d    0.334    0.472    0.339    0.473  -0.011    0.011
+3        3001      prior drug in 365d    0.256    0.436    0.255    0.436   0.002    0.002</code></pre>
+<p>The large imbalance in prior drug use (|SMD| = 0.73 before weighting)
+is eliminated by IPCW (|SMD| = 0.002). This is the expected behavior:
+clones who deviate from their assigned protocol are up-weighted to
+represent the non-deviators.</p>
+<p>When <code>weights</code> is supplied,
+<code>.finalCloneWeights()</code> extracts the last interval row for
+each clone (highest <code>interval</code> value) to get a single
+cumulative weight per clone. These weights are then used in the weighted
+mean / weighted variance calculation inside
+<code>.weightedStats()</code>.</p>
+<p><code>plotLovePlot(smdBefore, smdAfter)</code> overlays both on a dot
+plot with a dashed reference line at |SMD| = 0.1.</p>
+<hr />
+</div>
+<div id="kaplan-meier-and-mdrr-diagnostics" class="section level2">
+<h2>5. Kaplan-Meier and MDRR diagnostics</h2>
+<div id="kaplan-meier" class="section level3">
+<h3>Kaplan-Meier</h3>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" tabindex="-1"></a>km <span class="ot">&lt;-</span> <span class="fu">computeKaplanMeier</span>(weighted)</span>
+<span id="cb23-2"><a href="#cb23-2" tabindex="-1"></a><span class="fu">head</span>(km, <span class="dv">8</span>)</span></code></pre></div>
+<pre><code>    arm time  survival  lower  upper  nRisk  nEvent
+1 defer    0 1.0000000  1.000  1.000     NA   0.000
+3 defer   54 0.9766077  0.932  1.000 42.525   0.995
+4 defer   64 0.9498846  0.884  1.000 36.637   1.002
+5 defer  131 0.9010797  0.795  1.000 20.006   1.028
+6 defer  146 0.8536234  0.724  1.000 18.053   0.951
+7 defer  189 0.8051621  0.659  0.984 17.139   0.973
+8 defer  203 0.7508601  0.589  0.958 14.181   0.956</code></pre>
+<p>One row per event time per arm. <code>nRisk</code> and
+<code>nEvent</code> are IPCW-weighted (effective sample size), so they
+can be non-integer.</p>
+</div>
+<div id="mdrr" class="section level3">
+<h3>MDRR</h3>
+<div class="sourceCode" id="cb25"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" tabindex="-1"></a><span class="fu">computeMdrr</span>(weighted)</span></code></pre></div>
+<pre><code>   arm1      arm2 alpha power nEventsArm1 nEventsArm2 nEventsEffArm1 nEventsEffArm2  mdrr
+1 defer vaccinate  0.05   0.8           7          12          6.950         11.949 3.806</code></pre>
+<p>The minimum detectable relative risk at 80% power given the observed
+weighted event counts.</p>
+<hr />
+</div>
+</div>
+<div id="the-multi-analysis-runner-rrunanalyses.r" class="section level2">
+<h2>6. The multi-analysis runner (<code>R/RunAnalyses.R</code>)</h2>
+<div id="public-interface" class="section level3">
+<h3>6.1 Public interface</h3>
+<p><code>runCcwAnalyses()</code> — CDM-connected entry point. Iterates
+over every <code>TargetComparatorOutcome × CcwAnalysis</code>
+combination, calls <code>getDbCloneCensorWeightData()</code> for each,
+then delegates to <code>.runForData()</code>.</p>
+<p><code>runCcwAnalysesOnData()</code> — offline entry point for
+pre-loaded data. Calls <code>.runForData()</code> directly for each
+combination.</p>
+</div>
+<div id="composite-analysis-id" class="section level3">
+<h3>6.2 Composite analysis ID</h3>
+<p>Each result row is uniquely identified by:</p>
+<pre><code>{analysisId}_t{indexCohortId}_o{outcomeId}</code></pre>
+<p>For example: <code>gp90_t101_o201</code>. This ID is stamped on every
+CSV row and is used by <code>.alreadyRun()</code> to detect completed
+analyses for resume support.</p>
+</div>
+<div id="runfordata-one-tao-analysis-block" class="section level3">
+<h3>6.3 <code>.runForData()</code> — one TAO × analysis block</h3>
+<p>For each outcome ID in <code>tao$outcomeIds</code>:</p>
+<ol style="list-style-type: decimal">
+<li>Checks <code>.alreadyRun()</code> — reads only the
+<code>analysis_id</code> column of <code>ccw_outcome_model.csv</code>
+for speed; returns <code>FALSE</code> if the file is absent.</li>
+<li>Saves <code>originalCohorts</code> before the loop and restores
+<code>data[[&quot;cohorts&quot;]]</code> at the start of each outcome iteration so
+every outcome sees the same pre-pipeline state.</li>
+<li>Calls <code>.runOnePipeline()</code> inside a <code>tryCatch</code>
+so a single failure does not abort the entire block.</li>
+</ol>
+<p>After all outcomes are processed, if at least five negative control
+outcome results are available, <code>.buildNcDf()</code> extracts their
+log-hazard-ratios and standard errors and passes them to
+<code>calibrateEstimates()</code>.</p>
+<p>Results are appended to CSV files via <code>exportToCsv()</code>.</p>
+</div>
+<div id="runonepipeline-the-linear-pipeline" class="section level3">
+<h3>6.4 <code>.runOnePipeline()</code> — the linear pipeline</h3>
+<div class="sourceCode" id="cb28"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" tabindex="-1"></a><span class="fu">createStudyPopulation</span>(data, outcomeId, analysis<span class="sc">$</span>createStudyPopulationArgs)</span>
+<span id="cb28-2"><a href="#cb28-2" tabindex="-1"></a>cloned   <span class="ot">&lt;-</span> <span class="fu">createClonesAndCensor</span>(data, analysis<span class="sc">$</span>createClonesAndCensorArgs)</span>
+<span id="cb28-3"><a href="#cb28-3" tabindex="-1"></a>pt       <span class="ot">&lt;-</span> <span class="fu">discretizePersonTime</span>(cloned, intervalLength)</span>
+<span id="cb28-4"><a href="#cb28-4" tabindex="-1"></a>weighted <span class="ot">&lt;-</span> <span class="fu">createCensoringWeights</span>(pt, cloned, analysis<span class="sc">$</span>createCensoringWeightsArgs)</span>
+<span id="cb28-5"><a href="#cb28-5" tabindex="-1"></a>model    <span class="ot">&lt;-</span> <span class="fu">fitOutcomeModel</span>(weighted, <span class="at">fitOutcomeModelArgs =</span> analysis<span class="sc">$</span>fitOutcomeModelArgs)</span>
+<span id="cb28-6"><a href="#cb28-6" tabindex="-1"></a></span>
+<span id="cb28-7"><a href="#cb28-7" tabindex="-1"></a>smdBefore<span class="sc">$</span>weighted <span class="ot">&lt;-</span> <span class="dv">0</span><span class="dt">L</span></span>
+<span id="cb28-8"><a href="#cb28-8" tabindex="-1"></a>smdAfter<span class="sc">$</span>weighted  <span class="ot">&lt;-</span> <span class="dv">1</span><span class="dt">L</span></span>
+<span id="cb28-9"><a href="#cb28-9" tabindex="-1"></a>smd  <span class="ot">&lt;-</span> <span class="fu">rbind</span>(smdBefore, smdAfter)</span>
+<span id="cb28-10"><a href="#cb28-10" tabindex="-1"></a>km   <span class="ot">&lt;-</span> <span class="fu">computeKaplanMeier</span>(weighted)</span>
+<span id="cb28-11"><a href="#cb28-11" tabindex="-1"></a>mdrr <span class="ot">&lt;-</span> <span class="fu">computeMdrr</span>(weighted)</span></code></pre></div>
+<hr />
+</div>
+</div>
+<div id="adding-a-new-pipeline-step" class="section level2">
+<h2>7. Adding a new pipeline step</h2>
+<ol style="list-style-type: decimal">
+<li>Add a new <code>create&lt;Step&gt;Args</code> R6 class in
+<code>R/SettingsObjects.R</code>, inheriting from
+<code>AbstractSerializableSettings</code>. Implement
+<code>initialize()</code> and <code>validate()</code>.</li>
+<li>Add a <code>create&lt;Step&gt;Args()</code> constructor that calls
+<code>new()</code> then <code>$validate()</code>.</li>
+<li>Add the new field to <code>CcwAnalysis</code> and update
+<code>CcwAnalysis$toList()</code> and
+<code>.reconstructCcwAnalysis()</code> to serialize and deserialize
+it.</li>
+<li>Add the new args field to <code>createCcwAnalysis()</code> and
+document it.</li>
+<li>Call the new step inside <code>.runOnePipeline()</code> in
+<code>R/RunAnalyses.R</code>.</li>
+<li>Write tests in <code>tests/testthat/</code> covering the new
+settings round-trip and the new pipeline function.</li>
+</ol>
+<hr />
+</div>
+<div id="testing" class="section level2">
+<h2>8. Testing</h2>
+<p>The test suite uses sample data exclusively — no CDM connection
+required.</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" tabindex="-1"></a><span class="co"># Build a minimal TAO for testing</span></span>
+<span id="cb29-2"><a href="#cb29-2" tabindex="-1"></a>make_tao <span class="ot">&lt;-</span> <span class="cf">function</span>() {</span>
+<span id="cb29-3"><a href="#cb29-3" tabindex="-1"></a>  <span class="fu">createTargetComparatorOutcome</span>(</span>
+<span id="cb29-4"><a href="#cb29-4" tabindex="-1"></a>    <span class="at">indexCohortId      =</span> <span class="dv">1</span><span class="dt">L</span>,</span>
+<span id="cb29-5"><a href="#cb29-5" tabindex="-1"></a>    <span class="at">targetCohortId     =</span> <span class="dv">2</span><span class="dt">L</span>,</span>
+<span id="cb29-6"><a href="#cb29-6" tabindex="-1"></a>    <span class="at">comparatorCohortId =</span> <span class="dv">2</span><span class="dt">L</span>,</span>
+<span id="cb29-7"><a href="#cb29-7" tabindex="-1"></a>    <span class="at">outcomeIds         =</span> <span class="fu">c</span>(<span class="dv">10</span><span class="dt">L</span>, <span class="dv">11</span><span class="dt">L</span>, <span class="dv">12</span><span class="dt">L</span>)</span>
+<span id="cb29-8"><a href="#cb29-8" tabindex="-1"></a>  )</span>
+<span id="cb29-9"><a href="#cb29-9" tabindex="-1"></a>}</span>
+<span id="cb29-10"><a href="#cb29-10" tabindex="-1"></a></span>
+<span id="cb29-11"><a href="#cb29-11" tabindex="-1"></a><span class="co"># Test resume logic</span></span>
+<span id="cb29-12"><a href="#cb29-12" tabindex="-1"></a>CloneCensorWeight<span class="sc">:::</span><span class="fu">.runForData</span>(data, tao, analysis, tmp, <span class="st">&quot;synpuf&quot;</span>)</span>
+<span id="cb29-13"><a href="#cb29-13" tabindex="-1"></a>CloneCensorWeight<span class="sc">:::</span><span class="fu">.runForData</span>(data, tao, analysis, tmp, <span class="st">&quot;synpuf&quot;</span>)  <span class="co"># second run skips</span></span>
+<span id="cb29-14"><a href="#cb29-14" tabindex="-1"></a>om <span class="ot">&lt;-</span> readr<span class="sc">::</span><span class="fu">read_csv</span>(<span class="fu">file.path</span>(tmp, <span class="st">&quot;ccw_outcome_model.csv&quot;</span>))</span>
+<span id="cb29-15"><a href="#cb29-15" tabindex="-1"></a><span class="fu">expect_equal</span>(<span class="fu">nrow</span>(om1), <span class="fu">nrow</span>(om2))  <span class="co"># no duplication</span></span></code></pre></div>
+<p>Internal (non-exported) functions are accessible via <code>:::</code>
+for direct unit testing.</p>
+</div>
+
+
+
+<!-- code folding -->
+
+
+<!-- dynamically load mathjax for compatibility with self-contained -->
+<script>
+  (function () {
+    var script = document.createElement("script");
+    script.type = "text/javascript";
+    script.src  = "https://mathjax.rstudio.com/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML";
+    document.getElementsByTagName("head")[0].appendChild(script);
+  })();
+</script>
+
+</body>
+</html>

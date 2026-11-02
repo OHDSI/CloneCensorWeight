@@ -1,0 +1,123 @@
+url: https://ohdsi.github.io/CloneCensorWeight
+
+template:
+  bootstrap: 5
+  bootswatch: cosmo
+  bslib:
+    primary: "#007FA8"
+    link-color: "#007FA8"
+
+home:
+  title: "CloneCensorWeight — CCW Target Trial Emulation"
+  description: >
+    An OHDSI HADES R package for clone-censor-weight target trial emulation
+    in the OMOP Common Data Model.
+
+navbar:
+  structure:
+    left: [intro, reference, articles, news]
+    right: [github]
+  components:
+    github:
+      icon: fab fa-github
+      href: https://github.com/OHDSI/CloneCensorWeight
+
+articles:
+  - title: "User guides"
+    navbar: ~
+    contents:
+      - SingleStudy
+      - MultipleAnalyses
+      - Simulation
+  - title: "Developer documentation"
+    navbar: ~
+    contents:
+      - DeveloperGuide
+
+reference:
+  - title: "Data"
+    desc: "Extract and create CloneCensorWeightData objects."
+    contents:
+      - getDbCloneCensorWeightData
+      - createCloneCensorWeightData
+      - createSampleCloneCensorWeightData
+      - CloneCensorWeightData-class
+      - saveCloneCensorWeightData
+      - loadCloneCensorWeightData
+
+  - title: "Pipeline"
+    desc: "Core clone-censor-weight steps."
+    contents:
+      - createStudyPopulation
+      - createClonesAndCensor
+      - discretizePersonTime
+      - createCensoringWeights
+      - trimWeights
+      - fitOutcomeModel
+      - calibrateEstimates
+
+  - title: "Diagnostics & Plots"
+    desc: "Covariate balance, Kaplan–Meier curves, and power diagnostics."
+    contents:
+      - computeStandardizedDifferences
+      - computeCovariateBalance
+      - computeKaplanMeier
+      - computeMdrr
+      - computeWeightDistribution
+      - getAttritionTable
+      - plotLovePlot
+      - plotCovariateBalance
+      - plotKaplanMeier
+      - plotMdrr
+      - plotWeightDistribution
+      - plotCalibration
+
+  - title: "Multi-Analysis Runner"
+    desc: "Run and manage suites of analyses."
+    contents:
+      - runCcwAnalyses
+      - runCcwAnalysesOnData
+
+  - title: "Simulation"
+    desc: "Synthetic data generation and Monte Carlo power analysis."
+    contents:
+      - simulateCcwData
+      - runSimulation
+      - summarizeSimulation
+
+  - title: "Results Export"
+    desc: "Write results to CSV files and upload to a results database."
+    contents:
+      - exportToCsv
+      - importFromCsv
+      - uploadResults
+      - createResultsDataModel
+      - dropResultsDataModel
+      - getResultsDataModelSpec
+
+  - title: "Settings Objects"
+    desc: "Construct, save, and load analysis specifications."
+    contents:
+      - createArmDefinition
+      - createGetDbCloneCensorWeightDataArgs
+      - createCreateStudyPopulationArgs
+      - createCreateClonesAndCensorArgs
+      - createCreateCensoringWeightsArgs
+      - createFitOutcomeModelArgs
+      - createCcwAnalysis
+      - createTargetComparatorOutcome
+      - createCcwAnalysesSpecifications
+      - saveCcwAnalysisList
+      - loadCcwAnalysisList
+      - saveTargetComparatorOutcomeList
+      - loadTargetComparatorOutcomeList
+      - AbstractSerializableSettings
+      - ArmDefinition
+      - CcwAnalysis
+      - CcwAnalysesSpecifications
+      - CreateCensoringWeightsArgs
+      - CreateClonesAndCensorArgs
+      - CreateStudyPopulationArgs
+      - FitOutcomeModelArgs
+      - GetDbCloneCensorWeightDataArgs
+      - TargetComparatorOutcome

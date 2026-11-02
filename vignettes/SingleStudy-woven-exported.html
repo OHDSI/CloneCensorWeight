@@ -1,0 +1,546 @@
+<div class="sourceCode" id="cb1"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(CloneCensorWeight)</span></code></pre></div>
+<h1 id="study-design">Study design</h1>
+<h2 id="clinical-question">Clinical question</h2>
+<p><strong>Among adults with rheumatoid arthritis, psoriatic arthritis,
+or ulcerative colitis who newly initiate a JAK inhibitor, does receiving
+the recombinant zoster vaccine (RZV, Shingrix) within 3 months of JAK
+inhibitor initiation reduce incident herpes zoster over 2 years,
+compared with no vaccination during that window?</strong></p>
+<h2 id="why-this-question-requires-ccw">Why this question requires
+CCW</h2>
+<p>JAK inhibitors substantially increase herpes zoster risk. Clinical
+guidelines recommend RZV prior to or at the time of JAK inhibitor
+initiation, but real-world vaccination rates are low and timing is
+variable. A naive comparison of vaccinated vs. unvaccinated JAK
+inhibitor users is vulnerable to two problems.</p>
+<p><strong>Immortal time bias.</strong> A patient who receives RZV on
+day 60 has survived 60 days without herpes zoster before entering the
+“vaccinated” group. Assigning all their follow-up to the vaccinated
+group credits the vaccine with 60 days of event-free time it did not
+cause.</p>
+<p><strong>Confounding by indication.</strong> Patients who receive RZV
+tend to be older, more engaged with preventive care, and treated by more
+proactive providers — all of which independently predict herpes zoster
+risk. Standard baseline covariate adjustment cannot correct for
+confounding that evolves over the follow-up window.</p>
+<p>CCW addresses both problems. Every patient is cloned into both arms
+simultaneously at cohort entry, so baseline balance is guaranteed. A
+clone is censored only when its observed behavior deviates from its
+assigned protocol. Inverse probability of censoring weighting corrects
+for thee informative nature of that censoring.</p>
+<h2 id="target-trial">Target trial</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Element</th>
+<th>Specification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Eligibility</td>
+<td>Adults with RA, PsA, or UC; new JAK inhibitor user (none in prior
+365 days); no prior RZV in past 5 years; ≥ 365 days prior
+observation</td>
+</tr>
+<tr>
+<td>Arm 1</td>
+<td>Receive first dose of RZV within 90 days of JAK inhibitor start</td>
+</tr>
+<tr>
+<td>Arm 2</td>
+<td>No RZV within the first 90 days (vaccination after day 90 is
+permitted)</td>
+</tr>
+<tr>
+<td>Assignment</td>
+<td>Cloning at JAK inhibitor start date</td>
+</tr>
+<tr>
+<td>Follow-up</td>
+<td>Until herpes zoster, death, disenrollment, or 730 days</td>
+</tr>
+<tr>
+<td>Outcome</td>
+<td>Incident herpes zoster</td>
+</tr>
+<tr>
+<td>Causal contrast</td>
+<td>Per-protocol effect of early vaccination vs. deferred or no
+vaccination</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h1 id="cloning-mechanics-a-minimal-example">Cloning mechanics: a
+minimal example</h1>
+<p>Before specifying the full analysis, it helps to see exactly what
+cloning does to a small, hand-crafted cohort. The five subjects below
+cover every scenario that arises with a 90-day grace period.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(dplyr)</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>toy_cohorts <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">subjectId       =</span> <span class="dv">1</span><span class="sc">:</span><span class="dv">5</span>,</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">cohortStartDate =</span> <span class="fu">as.Date</span>(<span class="st">&quot;2020-01-01&quot;</span>),</span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">cohortEndDate   =</span> <span class="fu">as.Date</span>(<span class="st">&quot;2021-01-01&quot;</span>),   <span class="co"># 366 days (leap year)</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">initiationDate  =</span> <span class="fu">as.Date</span>(<span class="fu">c</span>(</span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;2020-02-15&quot;</span>,  <span class="co"># Subject 1 — vaccinated on day  45 (within grace period)</span></span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;2020-05-01&quot;</span>,  <span class="co"># Subject 2 — vaccinated on day 121 (after grace period)</span></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>    <span class="cn">NA</span>,            <span class="co"># Subject 3 — never vaccinated</span></span>
+<span id="cb2-11"><a href="#cb2-11" aria-hidden="true" tabindex="-1"></a>    <span class="st">&quot;2020-03-01&quot;</span>,  <span class="co"># Subject 4 — vaccinated on day  60; herpes zoster at day 213</span></span>
+<span id="cb2-12"><a href="#cb2-12" aria-hidden="true" tabindex="-1"></a>    <span class="cn">NA</span>             <span class="co"># Subject 5 — never vaccinated; herpes zoster at day 152</span></span>
+<span id="cb2-13"><a href="#cb2-13" aria-hidden="true" tabindex="-1"></a>  ))</span>
+<span id="cb2-14"><a href="#cb2-14" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb2-15"><a href="#cb2-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-16"><a href="#cb2-16" aria-hidden="true" tabindex="-1"></a>toy_outcomes <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb2-17"><a href="#cb2-17" aria-hidden="true" tabindex="-1"></a>  <span class="at">subjectId   =</span> <span class="fu">c</span>(<span class="dv">4</span><span class="dt">L</span>, <span class="dv">5</span><span class="dt">L</span>),</span>
+<span id="cb2-18"><a href="#cb2-18" aria-hidden="true" tabindex="-1"></a>  <span class="at">outcomeDate =</span> <span class="fu">as.Date</span>(<span class="fu">c</span>(<span class="st">&quot;2020-08-01&quot;</span>, <span class="st">&quot;2020-06-01&quot;</span>)),</span>
+<span id="cb2-19"><a href="#cb2-19" aria-hidden="true" tabindex="-1"></a>  <span class="at">outcomeId   =</span> <span class="fu">c</span>(<span class="dv">1</span><span class="dt">L</span>, <span class="dv">1</span><span class="dt">L</span>)</span>
+<span id="cb2-20"><a href="#cb2-20" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb2-21"><a href="#cb2-21" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-22"><a href="#cb2-22" aria-hidden="true" tabindex="-1"></a>toy <span class="ot">&lt;-</span> <span class="fu">createCloneCensorWeightData</span>(toy_cohorts, toy_outcomes)</span></code></pre></div>
+<pre><code>#&gt; duckdb is storing downloaded extensions and secrets under ~/.duckdb:
+#&gt; ℹ /Users/Bill/.duckdb
+#&gt; This persists across sessions and is shared with the DuckDB CLI and other clients.
+#&gt; ℹ Run duckdb(shared_home = FALSE) to use a temporary directory instead.
+#&gt; ℹ See ?duckdb_storage for details and alternatives.</code></pre>
+<p>The raw cohort table shows when (if ever) each subject initiated
+treatment — the only piece of information the cloning algorithm
+requires.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(toy<span class="sc">$</span>cohorts) <span class="sc">|&gt;</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(</span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="at">initiationDay =</span> <span class="fu">as.integer</span>(initiationDate <span class="sc">-</span> cohortStartDate),</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>    <span class="at">outcomeDay    =</span> <span class="fu">c</span>(<span class="cn">NA</span>, <span class="cn">NA</span>, <span class="cn">NA</span>, <span class="dv">213</span><span class="dt">L</span>, <span class="dv">152</span><span class="dt">L</span>)</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">|&gt;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(subjectId, initiationDay, outcomeDay) <span class="sc">|&gt;</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">&quot;Subject&quot;</span>, <span class="st">&quot;Vaccination day&quot;</span>, <span class="st">&quot;Outcome day&quot;</span>),</span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>    <span class="at">caption   =</span> <span class="st">&quot;NA = never vaccinated / no outcome&quot;</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>  )</span></code></pre></div>
+<table>
+<caption>NA = never vaccinated / no outcome</caption>
+<thead>
+<tr>
+<th style="text-align: right;">Subject</th>
+<th style="text-align: right;">Vaccination day</th>
+<th style="text-align: right;">Outcome day</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">NA</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">121</td>
+<td style="text-align: right;">NA</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">NA</td>
+<td style="text-align: right;">NA</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">213</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">NA</td>
+<td style="text-align: right;">152</td>
+</tr>
+</tbody>
+</table>
+<p>Now define the two arms and run the cloning step.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a>arm_initiate <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">armId        =</span> <span class="st">&quot;rzv_within90&quot;</span>,</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">strategyType =</span> <span class="st">&quot;initiateWithin&quot;</span>,</span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">gracePeriod  =</span> <span class="dv">90</span>,</span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">label        =</span> <span class="st">&quot;RZV within 90 days&quot;</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>arm_defer <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(</span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">armId        =</span> <span class="st">&quot;no_rzv_within90&quot;</span>,</span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">strategyType =</span> <span class="st">&quot;deferBeyond&quot;</span>,</span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>  <span class="at">gracePeriod  =</span> <span class="dv">90</span>,</span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>  <span class="at">label        =</span> <span class="st">&quot;No RZV within 90 days&quot;</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<div class="sourceCode" id="cb6"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a>toy_clonesArgs <span class="ot">&lt;-</span> <span class="fu">createCreateClonesAndCensorArgs</span>(</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">arms           =</span> <span class="fu">list</span>(arm_initiate, arm_defer),</span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">intervalLength =</span> <span class="dv">30</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>cloned <span class="ot">&lt;-</span> <span class="fu">createClonesAndCensor</span>(toy, toy_clonesArgs)</span></code></pre></div>
+<div class="sourceCode" id="cb7"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a>dplyr<span class="sc">::</span><span class="fu">collect</span>(cloned<span class="sc">$</span>cohorts) <span class="sc">|&gt;</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(subjectId, arm, survivalTime, artificiallyCensored, event) <span class="sc">|&gt;</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(subjectId, arm) <span class="sc">|&gt;</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>  knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>    <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">&quot;Subject&quot;</span>, <span class="st">&quot;Arm&quot;</span>, <span class="st">&quot;Survival days&quot;</span>, <span class="st">&quot;Artificially censored&quot;</span>, <span class="st">&quot;Event&quot;</span>),</span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a>    <span class="at">caption   =</span> <span class="fu">paste</span>(</span>
+<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;Each subject appears twice — once per arm.&quot;</span>,</span>
+<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;survivalTime is the number of days the clone is under observation.&quot;</span>,</span>
+<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;artificiallyCensored = 1 when the clone&#39;s observed behaviour&quot;</span>,</span>
+<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a>      <span class="st">&quot;deviated from its assigned protocol.&quot;</span></span>
+<span id="cb7-11"><a href="#cb7-11" aria-hidden="true" tabindex="-1"></a>    )</span>
+<span id="cb7-12"><a href="#cb7-12" aria-hidden="true" tabindex="-1"></a>  )</span></code></pre></div>
+<table>
+<caption>Each subject appears twice — once per arm. survivalTime is the
+number of days the clone is under observation. artificiallyCensored = 1
+when the clone’s observed behaviour deviated from its assigned
+protocol.</caption>
+<thead>
+<tr>
+<th style="text-align: right;">Subject</th>
+<th style="text-align: left;">Arm</th>
+<th style="text-align: right;">Survival days</th>
+<th style="text-align: right;">Artificially censored</th>
+<th style="text-align: right;">Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: left;">no_rzv_within90</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: left;">rzv_within90</td>
+<td style="text-align: right;">366</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: left;">no_rzv_within90</td>
+<td style="text-align: right;">366</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: left;">rzv_within90</td>
+<td style="text-align: right;">90</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: left;">no_rzv_within90</td>
+<td style="text-align: right;">366</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">3</td>
+<td style="text-align: left;">rzv_within90</td>
+<td style="text-align: right;">90</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: left;">no_rzv_within90</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: left;">rzv_within90</td>
+<td style="text-align: right;">366</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: left;">no_rzv_within90</td>
+<td style="text-align: right;">366</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td style="text-align: right;">5</td>
+<td style="text-align: left;">rzv_within90</td>
+<td style="text-align: right;">90</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+</tbody>
+</table>
+<p>Reading across the table clarifies several key properties of CCW:</p>
+<ul>
+<li><p><strong>Guaranteed balance at baseline.</strong> Every subject
+enters both arms on the same date with the same prior history; there is
+no baseline confounding by construction.</p></li>
+<li><p><strong>Complementary censoring.</strong> Subjects 2, 3, and 5
+follow the <code>no_rzv_within90</code> protocol and are censored from
+arm <code>rzv_within90</code> at day 90. Subjects 1 and 4 follow the
+<code>rzv_within90</code> protocol and are censored from arm
+<code>no_rzv_within90</code> at their initiation day. After day 90 every
+subject’s observed behavior is consistent with exactly one arm.</p></li>
+<li><p><strong>Outcome credit goes to the arm that earned it.</strong>
+Subject 4 received RZV on day 60 and developed herpes zoster on day 213.
+That outcome appears only in the <code>rzv_within90</code> arm — the
+<code>no_rzv_within90</code> clone was already censored at day 60. The
+mirror image holds for Subject 5: because they never vaccinated, their
+outcome on day 152 accrues entirely to the <code>no_rzv_within90</code>
+arm.</p></li>
+<li><p><strong>IPCW corrects for informative censoring.</strong> The
+artificial censoring above is not random: subjects who are healthy and
+well-managed are more likely to receive RZV promptly, so the subjects
+who <em>survive</em> in the <code>rzv_within90</code> arm are a selected
+group. The inverse probability of censoring weights estimated in the
+next phase reweight each arm back to the uncensored target
+population.</p></li>
+</ul>
+<hr />
+<h1 id="creating-the-analysis-settings">Creating the analysis
+settings</h1>
+<p>Every analytical choice in a CCW study is captured in a hierarchy of
+R6 settings objects. This design allows specifications to be validated
+at construction time, serialized to JSON, and shared or reproduced
+across sites and Strategus pipelines before any data are touched.</p>
+<h2 id="treatment-strategy-arms">Treatment strategy arms</h2>
+<p><code>createArmDefinition()</code> specifies the protocol a clone in
+each arm is assigned to follow. The <code>strategyType</code> determines
+the censoring rule applied when observed data deviate from the
+protocol:</p>
+<ul>
+<li><code>"initiateWithin"</code> — censored if treatment has
+<strong>not</strong> occurred by day <code>gracePeriod</code>.</li>
+<li><code>"deferBeyond"</code> — censored if treatment occurs
+<strong>within</strong> day <code>gracePeriod</code>; initiation after
+that window is consistent with the strategy.</li>
+</ul>
+<p>Together these form a grace period comparison: once the 90-day window
+closes, every patient’s observed behavior is consistent with exactly one
+arm.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a>armVaccinate <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">armId        =</span> <span class="st">&quot;rzv_within90&quot;</span>,</span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">strategyType =</span> <span class="st">&quot;initiateWithin&quot;</span>,</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">gracePeriod  =</span> <span class="dv">90</span>,</span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">label        =</span> <span class="st">&quot;RZV within 90 days of JAK inhibitor start&quot;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a>armDeferred <span class="ot">&lt;-</span> <span class="fu">createArmDefinition</span>(</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">armId        =</span> <span class="st">&quot;no_rzv_within90&quot;</span>,</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">strategyType =</span> <span class="st">&quot;deferBeyond&quot;</span>,</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a>  <span class="at">gracePeriod  =</span> <span class="dv">90</span>,</span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a>  <span class="at">label        =</span> <span class="st">&quot;No RZV within 90 days&quot;</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="data-extraction">Data extraction</h2>
+<div class="sourceCode" id="cb9"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Exclude RZV concept IDs so the treatment does not appear as a predictor</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="co"># in the IPCW models.</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a>rzvConceptIds <span class="ot">&lt;-</span> <span class="fu">c</span>(<span class="dv">1160056</span><span class="dt">L</span>, <span class="dv">1160057</span><span class="dt">L</span>)</span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>dbArgs <span class="ot">&lt;-</span> <span class="fu">createGetDbCloneCensorWeightDataArgs</span>(</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">washoutPeriod     =</span> <span class="dv">365</span>,</span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">covariateSettings =</span> FeatureExtraction<span class="sc">::</span><span class="fu">createDefaultCovariateSettings</span>(</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>    <span class="at">excludedCovariateConceptIds =</span> rzvConceptIds,</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a>    <span class="at">addDescendantsToExclude     =</span> <span class="cn">TRUE</span></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="study-population">Study population</h2>
+<div class="sourceCode" id="cb10"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a>studyPopArgs <span class="ot">&lt;-</span> <span class="fu">createCreateStudyPopulationArgs</span>(</span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">removeSubjectsWithPriorOutcome =</span> <span class="cn">TRUE</span>,</span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">priorOutcomeLookback           =</span> <span class="dv">365</span>,</span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">minDaysAtRisk                  =</span> <span class="dv">1</span>,</span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">riskWindowEnd                  =</span> <span class="dv">730</span>,</span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">endAnchor                      =</span> <span class="st">&quot;cohort start&quot;</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="cloning-and-censoring">Cloning and censoring</h2>
+<div class="sourceCode" id="cb11"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a>clonesArgs <span class="ot">&lt;-</span> <span class="fu">createCreateClonesAndCensorArgs</span>(</span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">arms           =</span> <span class="fu">list</span>(armVaccinate, armDeferred),</span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">intervalLength =</span> <span class="dv">30</span></span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="ipcw-weights">IPCW weights</h2>
+<div class="sourceCode" id="cb12"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>weightsArgs <span class="ot">&lt;-</span> <span class="fu">createCreateCensoringWeightsArgs</span>(</span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">trim      =</span> <span class="fu">c</span>(<span class="fl">0.01</span>, <span class="fl">0.99</span>),</span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">maxWeight =</span> <span class="dv">10</span></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="outcome-model">Outcome model</h2>
+<div class="sourceCode" id="cb13"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a>outcomeModelArgs <span class="ot">&lt;-</span> <span class="fu">createFitOutcomeModelArgs</span>(</span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">modelType         =</span> <span class="st">&quot;cox&quot;</span>,</span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">varianceEstimator =</span> <span class="st">&quot;robust&quot;</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="full-analysis-specification">Full analysis specification</h2>
+<p><code>createCcwAnalysis()</code> assembles all step-level objects
+into a single, validated, serializable specification.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a>analysis <span class="ot">&lt;-</span> <span class="fu">createCcwAnalysis</span>(</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">analysisId                     =</span> <span class="st">&quot;main_90day&quot;</span>,</span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">description                    =</span> <span class="st">&quot;Primary: RZV within 90 days vs. deferred&quot;</span>,</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">getDbCloneCensorWeightDataArgs =</span> dbArgs,</span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">createStudyPopulationArgs      =</span> studyPopArgs,</span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">createClonesAndCensorArgs      =</span> clonesArgs,</span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">createCensoringWeightsArgs     =</span> weightsArgs,</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">fitOutcomeModelArgs            =</span> outcomeModelArgs</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="target-cohort-and-outcomes">Target cohort and outcomes</h2>
+<p><code>createTargetArmOutcome()</code> links the analysis to specific
+cohort definition IDs in the database. Negative control outcomes are
+included alongside the primary outcome to support empirical
+calibration.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">#  101      New JAK inhibitor users with RA, PsA, or UC</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="co">#  102      First dose of RZV — used for both arms; strategyType determines</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="co">#           how each arm interprets initiation events</span></span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a><span class="co">#  201      Incident herpes zoster (primary outcome)</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a><span class="co">#  301-320  Negative control outcomes for empirical calibration</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>tao <span class="ot">&lt;-</span> <span class="fu">createTargetArmOutcome</span>(</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">targetId                    =</span> <span class="dv">101</span><span class="dt">L</span>,</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">arm1CohortId                =</span> <span class="dv">102</span><span class="dt">L</span>,</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">arm2CohortId                =</span> <span class="dv">102</span><span class="dt">L</span>,</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  <span class="at">outcomeIds                  =</span> <span class="fu">c</span>(<span class="dv">201</span><span class="dt">L</span>, <span class="dv">301</span><span class="sc">:</span><span class="dv">320</span>),</span>
+<span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a>  <span class="at">excludedCovariateConceptIds =</span> rzvConceptIds</span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<h2 id="top-level-specifications">Top-level specifications</h2>
+<p><code>createCcwAnalysesSpecifications()</code> combines all analyses
+and target-arm-outcome definitions into the object accepted by
+<code>runCcwAnalyses()</code>.</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a>specs <span class="ot">&lt;-</span> <span class="fu">createCcwAnalysesSpecifications</span>(</span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">ccwAnalysisList      =</span> <span class="fu">list</span>(analysis),</span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">targetArmOutcomeList =</span> <span class="fu">list</span>(tao)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div>
+<hr />
+<h1 id="saving-and-sharing-the-specification">Saving and sharing the
+specification</h1>
+<p>The full specification can be written to JSON and shared across sites
+or checked into version control. <code>loadCcwAnalysisList()</code>
+reconstructs all R6 objects from the file, including nested arm
+definitions.</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a>analysisFile <span class="ot">&lt;-</span> <span class="fu">tempfile</span>(<span class="at">fileext =</span> <span class="st">&quot;.json&quot;</span>)</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a>taoFile      <span class="ot">&lt;-</span> <span class="fu">tempfile</span>(<span class="at">fileext =</span> <span class="st">&quot;.json&quot;</span>)</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="fu">saveCcwAnalysisList</span>(<span class="fu">list</span>(analysis), analysisFile)</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a><span class="fu">saveTargetArmOutcomeList</span>(<span class="fu">list</span>(tao), taoFile)</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>reloaded <span class="ot">&lt;-</span> <span class="fu">loadCcwAnalysisList</span>(analysisFile)</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a>reloaded[[<span class="dv">1</span>]]<span class="sc">$</span>analysisId</span></code></pre></div>
+<pre><code>#&gt; [1] &quot;main_90day&quot;</code></pre>
+<div class="sourceCode" id="cb19"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>reloaded[[<span class="dv">1</span>]]<span class="sc">$</span>createClonesAndCensorArgs<span class="sc">$</span>arms[[<span class="dv">1</span>]]<span class="sc">$</span>armId</span></code></pre></div>
+<pre><code>#&gt; [1] &quot;rzv_within90&quot;</code></pre>
+<div class="sourceCode" id="cb21"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a>reloaded[[<span class="dv">1</span>]]<span class="sc">$</span>createClonesAndCensorArgs<span class="sc">$</span>arms[[<span class="dv">1</span>]]<span class="sc">$</span>gracePeriod</span></code></pre></div>
+<pre><code>#&gt; [1] 90</code></pre>
+<div class="sourceCode" id="cb23"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a>reloaded[[<span class="dv">1</span>]]<span class="sc">$</span>fitOutcomeModelArgs<span class="sc">$</span>varianceEstimator</span></code></pre></div>
+<pre><code>#&gt; [1] &quot;robust&quot;</code></pre>
+<div class="sourceCode" id="cb25"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="fu">readLines</span>(analysisFile), <span class="at">sep =</span> <span class="st">&quot;</span><span class="sc">\n</span><span class="st">&quot;</span>)</span></code></pre></div>
+<pre><code>#&gt; [
+#&gt;   {
+#&gt;     &quot;analysisId&quot;: &quot;main_90day&quot;,
+#&gt;     &quot;description&quot;: &quot;Primary: RZV within 90 days vs. deferred&quot;,
+#&gt;     &quot;getDbCloneCensorWeightDataArgs&quot;: {
+#&gt;       &quot;washoutPeriod&quot;: 365,
+#&gt;       &quot;maxCohortSize&quot;: 0,
+#&gt;       &quot;covariateSettings&quot;: {
+#&gt;         &quot;temporal&quot;: false,
+#&gt;         &quot;temporalSequence&quot;: false,
+#&gt;         &quot;DemographicsGender&quot;: true,
+#&gt;         &quot;DemographicsAgeGroup&quot;: true,
+#&gt;         &quot;DemographicsRace&quot;: true,
+#&gt;         &quot;DemographicsEthnicity&quot;: true,
+#&gt;         &quot;DemographicsIndexYear&quot;: true,
+#&gt;         &quot;DemographicsIndexMonth&quot;: true,
+#&gt;         &quot;ConditionGroupEraLongTerm&quot;: true,
+#&gt;         &quot;ConditionGroupEraShortTerm&quot;: true,
+#&gt;         &quot;DrugGroupEraLongTerm&quot;: true,
+#&gt;         &quot;DrugGroupEraShortTerm&quot;: true,
+#&gt;         &quot;DrugGroupEraOverlapping&quot;: true,
+#&gt;         &quot;ProcedureOccurrenceLongTerm&quot;: true,
+#&gt;         &quot;ProcedureOccurrenceShortTerm&quot;: true,
+#&gt;         &quot;DeviceExposureLongTerm&quot;: true,
+#&gt;         &quot;DeviceExposureShortTerm&quot;: true,
+#&gt;         &quot;MeasurementLongTerm&quot;: true,
+#&gt;         &quot;MeasurementShortTerm&quot;: true,
+#&gt;         &quot;MeasurementRangeGroupLongTerm&quot;: true,
+#&gt;         &quot;MeasurementRangeGroupShortTerm&quot;: true,
+#&gt;         &quot;MeasurementValueAsConceptLongTerm&quot;: true,
+#&gt;         &quot;MeasurementValueAsConceptShortTerm&quot;: true,
+#&gt;         &quot;ObservationLongTerm&quot;: true,
+#&gt;         &quot;ObservationShortTerm&quot;: true,
+#&gt;         &quot;ObservationValueAsConceptLongTerm&quot;: true,
+#&gt;         &quot;ObservationValueAsConceptShortTerm&quot;: true,
+#&gt;         &quot;CharlsonIndex&quot;: true,
+#&gt;         &quot;Dcsi&quot;: true,
+#&gt;         &quot;Chads2&quot;: true,
+#&gt;         &quot;Chads2Vasc&quot;: true,
+#&gt;         &quot;includedCovariateConceptIds&quot;: [],
+#&gt;         &quot;includedCovariateIds&quot;: [],
+#&gt;         &quot;addDescendantsToInclude&quot;: false,
+#&gt;         &quot;excludedCovariateConceptIds&quot;: [1160056, 1160057],
+#&gt;         &quot;addDescendantsToExclude&quot;: true,
+#&gt;         &quot;shortTermStartDays&quot;: -30,
+#&gt;         &quot;mediumTermStartDays&quot;: -180,
+#&gt;         &quot;endDays&quot;: 0,
+#&gt;         &quot;longTermStartDays&quot;: -365,
+#&gt;         &quot;attr_class&quot;: &quot;covariateSettings&quot;
+#&gt;       }
+#&gt;     },
+#&gt;     &quot;createStudyPopulationArgs&quot;: {
+#&gt;       &quot;endAnchor&quot;: &quot;cohort start&quot;,
+#&gt;       &quot;minDaysAtRisk&quot;: 1,
+#&gt;       &quot;priorOutcomeLookback&quot;: 365,
+#&gt;       &quot;removeSubjectsWithPriorOutcome&quot;: true,
+#&gt;       &quot;riskWindowEnd&quot;: 730,
+#&gt;       &quot;riskWindowStart&quot;: 0,
+#&gt;       &quot;startAnchor&quot;: &quot;cohort start&quot;
+#&gt;     },
+#&gt;     &quot;createClonesAndCensorArgs&quot;: {
+#&gt;       &quot;arms&quot;: [
+#&gt;         {
+#&gt;           &quot;armId&quot;: &quot;rzv_within90&quot;,
+#&gt;           &quot;gracePeriod&quot;: 90,
+#&gt;           &quot;label&quot;: &quot;RZV within 90 days of JAK inhibitor start&quot;,
+#&gt;           &quot;strategyType&quot;: &quot;initiateWithin&quot;
+#&gt;         },
+#&gt;         {
+#&gt;           &quot;armId&quot;: &quot;no_rzv_within90&quot;,
+#&gt;           &quot;gracePeriod&quot;: 90,
+#&gt;           &quot;label&quot;: &quot;No RZV within 90 days&quot;,
+#&gt;           &quot;strategyType&quot;: &quot;deferBeyond&quot;
+#&gt;         }
+#&gt;       ],
+#&gt;       &quot;intervalLength&quot;: 30
+#&gt;     },
+#&gt;     &quot;createCensoringWeightsArgs&quot;: {
+#&gt;       &quot;artificialCensoringFormula&quot;: null,
+#&gt;       &quot;classicalCensoringFormula&quot;: null,
+#&gt;       &quot;maxWeight&quot;: 10,
+#&gt;       &quot;trim&quot;: [0.01, 0.99]
+#&gt;     },
+#&gt;     &quot;fitOutcomeModelArgs&quot;: {
+#&gt;       &quot;modelType&quot;: &quot;cox&quot;,
+#&gt;       &quot;nBootstraps&quot;: 200,
+#&gt;       &quot;seed&quot;: 1,
+#&gt;       &quot;varianceEstimator&quot;: &quot;robust&quot;
+#&gt;     }
+#&gt;   }
+#&gt; ]</code></pre>
+<hr />
+<h1 id="references">References</h1>
+<p>Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on
+modern methods: trial emulation in the presence of immortal-time bias.
+Insights from the GUARDIAN studies. <em>International Journal of
+Epidemiology</em>. 2024. <a
+href="https://pmc.ncbi.nlm.nih.gov/articles/PMC11623977/"
+class="uri">https://pmc.ncbi.nlm.nih.gov/articles/PMC11623977/</a></p>
+<p>Hernán MA, Robins JM. Using Big Data to Emulate a Target Trial When a
+Randomized Trial Is Not Available. <em>American Journal of
+Epidemiology</em>. 2016;183(8):758–764.</p>
+<p>Hernán MA, Sauer BC, Hernández-Díaz S, Platt R, Shrier I. Specifying
+a target trial prevents immortal time bias and other self-inflicted
+injuries in observational analyses. <em>Journal of Clinical
+Epidemiology</em>. 2016;79:70–75.</p>
+<p>Dagnew AF, Abbing-Karahagopian V, Folschweiller N, et
+al. Immunogenicity and safety of the recombinant zoster vaccine in
+immunocompromised adults: ZOSTER-056 randomized trial. <em>Annals of
+Internal Medicine</em>. 2022.</p>

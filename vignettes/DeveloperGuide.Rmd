@@ -1,0 +1,586 @@
+---
+title: "Developer Guide"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Developer Guide}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", eval = FALSE)
+```
+
+This guide explains the internal architecture of the CloneCensorWeight package
+for developers who want to extend, debug, or contribute to it.  It follows the
+data and control flow from the settings layer all the way through to the
+results CSV files, with annotated data samples at every step.
+
+All samples below are generated from the built-in `createSampleCloneCensorWeightData()`
+function and require no database connection.
+
+---
+
+## 1. The settings layer (`R/SettingsObjects.R`)
+
+### 1.1 Class hierarchy
+
+All settings objects inherit from `AbstractSerializableSettings`, an R6 base
+class that provides three methods:
+
+- `$toList()` — serializes public fields to a plain named list, excluding
+  functions.
+- `$toJson()` — calls `toList()` and passes the result to `jsonlite::toJSON()`.
+- `$validate()` — a no-op in the base class, overridden to call
+  `checkmate` assertions in each subclass.
+
+The concrete settings classes, in the order they are used in the pipeline, are:
+
+| Class | Constructor | Purpose |
+|---|---|---|
+| `ArmDefinition` | `createArmDefinition()` | Describes one treatment strategy |
+| `GetDbCloneCensorWeightDataArgs` | `createGetDbCloneCensorWeightDataArgs()` | CDM extraction args |
+| `CreateStudyPopulationArgs` | `createCreateStudyPopulationArgs()` | Eligibility & risk window |
+| `CreateClonesAndCensorArgs` | `createCreateClonesAndCensorArgs()` | Arms + interval length |
+| `CreateCensoringWeightsArgs` | `createCreateCensoringWeightsArgs()` | IPCW trim / cap / formula |
+| `FitOutcomeModelArgs` | `createFitOutcomeModelArgs()` | Model type + variance estimator |
+| `CcwAnalysis` | `createCcwAnalysis()` | Bundles all the above into one spec |
+| `TargetComparatorOutcome` | `createTargetComparatorOutcome()` | Cohort IDs + outcome IDs |
+| `CcwAnalysesSpecifications` | `createCcwAnalysesSpecifications()` | Top-level container for runner |
+
+### 1.2 ArmDefinition
+
+An arm defines what it means to *comply* with the assigned treatment strategy
+during the grace period.
+
+```r
+# "initiateWithin": clone is artificially censored if treatment has NOT occurred
+# by day gracePeriod.  Models a protocol that requires prompt treatment.
+arm1 <- createArmDefinition("vaccinate", "initiateWithin", gracePeriod = 90)
+
+# "deferBeyond": clone is artificially censored if treatment DOES occur within
+# gracePeriod days.  Models a protocol that requires deferring treatment.
+arm2 <- createArmDefinition("defer", "deferBeyond", gracePeriod = 90)
+```
+
+`CreateClonesAndCensorArgs` holds exactly two `ArmDefinition` objects and
+validates that their `armId` values are distinct.
+
+### 1.3 TargetComparatorOutcome
+
+This object links three cohorts to the analysis:
+
+- `indexCohortId` — the eligible population (e.g. new JAK inhibitor users).
+  Every subject in this cohort will be cloned into both arms.
+- `targetCohortId` — the treatment-exposure cohort (e.g. RZV recipients).
+  Its `cohort_start_date` is used as the initiation date.
+- `comparatorCohortId` — the comparator-exposure cohort.  For a
+  `"deferBeyond"` comparator this is typically the same as `targetCohortId`
+  because the arm strategy alone determines how an initiation event is
+  interpreted.
+
+```r
+tao <- createTargetComparatorOutcome(
+  indexCohortId      = 101L,
+  targetCohortId     = 102L,
+  comparatorCohortId = 102L,
+  outcomeIds         = c(201L, 301L:320L)  # primary + negative controls
+)
+```
+
+### 1.4 Serialization round-trip
+
+`CcwAnalysis$toList()` recursively calls `toList()` on every nested args object.
+`GetDbCloneCensorWeightDataArgs` overrides `toList()` with special handling for
+`covariateSettings` because FeatureExtraction objects carry their class in an
+attribute rather than a list field; `.convertAttrToMember()` saves that class
+string as `attr_class`, and `.convertMemberToAttr()` restores it on load.
+
+```r
+saveCcwAnalysisList(analysisList, "analyses.json")
+reloaded <- loadCcwAnalysisList("analyses.json")
+```
+
+`loadCcwAnalysisList()` calls `.reconstructCcwAnalysis()`, which reconstructs
+every nested object by calling the appropriate `create*` constructor.  The
+`%||%` null-coalescing operator (defined in `R/zzz.R`) provides defaults for
+fields that may be absent in JSON produced by older package versions.
+
+---
+
+## 2. The data layer (`R/CloneCensorWeightData.R`)
+
+### 2.1 `CloneCensorWeightData`
+
+`CloneCensorWeightData` is an S4 class that extends
+`FeatureExtraction::CovariateData`, which itself extends `Andromeda::Andromeda`.
+Andromeda is a disk-backed SQLite database, so the object can hold
+arbitrarily large tables without exhausting RAM.
+
+The five tables inside the object are:
+
+| Table | Key columns | Populated by |
+|---|---|---|
+| `cohorts` | `subjectId`, `cohortStartDate`, `cohortEndDate`, `initiationDate` | `getDbCloneCensorWeightData()` |
+| `outcomes` | `subjectId`, `outcomeDate`, `outcomeId` | `getDbCloneCensorWeightData()` |
+| `covariates` | `rowId`, `covariateId`, `covariateValue` | FeatureExtraction (sparse format) |
+| `covariateRef` | `covariateId`, `covariateName`, `analysisId`, `conceptId` | FeatureExtraction |
+| `analysisRef` | `analysisId`, `analysisName`, `domainId`, ... | FeatureExtraction |
+
+### 2.2 Sample: raw data
+
+```r
+data <- createSampleCloneCensorWeightData(n = 6, seed = 42)
+dplyr::collect(data$cohorts)
+```
+
+```
+# A tibble: 6 × 4
+  subjectId cohortStartDate cohortEndDate initiationDate
+      <int> <date>          <date>        <date>
+1         1 2020-01-17      2020-09-08    2020-04-09
+2         2 2020-01-05      2020-08-03    2020-04-02
+3         3 2020-01-01      2020-05-18    NA
+4         4 2020-01-25      2020-08-29    2020-02-12
+5         5 2020-01-10      2020-05-02    2020-01-16
+6         6 2020-01-04      2020-06-30    2020-03-22
+```
+
+`initiationDate` is `NA` for subject 3, who never received the treatment.
+This drives the artificial-censoring logic in the next step.
+
+```r
+dplyr::collect(data$covariates)
+```
+
+```
+# A tibble: 12 × 3
+   rowId covariateId covariateValue
+   <int>       <int>          <dbl>
+ 1     1        1003            6.6   # age in decades (continuous)
+ 2     2        1003            5.4
+ 3     3        1003            5.7
+ 4     4        1003            3.7
+ 5     5        1003            8.4
+ 6     6        1003            5.7
+ 7     1        2001            1     # prior condition (binary, 1 = present)
+ 8     2        2001            1
+ 9     4        2001            1
+10     3        3001            1     # prior drug (binary)
+```
+
+The covariates table is in FeatureExtraction **sparse format**: each row is
+one `(subject, covariate, value)` triple.  Subjects absent for a binary
+covariate have no row — the convention is that absence means zero.
+
+```r
+dplyr::collect(data$covariateRef)
+```
+
+```
+# A tibble: 3 × 4
+  covariateId covariateName           analysisId conceptId
+        <int> <chr>                        <int>     <int>
+1        1003 age in decades                   1         0
+2        2001 prior condition in 365d          2         0
+3        3001 prior drug in 365d               3         0
+```
+
+### 2.3 `getDbCloneCensorWeightData()` (CDM path)
+
+When running against a real CDM this function:
+
+1. Executes `GetCohorts.sql` to retrieve eligible subjects with initiation
+   dates via a `LEFT JOIN` to the exposure cohort table.
+2. Uploads results to a temp table (`#ccw_cohorts`) used by downstream SQL
+   and FeatureExtraction.
+3. Executes `GetOutcomes.sql` to retrieve outcome records.
+4. Calls `FeatureExtraction::getDbCovariateData()` pointing at `#ccw_cohorts`.
+5. Assembles all four components via `createCloneCensorWeightData()`.
+
+All tables are read back from disk via `.readCloneCensorWeightTable()`, which
+calls `dplyr::collect()` to materialize a lazy Andromeda table into a plain
+data frame.
+
+---
+
+## 3. The pipeline
+
+### Step 1 — `createStudyPopulation()`
+
+Applies subject-level exclusion criteria: prior-outcome removal, risk-window
+trimming, and minimum days-at-risk filtering.  Modifies the `cohorts` table
+in place.  In this example no subjects are excluded, so the table is
+unchanged — the step has effect when `removeSubjectsWithPriorOutcome = TRUE`
+or when the risk window end is earlier than natural follow-up.
+
+```r
+popArgs <- createCreateStudyPopulationArgs(
+  removeSubjectsWithPriorOutcome = FALSE,
+  riskWindowEnd = 365,
+  endAnchor     = "cohort start"
+)
+createStudyPopulation(data, outcomeId = 1L, popArgs)
+```
+
+The cohorts table after this step looks the same as the raw table — columns
+are unchanged; trimmed follow-up would be visible in `cohortEndDate` if any
+risk-window truncation occurred.
+
+---
+
+### Step 2 — `createClonesAndCensor()`
+
+Executes `CreateClones.sql` via `SqlRender`, passing arm ID, strategy, and
+grace period.  Each subject is duplicated; artificial censoring is applied
+per the arm strategy.
+
+```r
+arms <- list(
+  createArmDefinition("vaccinate", "initiateWithin", gracePeriod = 90),
+  createArmDefinition("defer",     "deferBeyond",    gracePeriod = 90)
+)
+cloneArgs <- createCreateClonesAndCensorArgs(arms = arms, intervalLength = 30)
+cloned    <- createClonesAndCensor(data, cloneArgs)
+
+dplyr::collect(cloned$cohorts)
+```
+
+```
+# A tibble: 12 × 9
+   subjectId cloneId     arm    cohortStartDate cohortEndDate survivalTime event
+       <int> <chr>       <chr>  <date>          <date>               <dbl> <int>
+ 1         1 1_vaccinate vacci… 2020-01-17      2020-09-08             235     0
+ 2         2 2_vaccinate vacci… 2020-01-05      2020-08-03             211     0
+ 3         3 3_vaccinate vacci… 2020-01-01      2020-03-31              90     0  # censored at day 90
+ 4         4 4_vaccinate vacci… 2020-01-25      2020-08-29             217     0
+ 5         5 5_vaccinate vacci… 2020-01-10      2020-05-02             113     0
+ 6         6 6_vaccinate vacci… 2020-01-04      2020-06-30             178     0
+ 7         1 1_defer     defer  2020-01-17      2020-04-09              83     0  # censored at initiation
+ 8         2 2_defer     defer  2020-01-05      2020-04-02              88     0
+ 9         3 3_defer     defer  2020-01-01      2020-05-18             138     0  # never initiated = stays
+10         4 4_defer     defer  2020-01-25      2020-02-12              18     0  # initiated day 18 = censored
+11         5 5_defer     defer  2020-01-10      2020-01-16               6     0
+12         6 6_defer     defer  2020-01-04      2020-03-22              78     0
+# ℹ 2 more variables: artificiallyCensored <int>, initiationDate <date>
+```
+
+Key things to notice:
+
+- Subject 3 had no `initiationDate`.  In the **vaccinate** arm
+  (`initiateWithin`), they are artificially censored at day 90 (the grace
+  period limit).  In the **defer** arm (`deferBeyond`), they are *not*
+  censored because they never initiated — they comply by deferring.
+- Subject 4 initiated on day 18.  In the **defer** arm, initiating within the
+  90-day window violates the protocol, so that clone is censored at the
+  initiation date.
+- `cloneId` is a string of the form `"{subjectId}_{armId}"`.  It uniquely
+  identifies a clone throughout the rest of the pipeline.
+
+---
+
+### Step 3 — `discretizePersonTime()`
+
+Expands each clone's single row into a sequence of fixed-length intervals.
+The resulting data frame drives all downstream IPCW models and the outcome
+analysis.
+
+```r
+pt <- discretizePersonTime(cloned, intervalLength = 30)
+```
+
+Subject 1 has 235 days of follow-up: 7 complete 30-day intervals plus one
+partial interval of 25 days.  Their `defer` clone was artificially censored at
+day 83: 2 complete intervals plus one partial of 23 days.
+
+```
+   subjectId     cloneId       arm interval tstart tstop personTime
+1          1 1_vaccinate vaccinate        1      0    30         30
+2          1 1_vaccinate vaccinate        2     30    60         30
+3          1 1_vaccinate vaccinate        3     60    90         30
+4          1 1_vaccinate vaccinate        4     90   120         30
+5          1 1_vaccinate vaccinate        5    120   150         30
+6          1 1_vaccinate vaccinate        6    150   180         30
+7          1 1_vaccinate vaccinate        7    180   210         30
+8          1 1_vaccinate vaccinate        8    210   235         25   # final, classical censor
+
+38         1     1_defer     defer        1      0    30         30
+39         1     1_defer     defer        2     30    60         30
+40         1     1_defer     defer        3     60    83         23   # final, artificially censored
+   acCensorInInterval classicalCensorInInterval event
+1                   0                         0     0
+...
+8                   0                         1     0   # lost to follow-up (vaccinate arm)
+...
+40                  1                         0     0   # artificially censored (defer arm)
+```
+
+The three indicator columns (`acCensorInInterval`, `classicalCensorInInterval`,
+`event`) are mutually exclusive and are only 1 in the **final** interval of
+each clone.
+
+---
+
+### Step 4 — `createCensoringWeights()`
+
+Fits stabilized IPCW models and attaches cumulative weights to each row.
+
+```r
+weightsArgs <- createCreateCensoringWeightsArgs(trim = c(0.01, 0.99), maxWeight = 10)
+weighted    <- createCensoringWeights(pt, cloned, weightsArgs)
+```
+
+Selected columns from the output:
+
+```
+   subjectId     cloneId       arm interval tstart tstop
+1          1 1_vaccinate vaccinate        1      0    30
+2          1 1_vaccinate vaccinate        2     30    60
+...
+9          1     1_defer     defer        1      0    30
+10         1     1_defer     defer        2     30    60
+11         1     1_defer     defer        3     60    83
+
+   acIntervalWeight ccIntervalWeight  acWeight  ccWeight    weight
+1         0.9932394        0.9992828 0.9932394 0.9992828 0.9925271
+2         0.9958678        0.9976506 0.9891351 0.9969351 0.9861035
+...
+9         1.0508066        0.9790972 1.0508066 0.9790972 1.0288418
+10        1.0754368        0.9345884 1.1300761 0.9150529 1.0340794
+11        1.0248913        0.9935305 1.1582051 0.9091330 1.0529625
+```
+
+Column meanings:
+
+- `acIntervalWeight` — single-interval stabilized weight for artificial
+  censoring: `P(uncensored | arm, interval) / P(uncensored | arm, interval, X)`.
+- `ccIntervalWeight` — same for classical (loss-to-follow-up) censoring.
+- `acWeight` — cumulative product of `acIntervalWeight` within the clone.
+- `ccWeight` — cumulative product of `ccIntervalWeight` within the clone.
+- `weight` — `acWeight × ccWeight`, then trimmed to percentile limits and
+  capped at `maxWeight`.
+
+The four fitted model objects are stored as attributes:
+
+```r
+attr(weighted, "acNumeratorModel")    # marginal AC model
+attr(weighted, "acDenominatorModel")  # covariate-adjusted AC model
+attr(weighted, "ccNumeratorModel")    # marginal CC model
+attr(weighted, "ccDenominatorModel")  # covariate-adjusted CC model
+```
+
+`fitPooledLogistic()` tries Cyclops (L1 penalized logistic) first and falls
+back to `stats::glm()` if Cyclops is unavailable.
+
+---
+
+### Step 5 — `fitOutcomeModel()`
+
+Fits a weighted regression with a binary arm indicator as the sole exposure
+variable.
+
+```r
+modelArgs <- createFitOutcomeModelArgs("cox", "robust")
+model     <- fitOutcomeModel(weighted, fitOutcomeModelArgs = modelArgs)
+model$summary
+```
+
+```
+  modelType term estimate   lower95  upper95    pValue logLikelihood
+      cox    arm  1.353    0.493    3.712     0.557      -83.14
+```
+
+The `"robust"` path uses `survival::coxph()` with `survival::cluster(subjectId)`
+so that `vcov()` returns the Lin-Wei-Ying sandwich variance, which accounts
+for the within-subject correlation between a subject's two clones.
+
+The three variance paths:
+
+| `varianceEstimator` | Mechanism | Use case |
+|---|---|---|
+| `"robust"` | Lin-Wei-Ying sandwich via `cluster()` | Default; fast; appropriate for most studies |
+| `"bootstrap"` | Subject-level cluster bootstrap | Makes fewer distributional assumptions; slower |
+| `"conventional"` | Profile-likelihood CIs from Cyclops | Ignores clone correlation; not for publication |
+
+---
+
+## 4. Covariate balance (`R/Balance.R`)
+
+`computeStandardizedDifferences()` computes the SMD for each baseline
+covariate between arms.  Call it twice — before and after IPCW — to assess
+whether weighting reduced confounding.
+
+```r
+smdBefore <- computeStandardizedDifferences(cloned)
+smdAfter  <- computeStandardizedDifferences(cloned, weights = weighted)
+```
+
+**Before IPCW:**
+
+```
+  covariateId               covariate meanArm1   sdArm1 meanArm2   sdArm2     smd   absSmd
+1        1003          age in decades    5.831    1.400    5.788    1.444   0.030    0.030
+2        2001 prior condition in 365d    0.269    0.444    0.353    0.478  -0.182    0.182
+3        3001      prior drug in 365d    0.423    0.494    0.118    0.322   0.732    0.732
+```
+
+**After IPCW:**
+
+```
+  covariateId               covariate meanArm1   sdArm1 meanArm2   sdArm2     smd   absSmd
+1        1003          age in decades    5.848    1.420    5.824    1.428   0.017    0.017
+2        2001 prior condition in 365d    0.334    0.472    0.339    0.473  -0.011    0.011
+3        3001      prior drug in 365d    0.256    0.436    0.255    0.436   0.002    0.002
+```
+
+The large imbalance in prior drug use (|SMD| = 0.73 before weighting) is
+eliminated by IPCW (|SMD| = 0.002).  This is the expected behavior: clones
+who deviate from their assigned protocol are up-weighted to represent the
+non-deviators.
+
+When `weights` is supplied, `.finalCloneWeights()` extracts the last interval
+row for each clone (highest `interval` value) to get a single cumulative
+weight per clone.  These weights are then used in the weighted mean / weighted
+variance calculation inside `.weightedStats()`.
+
+`plotLovePlot(smdBefore, smdAfter)` overlays both on a dot plot with a dashed
+reference line at |SMD| = 0.1.
+
+---
+
+## 5. Kaplan-Meier and MDRR diagnostics
+
+### Kaplan-Meier
+
+```r
+km <- computeKaplanMeier(weighted)
+head(km, 8)
+```
+
+```
+    arm time  survival  lower  upper  nRisk  nEvent
+1 defer    0 1.0000000  1.000  1.000     NA   0.000
+3 defer   54 0.9766077  0.932  1.000 42.525   0.995
+4 defer   64 0.9498846  0.884  1.000 36.637   1.002
+5 defer  131 0.9010797  0.795  1.000 20.006   1.028
+6 defer  146 0.8536234  0.724  1.000 18.053   0.951
+7 defer  189 0.8051621  0.659  0.984 17.139   0.973
+8 defer  203 0.7508601  0.589  0.958 14.181   0.956
+```
+
+One row per event time per arm.  `nRisk` and `nEvent` are IPCW-weighted
+(effective sample size), so they can be non-integer.
+
+### MDRR
+
+```r
+computeMdrr(weighted)
+```
+
+```
+   arm1      arm2 alpha power nEventsArm1 nEventsArm2 nEventsEffArm1 nEventsEffArm2  mdrr
+1 defer vaccinate  0.05   0.8           7          12          6.950         11.949 3.806
+```
+
+The minimum detectable relative risk at 80% power given the observed weighted
+event counts.
+
+---
+
+## 6. The multi-analysis runner (`R/RunAnalyses.R`)
+
+### 6.1 Public interface
+
+`runCcwAnalyses()` — CDM-connected entry point.  Iterates over every
+`TargetComparatorOutcome × CcwAnalysis` combination, calls
+`getDbCloneCensorWeightData()` for each, then delegates to `.runForData()`.
+
+`runCcwAnalysesOnData()` — offline entry point for pre-loaded data.  Calls
+`.runForData()` directly for each combination.
+
+### 6.2 Composite analysis ID
+
+Each result row is uniquely identified by:
+
+```
+{analysisId}_t{indexCohortId}_o{outcomeId}
+```
+
+For example: `gp90_t101_o201`.  This ID is stamped on every CSV row and is
+used by `.alreadyRun()` to detect completed analyses for resume support.
+
+### 6.3 `.runForData()` — one TAO × analysis block
+
+For each outcome ID in `tao$outcomeIds`:
+
+1. Checks `.alreadyRun()` — reads only the `analysis_id` column of
+   `ccw_outcome_model.csv` for speed; returns `FALSE` if the file is absent.
+2. Saves `originalCohorts` before the loop and restores `data[["cohorts"]]`
+   at the start of each outcome iteration so every outcome sees the same
+   pre-pipeline state.
+3. Calls `.runOnePipeline()` inside a `tryCatch` so a single failure does not
+   abort the entire block.
+
+After all outcomes are processed, if at least five negative control outcome
+results are available, `.buildNcDf()` extracts their log-hazard-ratios and
+standard errors and passes them to `calibrateEstimates()`.
+
+Results are appended to CSV files via `exportToCsv()`.
+
+### 6.4 `.runOnePipeline()` — the linear pipeline
+
+```r
+createStudyPopulation(data, outcomeId, analysis$createStudyPopulationArgs)
+cloned   <- createClonesAndCensor(data, analysis$createClonesAndCensorArgs)
+pt       <- discretizePersonTime(cloned, intervalLength)
+weighted <- createCensoringWeights(pt, cloned, analysis$createCensoringWeightsArgs)
+model    <- fitOutcomeModel(weighted, fitOutcomeModelArgs = analysis$fitOutcomeModelArgs)
+
+smdBefore$weighted <- 0L
+smdAfter$weighted  <- 1L
+smd  <- rbind(smdBefore, smdAfter)
+km   <- computeKaplanMeier(weighted)
+mdrr <- computeMdrr(weighted)
+```
+
+---
+
+## 7. Adding a new pipeline step
+
+1. Add a new `create<Step>Args` R6 class in `R/SettingsObjects.R`, inheriting
+   from `AbstractSerializableSettings`.  Implement `initialize()` and
+   `validate()`.
+2. Add a `create<Step>Args()` constructor that calls `new()` then `$validate()`.
+3. Add the new field to `CcwAnalysis` and update `CcwAnalysis$toList()` and
+   `.reconstructCcwAnalysis()` to serialize and deserialize it.
+4. Add the new args field to `createCcwAnalysis()` and document it.
+5. Call the new step inside `.runOnePipeline()` in `R/RunAnalyses.R`.
+6. Write tests in `tests/testthat/` covering the new settings round-trip and
+   the new pipeline function.
+
+---
+
+## 8. Testing
+
+The test suite uses sample data exclusively — no CDM connection required.
+
+```r
+# Build a minimal TAO for testing
+make_tao <- function() {
+  createTargetComparatorOutcome(
+    indexCohortId      = 1L,
+    targetCohortId     = 2L,
+    comparatorCohortId = 2L,
+    outcomeIds         = c(10L, 11L, 12L)
+  )
+}
+
+# Test resume logic
+CloneCensorWeight:::.runForData(data, tao, analysis, tmp, "synpuf")
+CloneCensorWeight:::.runForData(data, tao, analysis, tmp, "synpuf")  # second run skips
+om <- readr::read_csv(file.path(tmp, "ccw_outcome_model.csv"))
+expect_equal(nrow(om1), nrow(om2))  # no duplication
+```
+
+Internal (non-exported) functions are accessible via `:::` for direct unit
+testing.
