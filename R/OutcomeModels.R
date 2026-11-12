@@ -37,8 +37,13 @@
 #'   clone's first day in the interval, and covariates intercept, target indicator, time basis, and (if
 #'   `armByTimeInteraction`) their interaction. Risks are `1 - prod(1 - h)` without competing events;
 #'   with competing death, the outcome model is fitted to rows with no death in the interval, a death
-#'   model to all rows, and the risk is that of Young et al. (2020). A horizon uses the intervals that
-#'   end on or before it.
+#'   model to all rows, and the risk is that of Young et al. (2020). The model is fitted to the
+#'   weighted numbers of rows with and without an event per strategy and interval, which have the
+#'   same likelihood as the rows. The risk at a horizon is read at the end of the last complete
+#'   interval on or before it, with a warning when the horizon does not end an interval; it is `NA`
+#'   (with a warning) when no interval is complete by the horizon or the horizon is beyond the
+#'   follow-up. Coefficients the data do not identify (for example the arm-by-time interaction of an
+#'   interval only one strategy enters) are `NA`, and so are the risks that need them.
 #' - `"km"`: weighted Kaplan-Meier (no competing events) or Aalen-Johansen (competing death) per
 #'   strategy.
 #'
@@ -113,7 +118,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     estimates = model$estimates,
     coefficients = model$coefficients,
     vcov = model$vcov,
-    counts = .getOutcomeCounts(weightedClones, data$segments),
+    counts = .getOutcomeCounts(weightedClones),
     metaData = list(
       strategies = metaData$strategies,
       outcomeId = metaData$outcomeId,
@@ -130,22 +135,31 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 }
 
 # Point estimates only, for the bootstrap driver (R/Bootstrap.R). `personCounts` (optional) is a data
-# frame with columns personSeqId and count: each person's segment weights are multiplied by their count
-# (frequency weights; persons not listed get count 0). The variance estimator in `fitOutcomeModelArgs`
-# is ignored. Returns a list with `estimates` (a tibble with estimand, estimate and logEstimate, in the
+# frame with columns personSeqId and count (non-negative integers): each person's segment weights are
+# multiplied by their count (frequency weights; persons not listed get count 0), with the same result
+# as copying each person `count` times. `outcomeData` (optional) is the output of
+# .getOutcomeData(weightedClones), so that a driver refitting the same segments many times collects them
+# only once (`weightedClones` is then not used). The variance estimator in `fitOutcomeModelArgs` is
+# ignored. Returns a list with `estimates` (a tibble with estimand, estimate and logEstimate, in the
 # same order as fitOutcomeModel()) and `coefficients`.
-.fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL) {
+.fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL, outcomeData = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
-  .assertCcwClones(weightedClones, weighted = TRUE, add = errorMessages)
+  if (is.null(outcomeData)) {
+    .assertCcwClones(weightedClones, weighted = TRUE, add = errorMessages)
+  }
   checkmate::assertR6(fitOutcomeModelArgs, "FitOutcomeModelArgs", add = errorMessages)
   checkmate::assertDataFrame(personCounts, null.ok = TRUE, add = errorMessages)
   if (!is.null(personCounts)) {
     checkmate::assertNames(colnames(personCounts), must.include = c("personSeqId", "count"), add = errorMessages)
-    checkmate::assertNumeric(personCounts$count, lower = 0, any.missing = FALSE, add = errorMessages)
+    checkmate::assertIntegerish(personCounts$count, lower = 0, any.missing = FALSE, add = errorMessages)
   }
+  checkmate::assertList(outcomeData, null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
 
-  data <- .getOutcomeData(weightedClones, personCounts)
+  data <- if (is.null(outcomeData)) .getOutcomeData(weightedClones) else outcomeData
+  if (!is.null(personCounts)) {
+    data <- .applyPersonCounts(data, personCounts)
+  }
   model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = FALSE)
   return(list(
     estimates = model$estimates[, c("estimand", "estimate", "logEstimate")],
@@ -156,8 +170,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # Data --------------------------------------------------------------------------------------------
 
 # Collects the segments (all of them, including zero-weight ones) and the settings the outcome models
-# need. With `personCounts`, weights are multiplied by each person's count.
-.getOutcomeData <- function(weightedClones, personCounts = NULL) {
+# need. Each segment has `count`, its person's frequency weight (see .applyPersonCounts()).
+.getOutcomeData <- function(weightedClones) {
   metaData <- attr(weightedClones, "metaData")
   riskStart <- weightedClones$clones |>
     dplyr::distinct(.data$riskStart) |>
@@ -169,15 +183,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     select("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "outcome", "competing") |>
     collect()
   segments <- as.data.frame(segments[order(segments$cloneRowId, segments$startTime), ])
-  if (!is.null(personCounts)) {
-    count <- personCounts$count[match(segments$personSeqId, personCounts$personSeqId)]
-    count[is.na(count)] <- 0
-    segments$weight <- segments$weight * count
-  }
-  positive <- segments$weight > 0
-  if (!all(1:2 %in% segments$strategyId[positive])) {
-    stop("Both strategies must have clones with positive weights")
-  }
+  segments$count <- rep(1, nrow(segments))
   segments$x <- as.integer(segments$strategyId == 1L)
   personSeqIds <- sort(unique(segments$personSeqId))
   segments$personIndex <- match(segments$personSeqId, personSeqIds)
@@ -188,6 +194,18 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     competingEvents = metaData$competingEvents,
     strategies = metaData$strategies
   ))
+}
+
+# Frequency weights: multiplies each segment's weight by its person's count (data frame personSeqId,
+# count; persons not listed get count 0) and keeps the count in `count`. The count is kept apart from
+# the weight because quantities computed from the rows without weights (the time basis of the pooled
+# logistic model) must count each person `count` times, as copies of the person would be counted.
+.applyPersonCounts <- function(data, personCounts) {
+  count <- personCounts$count[match(data$segments$personSeqId, personCounts$personSeqId)]
+  count[is.na(count)] <- 0
+  data$segments$count <- count
+  data$segments$weight <- data$segments$weight * count
+  return(data)
 }
 
 # Sorted distinct times of outcomes and competing events with positive weight.
@@ -202,34 +220,44 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
 }
 
-.getOutcomeCounts <- function(weightedClones, segments) {
-  clones <- weightedClones$clones |>
-    select("personSeqId", "strategyId", "outcomeCount", "endReason", "survivalTime") |>
-    collect()
-  counts <- clones |>
+# Per-strategy counts, aggregated in the database.
+.getOutcomeCounts <- function(weightedClones) {
+  counts <- weightedClones$clones |>
     dplyr::group_by(.data$strategyId) |>
     dplyr::summarise(
       clones = dplyr::n(),
       persons = dplyr::n_distinct(.data$personSeqId),
-      outcomes = sum(.data$outcomeCount),
-      competingEvents = sum(.data$endReason == "death"),
-      personDays = sum(as.numeric(.data$survivalTime)),
+      outcomes = sum(.data$outcomeCount, na.rm = TRUE),
+      competingEvents = sum(dplyr::if_else(.data$endReason == "death", 1, 0), na.rm = TRUE),
+      personDays = sum(as.double(.data$survivalTime), na.rm = TRUE),
       .groups = "drop"
-    )
-  weighted <- segments |>
+    ) |>
+    collect()
+  weighted <- weightedClones$segments |>
     dplyr::group_by(.data$strategyId) |>
     dplyr::summarise(
-      weightedPersonDays = sum(.data$weight * (.data$stopTime - .data$startTime)),
-      weightedOutcomes = sum(.data$weight * .data$outcome),
-      weightedCompetingEvents = sum(.data$weight * .data$competing),
+      weightedPersonDays = sum(.data$weight * (.data$stopTime - .data$startTime), na.rm = TRUE),
+      weightedOutcomes = sum(.data$weight * .data$outcome, na.rm = TRUE),
+      weightedCompetingEvents = sum(.data$weight * .data$competing, na.rm = TRUE),
       .groups = "drop"
-    )
-  return(dplyr::left_join(counts, weighted, by = "strategyId"))
+    ) |>
+    collect()
+  counts <- dplyr::left_join(counts, weighted, by = "strategyId")
+  counts <- counts[order(counts$strategyId), ]
+  integerColumns <- c("strategyId", "clones", "persons", "outcomes", "competingEvents")
+  counts[integerColumns] <- lapply(counts[integerColumns], as.integer)
+  numericColumns <- c("personDays", "weightedPersonDays", "weightedOutcomes", "weightedCompetingEvents")
+  counts[numericColumns] <- lapply(counts[numericColumns], as.numeric)
+  return(counts)
 }
 
 # Models ------------------------------------------------------------------------------------------
 
 .fitOutcomeModelCore <- function(data, fitOutcomeModelArgs, computeVariance) {
+  segments <- data$segments
+  if (!all(1:2 %in% segments$strategyId[segments$weight > 0])) {
+    stop("Both strategies must have clones with positive weights")
+  }
   horizons <- fitOutcomeModelArgs$horizons
   .checkHorizons(horizons, data$riskStart)
   competing <- data$competingEvents == "death"
@@ -416,8 +444,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # One row per clone and interval of `intervalLength` days the clone enters (interval k covers t in
 # (k L, (k + 1) L], counted from riskStart), with the weight that applies on the clone's first day in
-# the interval (t = k L + 1), and indicators of the outcome and of a competing event in the interval.
-# `segments` must hold all segments of each clone, sorted by cloneRowId and startTime.
+# the interval (t = k L + 1), the person's frequency weight `count`, and indicators of the outcome and
+# of a competing event in the interval. `segments` must hold all segments of each clone, sorted by
+# cloneRowId and startTime.
 .expandToIntervals <- function(segments, intervalLength) {
   cloneIndex <- match(segments$cloneRowId, unique(segments$cloneRowId))
   last <- !duplicated(cloneIndex, fromLast = TRUE)
@@ -433,20 +462,25 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   segment <- findInterval(rowKey, segmentKey, left.open = TRUE)
   isLast <- interval == nIntervals[rowClone] - 1
   return(data.frame(
-    personSeqId = lastSegments$personSeqId[rowClone],
     personIndex = lastSegments$personIndex[rowClone],
     x = lastSegments$x[rowClone],
     interval = interval,
     weight = segments$weight[segment],
+    count = lastSegments$count[rowClone],
     y = as.integer(isLast & lastSegments$outcome[rowClone] == 1),
     death = as.integer(isLast & lastSegments$competing[rowClone] == 1)
   ))
 }
 
-# Time-basis columns (Phase1Contracts section 4) of the 0-based interval index, with a function to
-# compute the same columns for new interval indices. All-zero columns are dropped.
-.timeBasisColumns <- function(timeBasis, interval) {
-  maxInterval <- max(interval)
+# Time-basis columns (Phase1Contracts section 4) of the 0-based interval index: `build(k)` computes them
+# for the interval indices k, and `names` names them. Columns that are zero at every interval in
+# `interval` are dropped. The natural-spline knots (quantiles) and the orthogonal polynomial (centring
+# and scaling) depend on the distribution of the rows' interval indices `interval`; each row counts
+# `multiplicity` times (its person's frequency weight), so frequency weights give the basis of the data
+# with persons copied.
+.timeBasisColumns <- function(timeBasis, interval, multiplicity = rep(1, length(interval))) {
+  intervals <- sort(unique(interval))
+  maxInterval <- max(intervals)
   if (timeBasis$type == "indicator") {
     build <- function(k) {
       columns <- matrix(0, length(k), maxInterval)
@@ -458,19 +492,19 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   } else if (timeBasis$type == "linear") {
     build <- function(k) matrix(as.numeric(k), ncol = 1)
     names <- "time"
-  } else if (timeBasis$type == "polynomial") {
-    basis <- stats::poly(interval, degree = timeBasis$degree, raw = timeBasis$raw)
-    build <- function(k) unclass(stats::predict(basis, k))[, , drop = FALSE]
-    names <- sprintf("time%d", seq_len(timeBasis$degree))
   } else {
-    basis <- splines::ns(interval, df = timeBasis$df)
+    sample <- rep(intervals, .sumBy(multiplicity, match(interval, intervals), length(intervals)))
+    if (timeBasis$type == "polynomial") {
+      basis <- stats::poly(sample, degree = timeBasis$degree, raw = timeBasis$raw)
+      names <- sprintf("time%d", seq_len(timeBasis$degree))
+    } else {
+      basis <- splines::ns(sample, df = timeBasis$df)
+      names <- sprintf("time%d", seq_len(ncol(basis)))
+    }
     build <- function(k) unclass(stats::predict(basis, k))[, , drop = FALSE]
-    names <- sprintf("time%d", seq_len(ncol(basis)))
   }
-  columns <- build(interval)
-  keep <- colSums(columns != 0) > 0
+  keep <- colSums(build(intervals) != 0) > 0
   return(list(
-    columns = columns[, keep, drop = FALSE],
     build = function(k) build(k)[, keep, drop = FALSE],
     names = names[keep]
   ))
@@ -488,22 +522,53 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return(design)
 }
 
-# Fits a weighted logistic regression with Cyclops lr on a dense design whose first column is the
-# intercept. Returns the coefficients, or NULL (with a warning) if the fit fails.
-.fitCyclopsLogistic <- function(design, y, weights, prior, control, label) {
+# Columns of `design` identified by the cells with rows (`observed`): a maximal set of linearly
+# independent columns, keeping earlier columns first (intercept, target, time basis, interaction), as
+# glm does. A cell's linear predictor is identified (`estimable`) when its design row is a linear
+# combination of the rows of the observed cells.
+.identifiedColumns <- function(design, observed) {
+  observedDesign <- design[observed, , drop = FALSE]
+  decomposition <- qr(observedDesign)
+  kept <- sort(decomposition$pivot[seq_len(decomposition$rank)])
+  estimable <- rep(TRUE, nrow(design))
+  if (length(kept) < ncol(design)) {
+    residual <- qr.resid(qr(t(observedDesign)), t(design))
+    estimable <- observed | apply(abs(residual), 2, max) <= 1e-7 * apply(abs(design), 1, max)
+  }
+  return(list(kept = kept, estimable = estimable))
+}
+
+# Fits a weighted pooled logistic model (Cyclops lr) with response `y` to the clone x interval `rows`.
+# The design depends on a row only through its cell (strategy and interval; `design` has one row per
+# cell), so the model is fitted to the weighted numbers of rows with and without an event in each cell,
+# which have the same likelihood as the rows (plan section 4.3). Columns that the cells with rows do not
+# identify are dropped and get coefficient NA (see .identifiedColumns()). Unless `variance` is "none",
+# also returns the bread (inverse weighted information) and the score residuals summed by person and
+# cell. Returns NULL (with a warning) if the model cannot be fitted.
+.fitPooledModel <- function(rows, y, design, prior, control, label, variance) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s pooled logistic model", label, label))
     return(NULL)
   }
-  covariateColumns <- design[, -1, drop = FALSE]
+  nCells <- nrow(design)
+  events <- .sumBy(rows$weight * y, rows$cell, nCells)
+  nonEvents <- .sumBy(rows$weight * (1 - y), rows$cell, nCells)
+  identification <- .identifiedColumns(design, events + nonEvents > 0)
+  kept <- identification$kept
+
+  cells <- which(events + nonEvents > 0)
+  outcomes <- data.frame(cell = c(cells, cells), y = rep(c(1, 0), each = length(cells)), weights = c(events[cells], nonEvents[cells]))
+  outcomes <- outcomes[outcomes$weights > 0, ]
+  outcomes$rowId <- seq_len(nrow(outcomes))
+  # kept[1] is the intercept:
+  covariateColumns <- design[outcomes$cell, kept[-1], drop = FALSE]
   nonZero <- which(covariateColumns != 0, arr.ind = TRUE)
   covariates <- data.frame(
     rowId = nonZero[, 1],
-    covariateId = nonZero[, 2] + 1,
+    covariateId = kept[-1][nonZero[, 2]],
     covariateValue = covariateColumns[nonZero]
   )
-  outcomes <- data.frame(rowId = seq_len(nrow(design)), y = as.numeric(y), weights = weights)
-  cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "lr", addIntercept = TRUE, quiet = TRUE)
+  cyclopsData <- Cyclops::convertToCyclopsData(outcomes[, c("rowId", "y", "weights")], covariates, modelType = "lr", addIntercept = TRUE, quiet = TRUE)
   fit <- tryCatch(
     Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
     error = function(e) e$message
@@ -513,36 +578,78 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     return(NULL)
   }
   fitted <- stats::coef(fit)
-  coefficients <- numeric(ncol(design))
+  coefficients <- stats::setNames(rep(NA_real_, ncol(design)), colnames(design))
   coefficients[1] <- fitted[["(Intercept)"]]
   ids <- setdiff(names(fitted), "(Intercept)")
   coefficients[as.integer(ids)] <- fitted[ids]
-  names(coefficients) <- colnames(design)
-  return(coefficients)
+  if (length(kept) < ncol(design)) {
+    warning(sprintf(
+      "Coefficient(s) %s of the %s pooled logistic model are not identified by the data and are NA",
+      paste(colnames(design)[-kept], collapse = ", "), label
+    ))
+  }
+  result <- list(coefficients = coefficients, kept = kept, estimable = identification$estimable, design = design[, kept, drop = FALSE])
+  if (variance != "none") {
+    probability <- stats::plogis(as.vector(result$design %*% coefficients[kept]))
+    information <- crossprod(result$design, result$design * ((events + nonEvents) * probability * (1 - probability)))
+    result$bread <- .invertInformation(information, sprintf("%s pooled logistic", label))
+    result$residuals <- .sumByPersonAndCell(rows$weight * (y - probability[rows$cell]), rows$personIndex, rows$cell, nCells)
+  }
+  return(result)
 }
 
-# Risks at each horizon (number of complete intervals `horizonIntervals`), ordered (target, comparator)
-# per horizon, as a function of all coefficients `theta` (outcome model, then death model).
-.pooledRisks <- function(theta, layout, horizonIntervals) {
-  maxIntervals <- max(horizonIntervals)
-  risks <- matrix(0, 2, length(horizonIntervals))
-  if (maxIntervals == 0) {
-    return(as.vector(risks))
+# Number of complete intervals of `intervalLength` days by each horizon, read at t_h = h - riskStart +
+# 1. NA, with a warning, when there is none or when it exceeds the follow-up (`nIntervals`). Warns when
+# t_h does not end an interval: the risk is then read at the end of the last complete interval.
+.pooledHorizonIntervals <- function(horizons, riskStart, intervalLength, nIntervals) {
+  tHorizons <- horizons - riskStart + 1
+  intervals <- floor(tHorizons / intervalLength)
+  tooEarly <- intervals == 0
+  beyond <- intervals > nIntervals
+  offGrid <- !tooEarly & !beyond & tHorizons %% intervalLength != 0
+  if (any(tooEarly)) {
+    warning(sprintf(
+      "No complete interval of %d days by horizon(s) %s: their pooled logistic risks are NA",
+      intervalLength, paste(horizons[tooEarly], collapse = ", ")
+    ))
   }
-  k <- seq_len(maxIntervals) - 1
-  basis <- layout$basis$build(k)
+  if (any(beyond)) {
+    warning(sprintf("No follow-up to estimate pooled logistic risks at horizon(s) %s", paste(horizons[beyond], collapse = ", ")))
+  }
+  if (any(offGrid)) {
+    warning(sprintf(
+      "Horizon(s) %s do not end an interval of %d days: their pooled logistic risks are read at the end of the last complete interval (day(s) %s)",
+      paste(horizons[offGrid], collapse = ", "), intervalLength,
+      paste(intervals[offGrid] * intervalLength + riskStart - 1, collapse = ", ")
+    ))
+  }
+  intervals[tooEarly | beyond] <- NA
+  return(intervals)
+}
+
+# Risks at each horizon (`horizonIntervals` complete intervals, or NA), ordered (target, comparator)
+# per horizon, as a function of `theta`, the identified coefficients of the outcome model and then of
+# the death model (`layout$index`). A risk is NA when it needs the hazard of a cell that is not
+# identified.
+.pooledRisks <- function(theta, layout, horizonIntervals) {
+  hazard <- function(i) {
+    result <- stats::plogis(as.vector(layout$designs[[i]] %*% theta[layout$index[[i]]]))
+    result[!layout$estimable[[i]]] <- NA
+    return(result)
+  }
+  nIntervals <- nrow(layout$designs[[1]]) / 2
+  hazardY <- hazard(1)
+  hazardD <- if (length(layout$designs) > 1) hazard(2) else NULL
+  risks <- matrix(NA_real_, 2, length(horizonIntervals))
   for (strategyId in 1:2) {
-    design <- .pooledDesign(rep(as.integer(strategyId == 1), length(k)), basis, layout$basis$names, layout$interaction)
-    hazardY <- stats::plogis(as.vector(design %*% theta[layout$outcome]))
-    if (is.null(layout$death)) {
-      hazardD <- 0
-      cif <- 1 - cumprod(1 - hazardY)
+    cells <- (strategyId == 1) * nIntervals + seq_len(nIntervals)
+    if (is.null(hazardD)) {
+      cif <- 1 - cumprod(1 - hazardY[cells])
     } else {
-      hazardD <- stats::plogis(as.vector(design %*% theta[layout$death]))
-      survival <- cumprod((1 - hazardY) * (1 - hazardD))
-      cif <- cumsum(hazardY * (1 - hazardD) * c(1, survival[-maxIntervals]))
+      survival <- cumprod((1 - hazardY[cells]) * (1 - hazardD[cells]))
+      cif <- cumsum(hazardY[cells] * (1 - hazardD[cells]) * c(1, survival[-nIntervals]))
     }
-    risks[strategyId, horizonIntervals > 0] <- cif[horizonIntervals[horizonIntervals > 0]]
+    risks[strategyId, ] <- cif[horizonIntervals]
   }
   return(as.vector(risks))
 }
@@ -551,66 +658,73 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   timeBasis <- fitOutcomeModelArgs$timeBasis
   intervalLength <- timeBasis$intervalLength
   horizons <- fitOutcomeModelArgs$horizons
-  rows <- .expandToIntervals(data$segments, intervalLength)
-  rows <- rows[rows$weight > 0, ]
-  basis <- .timeBasisColumns(timeBasis, rows$interval)
-  design <- .pooledDesign(rows$x, basis$columns, basis$names, fitOutcomeModelArgs$armByTimeInteraction)
-  nPersons <- length(data$personSeqIds)
   prior <- fitOutcomeModelArgs$prior
   control <- fitOutcomeModelArgs$control
+  if (isTRUE(prior$useCrossValidation)) {
+    stop("Cross-validation is not supported for the pooled logistic outcome model, which is fitted to rows aggregated by strategy and interval. Use a prior with a fixed variance")
+  }
+  rows <- .expandToIntervals(data$segments, intervalLength)
+  rows <- rows[rows$weight > 0, ]
+  basis <- .timeBasisColumns(timeBasis, rows$interval, rows$count)
+  # The design depends on a row only through its cell: the comparator's intervals 0, ..., nIntervals - 1
+  # are cells 1, ..., nIntervals, and the target's intervals the next nIntervals cells.
+  nIntervals <- max(rows$interval) + 1
+  cellInterval <- rep(seq_len(nIntervals) - 1, 2)
+  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(cellInterval), basis$names, fitOutcomeModelArgs$armByTimeInteraction)
+  rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))
-  outcomeCoefficients <- .fitCyclopsLogistic(design[outcomeRows, , drop = FALSE], rows$y[outcomeRows], rows$weight[outcomeRows], prior, control, "outcome")
-  if (is.null(outcomeCoefficients)) {
+  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance))
+  if (is.null(models[[1]])) {
     return(.naEstimates("or", horizons, coefficientNames = colnames(design)))
   }
-  theta <- outcomeCoefficients
-  layout <- list(basis = basis, interaction = fitOutcomeModelArgs$armByTimeInteraction, outcome = seq_along(outcomeCoefficients), death = NULL)
-  scores <- list()
-  if (variance != "none") {
-    scores[[1]] <- .logisticScores(design[outcomeRows, , drop = FALSE], rows$y[outcomeRows], rows$weight[outcomeRows], outcomeCoefficients, rows$personIndex[outcomeRows], nPersons)
-  }
   if (competing && any(rows$death == 1)) {
-    deathCoefficients <- .fitCyclopsLogistic(design, rows$death, rows$weight, prior, control, "death")
-    if (is.null(deathCoefficients)) {
+    deathModel <- .fitPooledModel(rows, rows$death, design, prior, control, "death", variance)
+    if (is.null(deathModel)) {
       return(.naEstimates("or", horizons, coefficientNames = c(colnames(design), paste0("death:", colnames(design)))))
     }
-    layout$death <- length(theta) + seq_along(deathCoefficients)
-    names(deathCoefficients) <- paste0("death:", names(deathCoefficients))
-    theta <- c(theta, deathCoefficients)
-    if (variance != "none") {
-      scores[[2]] <- .logisticScores(design, rows$death, rows$weight, deathCoefficients, rows$personIndex, nPersons)
-    }
+    names(deathModel$coefficients) <- paste0("death:", names(deathModel$coefficients))
+    models[[2]] <- deathModel
   }
+  coefficients <- unlist(lapply(models, function(model) model$coefficients))
+  # The identified coefficients, which the variance and the risks are functions of:
+  theta <- unlist(lapply(models, function(model) model$coefficients[model$kept]))
+  sizes <- vapply(models, function(model) length(model$kept), integer(1))
+  layout <- list(
+    designs = lapply(models, function(model) model$design),
+    estimable = lapply(models, function(model) model$estimable),
+    index = split(seq_along(theta), rep(seq_along(models), sizes))
+  )
+
+  thetaVcov <- NULL
   vcov <- NULL
-  if (variance == "robust") {
-    vcov <- .jointSandwich(scores)
-  } else if (variance == "modelBased") {
-    vcov <- .blockDiagonal(lapply(scores, function(fit) fit$bread))
-  }
-  if (!is.null(vcov)) {
-    dimnames(vcov) <- list(names(theta), names(theta))
+  if (variance != "none") {
+    if (variance == "robust") {
+      thetaVcov <- .jointSandwich(models, length(data$personSeqIds))
+    } else {
+      thetaVcov <- .blockDiagonal(lapply(models, function(model) model$bread))
+    }
+    vcov <- matrix(NA_real_, length(coefficients), length(coefficients), dimnames = list(names(coefficients), names(coefficients)))
+    vcov[names(theta), names(theta)] <- thetaVcov
   }
 
-  estimates <- list(.ratioRow("or", theta[["target"]], if (is.null(vcov)) NA_real_ else sqrt(vcov["target", "target"])))
-  # A horizon uses the complete intervals that end on or before it.
-  horizonIntervals <- floor((horizons - data$riskStart + 1) / intervalLength)
-  available <- horizonIntervals <= max(rows$interval) + 1
-  if (!all(available)) {
-    warning(sprintf("No follow-up to estimate pooled logistic risks at horizon(s) %s", paste(horizons[!available], collapse = ", ")))
-  }
-  riskFunction <- function(theta) .pooledRisks(theta, layout, pmin(horizonIntervals, max(rows$interval) + 1))
+  estimates <- list(.ratioRow("or", coefficients[["target"]], if (is.null(vcov)) NA_real_ else sqrt(vcov["target", "target"])))
+  horizonIntervals <- .pooledHorizonIntervals(horizons, data$riskStart, intervalLength, nIntervals)
+  riskFunction <- function(theta) .pooledRisks(theta, layout, horizonIntervals)
   risks <- matrix(riskFunction(theta), nrow = 2)
-  jacobian <- if (is.null(vcov)) NULL else .numericalJacobian(riskFunction, theta)
-  for (i in seq_along(horizons)) {
-    if (!available[i]) {
-      estimates[[length(estimates) + 1]] <- .estimateRow(sprintf(c("risk_target_%s", "risk_comparator_%s", "rd_%s", "rr_%s"), horizons[i]), NA_real_)
-      next
-    }
-    gradients <- if (is.null(jacobian)) NULL else jacobian[2 * i - c(1, 0), , drop = FALSE]
-    estimates[[length(estimates) + 1]] <- .deltaContrastRows(horizons[i], risks[, i], gradients, vcov, competing)
+  notIdentified <- is.na(risks) & rep(!is.na(horizonIntervals), each = 2)
+  for (strategyId in which(rowSums(notIdentified) > 0)) {
+    warning(sprintf(
+      "The pooled logistic hazards of the %s strategy are not identified in some intervals: its risks at horizon(s) %s are NA",
+      c("target", "comparator")[strategyId], paste(horizons[notIdentified[strategyId, ]], collapse = ", ")
+    ))
   }
-  return(list(estimates = dplyr::bind_rows(estimates), coefficients = theta, vcov = vcov))
+  jacobian <- if (is.null(thetaVcov)) NULL else .numericalJacobian(riskFunction, theta)
+  for (i in seq_along(horizons)) {
+    gradients <- if (is.null(jacobian)) NULL else jacobian[2 * i - c(1, 0), , drop = FALSE]
+    estimates[[length(estimates) + 1]] <- .deltaContrastRows(horizons[i], risks[, i], gradients, thetaVcov, competing)
+  }
+  return(list(estimates = dplyr::bind_rows(estimates), coefficients = coefficients, vcov = vcov))
 }
 
 # Methods ------------------------------------------------------------------------------------------

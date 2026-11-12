@@ -66,7 +66,7 @@ test_that("Pooled logistic robust covariance matches geepack::geeglm (independen
   intervalLength <- 2
   model <- fitM4(
     fixture,
-    modelType = "logistic", horizons = 10, armByTimeInteraction = TRUE,
+    modelType = "logistic", horizons = 9, armByTimeInteraction = TRUE,
     timeBasis = createTimeBasis("linear", intervalLength = intervalLength)
   )
   rows <- expandM4Rows(fixture$segments, intervalLength)

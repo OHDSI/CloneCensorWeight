@@ -338,7 +338,7 @@ test_that("Pooled logistic MSM matches glm and vcovCL (HC0, clustered on person)
     list(type = "indicator", intervalLength = 5, interaction = FALSE, riskStart = 0, maxDays = 14, horizons = c(4, 9, 14)),
     list(type = "indicator", intervalLength = 7, interaction = TRUE, riskStart = 1, maxDays = 20, horizons = c(6, 13, 20)),
     list(type = "linear", intervalLength = 2, interaction = TRUE, riskStart = 0),
-    list(type = "polynomial", intervalLength = 3, interaction = FALSE, riskStart = 1, raw = TRUE),
+    list(type = "polynomial", intervalLength = 3, interaction = FALSE, riskStart = 1, raw = TRUE, horizons = c(5, 11, 20)),
     list(type = "polynomial", intervalLength = 1, interaction = TRUE, riskStart = 0, raw = FALSE),
     list(type = "naturalSpline", intervalLength = 2, interaction = FALSE, riskStart = 1)
   )
@@ -528,6 +528,186 @@ test_that("Pooled logistic risks beyond the follow-up are NA with a warning", {
   expect_true(is.na(getM4Estimate(model, "risk_target_40")))
 })
 
+test_that("Pooled logistic risks are read at the end of the last complete interval by the horizon", {
+  for (riskStart in 0:1) {
+    fixture <- createM4Fixture(n = 200, riskStart = riskStart, competingEvents = "none", seed = 3, maxDays = 40, outcomeRate = 0.7)
+    # t_h = 5 (no complete interval), 10 and 15 (one), 20 and 29 (two):
+    horizons <- riskStart - 1 + c(5, 10, 15, 20, 29)
+    warnings <- capture_warnings(
+      model <- fitM4(fixture, modelType = "logistic", horizons = horizons, timeBasis = createTimeBasis("linear", intervalLength = 10))
+    )
+    expect_match(warnings, sprintf("No complete interval of 10 days by horizon\\(s\\) %d:", horizons[1]), all = FALSE)
+    expect_match(warnings, sprintf("Horizon\\(s\\) %d, %d do not end .* \\(day\\(s\\) %d, %d\\)", horizons[3], horizons[5], horizons[2], horizons[4]), all = FALSE)
+    expect_length(warnings, 2)
+    estimates <- model$estimates
+    for (estimand in sprintf(c("risk_target_%d", "risk_comparator_%d", "rd_%d", "rr_%d"), horizons[1])) {
+      expect_true(all(is.na(unlist(estimates[estimates$estimand == estimand, -1]))))
+    }
+    for (pair in list(horizons[2:3], horizons[4:5])) {
+      for (format in c("risk_target_%d", "risk_comparator_%d", "rd_%d", "rr_%d")) {
+        early <- estimates[estimates$estimand == sprintf(format, pair[1]), -1]
+        expect_false(is.na(early$estimate))
+        expect_equal(early, estimates[estimates$estimand == sprintf(format, pair[2]), -1])
+      }
+    }
+    expect_false(isTRUE(all.equal(getM4Estimate(model, sprintf("risk_target_%d", horizons[2])), getM4Estimate(model, sprintf("risk_target_%d", horizons[4])))))
+  }
+})
+
+test_that("Pooled logistic hazards of intervals one strategy never enters are not identified with arm x time", {
+  skip_if_not_installed("sandwich")
+  # Target clones end by t = 10 and comparator clones run to t = 15: with an indicator basis and the
+  # interaction, the target's hazard in interval 2 (t in (10, 15]) is not identified.
+  fixture <- createM4Fixture(n = 200, riskStart = 0, competingEvents = "none", seed = 3, maxDays = 14, outcomeRate = 0.7)
+  drop <- fixture$clones$cloneRowId[fixture$clones$strategyId == 1 & fixture$clones$survivalTime > 10]
+  fixture$segments <- fixture$segments[!fixture$segments$cloneRowId %in% drop, ]
+  fixture$clones <- fixture$clones[!fixture$clones$cloneRowId %in% drop, ]
+  oldIds <- fixture$clones$cloneRowId
+  fixture$clones$cloneRowId <- seq_along(oldIds)
+  fixture$segments$cloneRowId <- match(fixture$segments$cloneRowId, oldIds)
+  fixture$segments$segmentId <- seq_len(nrow(fixture$segments))
+  fixture$personWeights <- m4PersonWeights(fixture$segments)
+  expect_equal(max(fixture$segments$stopTime[fixture$segments$strategyId == 1]), 10)
+  expect_equal(max(fixture$segments$stopTime[fixture$segments$strategyId == 2]), 15)
+  horizons <- c(4, 9, 14)
+  timeBasis <- createTimeBasis("indicator", intervalLength = 5)
+
+  warnings <- capture_warnings(
+    model <- fitM4(fixture, modelType = "logistic", horizons = horizons, timeBasis = timeBasis, armByTimeInteraction = TRUE)
+  )
+  expect_match(warnings, "target:time2 of the outcome pooled logistic model are not identified", all = FALSE)
+  expect_match(warnings, "target strategy are not identified in some intervals: its risks at horizon\\(s\\) 14 are NA", all = FALSE)
+  expect_true(is.na(model$coefficients[["target:time2"]]))
+  expect_true(all(is.na(model$vcov["target:time2", ])))
+  for (estimand in c("risk_target_14", "rd_14", "rr_14")) {
+    expect_true(is.na(getM4Estimate(model, estimand)))
+  }
+  expect_true(is.na(getM4Estimate(model, "risk_target_14", "se")))
+
+  # The identified coefficients and their robust covariance equal glm and vcovCL without the column,
+  # and the identified risks follow from them.
+  rows <- expandM4Rows(fixture$segments, 5)
+  design <- cbind(1, rows$x, rows$k == 1, rows$k == 2, rows$x * (rows$k == 1))
+  referenceFit <- glm(rows$y ~ design - 1, family = quasibinomial(), weights = rows$weight, control = glm.control(epsilon = 1e-14, maxit = 100))
+  vcovCl <- sandwich::vcovCL(referenceFit, cluster = rows$personSeqId, type = "HC0", cadjust = FALSE)
+  identified <- c("(Intercept)", "target", "time1", "time2", "target:time1")
+  expect_equal(unname(model$coefficients[identified]), unname(coef(referenceFit)), tolerance = 1e-7)
+  expect_equal(unname(model$vcov[identified, identified]), unname(vcovCl), tolerance = 1e-6)
+  beta <- coef(referenceFit)
+  hazardTarget <- plogis(beta[1] + beta[2] + c(0, beta[3] + beta[5]))
+  hazardComparator <- plogis(beta[1] + c(0, beta[3], beta[4]))
+  expect_equal(getM4Estimate(model, "risk_target_9"), 1 - prod(1 - hazardTarget), tolerance = 1e-7)
+  expect_equal(getM4Estimate(model, "risk_comparator_14"), 1 - prod(1 - hazardComparator), tolerance = 1e-7)
+  expect_false(is.na(getM4Estimate(model, "risk_comparator_14", "se")))
+  expect_false(is.na(getM4Estimate(model, "rd_9", "se")))
+
+  # The point estimates for the bootstrap driver are the same:
+  weightedClones <- createM4WeightedClones(fixture)
+  on.exit(close(weightedClones))
+  args <- createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons, timeBasis = timeBasis, armByTimeInteraction = TRUE, control = m4Control)
+  point <- suppressWarnings(.fitOutcomeModelPoint(weightedClones, args))
+  expect_equal(point$estimates, model$estimates[, c("estimand", "estimate", "logEstimate")])
+
+  # Without the interaction, the proportional-odds model identifies every hazard:
+  expect_silent(withoutInteraction <- fitM4(fixture, modelType = "logistic", horizons = horizons, timeBasis = timeBasis))
+  expect_false(anyNA(withoutInteraction$estimates$estimate))
+})
+
+test_that("A singular information matrix gives NA variance with a warning", {
+  expect_warning(inverse <- .invertInformation(matrix(1, 2, 2), "test"), "singular")
+  expect_equal(dim(inverse), c(2, 2))
+  expect_true(all(is.na(inverse)))
+  expect_equal(.invertInformation(diag(c(2, 4)), "test"), diag(c(0.5, 0.25)))
+})
+
+test_that("Pooled logistic model-based variance equals the inverse weighted information of glm", {
+  for (riskStart in 0:1) {
+    for (competingEvents in c("none", "death")) {
+      fixture <- createM4Fixture(n = 200, riskStart = riskStart, competingEvents = competingEvents, seed = 5)
+      intervalLength <- 2
+      horizons <- riskStart + c(5, 13)
+      model <- fitM4(
+        fixture,
+        modelType = "logistic", horizons = horizons, varianceEstimator = "modelBased", armByTimeInteraction = TRUE,
+        timeBasis = createTimeBasis("linear", intervalLength = intervalLength)
+      )
+      rows <- expandM4Rows(fixture$segments, intervalLength)
+      design <- cbind(1, rows$x, rows$k, rows$x * rows$k)
+      control <- glm.control(epsilon = 1e-14, maxit = 100)
+      outcomeRows <- if (competingEvents == "death") rows$death == 0 else rep(TRUE, nrow(rows))
+      outcomeFit <- glm(rows$y[outcomeRows] ~ design[outcomeRows, ] - 1, family = quasibinomial(), weights = rows$weight[outcomeRows], control = control)
+      # cov.unscaled is the binomial covariance (dispersion 1): the inverse weighted information.
+      expected <- summary(outcomeFit)$cov.unscaled
+      coefficients <- coef(outcomeFit)
+      if (competingEvents == "death") {
+        deathFit <- glm(rows$death ~ design - 1, family = quasibinomial(), weights = rows$weight, control = control)
+        expected <- rbind(cbind(expected, 0 * expected), cbind(0 * expected, summary(deathFit)$cov.unscaled))
+        coefficients <- c(coefficients, coef(deathFit))
+      }
+      expect_equal(unname(model$coefficients), unname(coefficients), tolerance = 1e-7)
+      expect_equal(unname(model$vcov), unname(expected), tolerance = 1e-6)
+      expect_equal(getM4Estimate(model, "or", "seLogEstimate"), sqrt(expected[2, 2]), tolerance = 1e-6)
+
+      # Delta-method risk SEs with that covariance (reference Jacobian by Richardson extrapolation):
+      riskFunction <- function(theta) {
+        result <- c()
+        for (h in horizons) {
+          k <- seq_len((h - riskStart + 1) / intervalLength) - 1
+          for (x in 1:0) {
+            newDesign <- cbind(1, x, k, x * k)
+            hazardY <- plogis(as.vector(newDesign %*% theta[1:4]))
+            hazardD <- if (competingEvents == "death") plogis(as.vector(newDesign %*% theta[5:8])) else 0 * hazardY
+            result <- c(result, utils::tail(youngCif(hazardY, hazardD), 1))
+          }
+        }
+        return(result)
+      }
+      jacobian <- sapply(seq_along(coefficients), function(j) {
+        difference <- function(step) {
+          up <- coefficients
+          down <- coefficients
+          up[j] <- up[j] + step
+          down[j] <- down[j] - step
+          return((riskFunction(up) - riskFunction(down)) / (2 * step))
+        }
+        return((4 * difference(1e-4) - difference(2e-4)) / 3)
+      })
+      risks <- riskFunction(coefficients)
+      for (i in seq_along(horizons)) {
+        h <- horizons[i]
+        gradientTarget <- jacobian[2 * i - 1, ]
+        gradientComparator <- jacobian[2 * i, ]
+        expect_equal(getM4Estimate(model, sprintf("risk_target_%s", h)), risks[2 * i - 1], tolerance = 1e-7)
+        expect_equal(getM4Estimate(model, sprintf("risk_target_%s", h), "se"), sqrt(as.numeric(t(gradientTarget) %*% expected %*% gradientTarget)), tolerance = 1e-5)
+        expect_equal(getM4Estimate(model, sprintf("risk_comparator_%s", h), "se"), sqrt(as.numeric(t(gradientComparator) %*% expected %*% gradientComparator)), tolerance = 1e-5)
+        gradientRd <- gradientTarget - gradientComparator
+        expect_equal(getM4Estimate(model, sprintf("rd_%s", h), "se"), sqrt(as.numeric(t(gradientRd) %*% expected %*% gradientRd)), tolerance = 1e-5)
+      }
+    }
+  }
+})
+
+test_that("The pooled logistic sandwich does not depend on the person block size", {
+  fixture <- createM4Fixture(n = 200, riskStart = 1, competingEvents = "death", seed = 5)
+  weightedClones <- createM4WeightedClones(fixture)
+  on.exit(close(weightedClones))
+  data <- .getOutcomeData(weightedClones)
+  rows <- .expandToIntervals(data$segments, 2)
+  basis <- .timeBasisColumns(createTimeBasis("polynomial", intervalLength = 2, degree = 2), rows$interval)
+  nIntervals <- max(rows$interval) + 1
+  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(rep(seq_len(nIntervals) - 1, 2)), basis$names, TRUE)
+  rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
+  noDeath <- rows$death == 0
+  fits <- list(
+    .fitPooledModel(rows[noDeath, ], rows$y[noDeath], design, Cyclops::createPrior("none"), m4Control, "outcome", "robust"),
+    .fitPooledModel(rows, rows$death, design, Cyclops::createPrior("none"), m4Control, "death", "robust")
+  )
+  nPersons <- length(data$personSeqIds)
+  oneBlock <- .jointSandwich(fits, nPersons)
+  expect_equal(.jointSandwich(fits, nPersons, maxEntries = 100), oneBlock, tolerance = 1e-12)
+  expect_equal(.jointSandwich(fits, nPersons, maxEntries = 1), oneBlock, tolerance = 1e-12)
+})
+
 # Properties ------------------------------------------------------------------------------------------
 
 test_that("Robust SEs are unchanged when all weights are multiplied by a constant", {
@@ -558,8 +738,8 @@ test_that("Horizons are read at t = horizon - riskStart + 1", {
   fixture1$clones$endDay <- fixture1$clones$endDay + 1L
   for (modelType in c("cox", "logistic", "km")) {
     timeBasis <- createTimeBasis("polynomial", intervalLength = 2)
-    model0 <- fitM4(fixture0, modelType = modelType, horizons = c(3, 9, 14), timeBasis = timeBasis)
-    model1 <- fitM4(fixture1, modelType = modelType, horizons = c(4, 10, 15), timeBasis = timeBasis)
+    model0 <- fitM4(fixture0, modelType = modelType, horizons = c(3, 9, 13), timeBasis = timeBasis)
+    model1 <- fitM4(fixture1, modelType = modelType, horizons = c(4, 10, 14), timeBasis = timeBasis)
     expect_equal(model1$estimates$estimate, model0$estimates$estimate, tolerance = 1e-10)
     expect_equal(model1$estimates$se, model0$estimates$se, tolerance = 1e-10)
     expect_equal(model1$metaData$riskStart, 1L)
@@ -587,13 +767,14 @@ test_that("Splitting a segment without changing its weight leaves all estimates 
   split$segments <- segments
   for (modelType in c("cox", "logistic", "km")) {
     timeBasis <- createTimeBasis("naturalSpline", intervalLength = 2, df = 3)
-    model <- fitM4(fixture, modelType = modelType, horizons = c(5, 12), timeBasis = timeBasis)
-    splitModel <- fitM4(split, modelType = modelType, horizons = c(5, 12), timeBasis = timeBasis)
+    model <- fitM4(fixture, modelType = modelType, horizons = c(5, 11), timeBasis = timeBasis)
+    splitModel <- fitM4(split, modelType = modelType, horizons = c(5, 11), timeBasis = timeBasis)
     expect_equal(splitModel$estimates, model$estimates, tolerance = 1e-8)
   }
 })
 
 test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
+  # riskStart = 1, so horizons 6 and 15 end pooled logistic intervals of 3 days (t = 6 and 15).
   fixture <- createM4Fixture(n = 80, riskStart = 1, competingEvents = "death", seed = 6)
   persons <- sort(unique(fixture$segments$personSeqId))
   set.seed(7)
@@ -634,17 +815,36 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
     close(weightedClones)
     close(copyWeightedClones)
   })
-  for (modelType in c("cox", "logistic", "km")) {
+  outcomeData <- .getOutcomeData(weightedClones)
+  settings <- list(
+    list(modelType = "cox"),
+    list(modelType = "km"),
+    list(modelType = "logistic", type = "linear", interaction = FALSE),
+    # Bases whose definition depends on the distribution of the rows' intervals (knots at quantiles;
+    # orthogonal polynomials), with and without the arm x time interaction:
+    list(modelType = "logistic", type = "naturalSpline", interaction = FALSE),
+    list(modelType = "logistic", type = "naturalSpline", interaction = TRUE),
+    list(modelType = "logistic", type = "polynomial", interaction = FALSE),
+    list(modelType = "logistic", type = "polynomial", interaction = TRUE)
+  )
+  for (setting in settings) {
+    type <- if (is.null(setting$type)) "linear" else setting$type
     args <- createFitOutcomeModelArgs(
-      modelType = modelType, horizons = c(5, 14), varianceEstimator = "bootstrap",
-      timeBasis = createTimeBasis("linear", intervalLength = 3), control = m4Control
+      modelType = setting$modelType, horizons = c(6, 15), varianceEstimator = "bootstrap",
+      timeBasis = createTimeBasis(type, intervalLength = 3, df = 3, degree = 2, raw = FALSE),
+      armByTimeInteraction = isTRUE(setting$interaction), control = m4Control
     )
     weighted <- .fitOutcomeModelPoint(weightedClones, args, personCounts = personCounts)
     copied <- .fitOutcomeModelPoint(copyWeightedClones, args)
+    expect_false(anyNA(weighted$estimates$estimate[!grepl("^rr", weighted$estimates$estimand)]))
     expect_equal(weighted$estimates, copied$estimates, tolerance = 1e-7)
     expect_equal(weighted$coefficients, copied$coefficients, tolerance = 1e-7)
     expect_equal(colnames(weighted$estimates), c("estimand", "estimate", "logEstimate"))
+    # The same from segments collected once:
+    fromData <- .fitOutcomeModelPoint(NULL, args, personCounts = personCounts, outcomeData = outcomeData)
+    expect_equal(fromData, weighted)
   }
+  expect_error(.fitOutcomeModelPoint(weightedClones, args, personCounts = data.frame(personSeqId = 1, count = 0.5)), "count")
 })
 
 test_that(".fitOutcomeModelPoint equals the point estimates of fitOutcomeModel", {
@@ -667,7 +867,7 @@ test_that("Zero-weight segments are dropped", {
   zeroed$segments$weight[zeroed$segments$cloneRowId %in% zeroClones] <- 0
   for (modelType in c("cox", "logistic", "km")) {
     timeBasis <- createTimeBasis("linear", intervalLength = 3)
-    model <- fitM4(zeroed, modelType = modelType, horizons = c(5, 12), timeBasis = timeBasis)
+    model <- fitM4(zeroed, modelType = modelType, horizons = c(5, 11), timeBasis = timeBasis)
     # The same data without those clones: zero-weight persons contribute nothing to the robust SEs.
     removed <- fixture
     removed$segments <- removed$segments[!removed$segments$cloneRowId %in% zeroClones, ]
@@ -676,7 +876,7 @@ test_that("Zero-weight segments are dropped", {
     removed$clones$cloneRowId <- seq_along(oldIds)
     removed$segments$cloneRowId <- match(removed$segments$cloneRowId, oldIds)
     removed$personWeights <- m4PersonWeights(removed$segments)
-    removedModel <- fitM4(removed, modelType = modelType, horizons = c(5, 12), timeBasis = timeBasis)
+    removedModel <- fitM4(removed, modelType = modelType, horizons = c(5, 11), timeBasis = timeBasis)
     expect_equal(model$estimates, removedModel$estimates, tolerance = 1e-8)
   }
 })
@@ -742,6 +942,8 @@ test_that("fitOutcomeModel rejects the bootstrap and unsupported settings", {
   on.exit(close(weightedClones))
   expect_error(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(varianceEstimator = "bootstrap")), "Use the bootstrap driver")
   expect_error(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "km", varianceEstimator = "modelBased")), "not available")
+  crossValidated <- createFitOutcomeModelArgs(modelType = "logistic", prior = Cyclops::createPrior("laplace", useCrossValidation = TRUE))
+  expect_error(suppressMessages(fitOutcomeModel(weightedClones, crossValidated)), "Cross-validation is not supported")
   expect_error(fitOutcomeModel(fixture$clones, createFitOutcomeModelArgs()), "CcwClones")
   ccwClones <- .createCcwClones(fixture$persons, fixture$clones, fixture$metaData)
   on.exit(close(ccwClones), add = TRUE)

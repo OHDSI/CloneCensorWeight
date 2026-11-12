@@ -109,16 +109,27 @@
 # the weighted Breslow (or Nelson-Aalen) increment of `breslow`, holding its coefficient fixed:
 # for each segment, w_k a(s) scale / S0(s) for its event, minus
 # w_k exp(beta x_k) sum_{s in (start_k, stop_k]} a(s) scale dLambda0(s) / S0(s).
+# `a` may also be a matrix with one column per functional; the result is then a persons x functionals
+# matrix.
 .hazardInfluence <- function(segments, breslow, a, scale, nPersons) {
+  isMatrix <- is.matrix(a)
+  a <- as.matrix(a)
   positive <- breslow$s0 > 0
-  eventCoefficient <- numeric(length(a))
-  eventCoefficient[positive] <- a[positive] * scale / breslow$s0[positive]
-  riskCoefficient <- eventCoefficient * breslow$dLambda0
-  cumRisk <- c(0, cumsum(riskCoefficient))
-  contribution <- -segments$weight * breslow$relRisk * (cumRisk[segments$idxStop + 1] - cumRisk[segments$idxStart])
-  isEvent <- breslow$isEvent
-  contribution[isEvent] <- contribution[isEvent] + segments$weight[isEvent] * eventCoefficient[segments$idxEvent[isEvent]]
-  return(.sumBy(contribution, segments$personIndex, nPersons))
+  eventCoefficient <- matrix(0, nrow(a), ncol(a))
+  eventCoefficient[positive, ] <- a[positive, , drop = FALSE] * (scale / breslow$s0[positive])
+  cumRisk <- apply(rbind(0, eventCoefficient * breslow$dLambda0), 2, cumsum)
+  dim(cumRisk) <- c(nrow(a) + 1, ncol(a))
+  contribution <- -(segments$weight * breslow$relRisk) *
+    (cumRisk[segments$idxStop + 1, , drop = FALSE] - cumRisk[segments$idxStart, , drop = FALSE])
+  isEvent <- which(breslow$isEvent)
+  contribution[isEvent, ] <- contribution[isEvent, , drop = FALSE] +
+    segments$weight[isEvent] * eventCoefficient[segments$idxEvent[isEvent], , drop = FALSE]
+  influence <- matrix(0, nPersons, ncol(a))
+  if (nrow(contribution) > 0) {
+    sums <- rowsum(contribution, segments$personIndex)
+    influence[as.integer(rownames(sums)), ] <- sums
+  }
+  return(if (isMatrix) influence else influence[, 1])
 }
 
 # Derivative of sum_j a[j] * dLambda(s_j | x) with respect to the Cox coefficient, where
@@ -129,24 +140,47 @@
 
 # Pooled logistic sandwich -------------------------------------------------------------------------
 
-# Bread ((X'WVX)^-1) and per-person scores (sum of w (y - p) X) of a weighted logistic regression.
-.logisticScores <- function(design, y, weights, coefficients, personIndex, nPersons) {
-  p <- as.vector(1 / (1 + exp(-(design %*% coefficients))))
-  information <- crossprod(design, design * (weights * p * (1 - p)))
-  scores <- rowsum(design * (weights * (y - p)), personIndex, reorder = TRUE)
-  personScores <- matrix(0, nPersons, ncol(design))
-  personScores[as.integer(rownames(scores)), ] <- scores
-  return(list(bread = solve(information), scores = personScores))
+# Inverse of an information matrix, or a matrix of NA (with a warning) when it is singular.
+.invertInformation <- function(information, label) {
+  inverse <- tryCatch(solve(information), error = function(e) NULL)
+  if (is.null(inverse)) {
+    warning(sprintf("The information matrix of the %s model is singular: its variance is NA", label))
+    inverse <- matrix(NA_real_, nrow(information), ncol(information))
+  }
+  return(inverse)
 }
 
-# Joint HC0 sandwich clustered on person for one or more models fitted to rows of the same persons
-# (each element of `fits` is the output of .logisticScores()): V = B (sum_i U_i U_i') B, with B block
-# diagonal. Equal, block by block, to sandwich::vcovCL(glm, cluster = personSeqId, type = "HC0",
-# cadjust = FALSE).
-.jointSandwich <- function(fits) {
+# Sums `values` by person (1..nPersons) and cell (1..nCells): a data frame with columns person, cell and
+# value, one row per pair present, sorted by person and cell.
+.sumByPersonAndCell <- function(values, personIndex, cell, nCells) {
+  key <- (as.numeric(personIndex) - 1) * nCells + (cell - 1)
+  keys <- sort(unique(key))
+  sums <- rowsum(values, match(key, keys), reorder = TRUE)
+  return(data.frame(person = keys %/% nCells + 1, cell = keys %% nCells + 1, value = sums[, 1]))
+}
+
+# Joint HC0 sandwich clustered on person for pooled models fitted to rows of the same persons (each
+# element of `fits` is a .fitPooledModel() result): V = B (sum_i U_i U_i') B, with B block diagonal and
+# U_i = sum_c r_ic X_c the person's score, where r_ic is the sum of the person's score residuals
+# w (y - p) in cell c and X_c the cell's design row. Equal, block by block, to
+# sandwich::vcovCL(glm, cluster = personSeqId, type = "HC0", cadjust = FALSE). The scores are formed for
+# blocks of persons, so memory stays O(block size x coefficients) and no row-level design is built.
+.jointSandwich <- function(fits, nPersons, maxEntries = 1e7) {
   bread <- .blockDiagonal(lapply(fits, function(fit) fit$bread))
-  scores <- do.call(cbind, lapply(fits, function(fit) fit$scores))
-  return(bread %*% crossprod(scores) %*% bread)
+  blockSize <- max(1, floor(maxEntries / max(nrow(bread), nrow(fits[[1]]$design))))
+  meat <- matrix(0, nrow(bread), nrow(bread))
+  for (first in seq(0, nPersons - 1, by = blockSize)) {
+    size <- min(blockSize, nPersons - first)
+    scores <- lapply(fits, function(fit) {
+      range <- findInterval(c(first, first + size), fit$residuals$person)
+      inBlock <- seq_len(range[2] - range[1]) + range[1]
+      residuals <- matrix(0, size, nrow(fit$design))
+      residuals[cbind(fit$residuals$person[inBlock] - first, fit$residuals$cell[inBlock])] <- fit$residuals$value[inBlock]
+      return(residuals %*% fit$design)
+    })
+    meat <- meat + crossprod(do.call(cbind, scores))
+  }
+  return(bread %*% meat %*% bread)
 }
 
 .blockDiagonal <- function(matrices) {
@@ -286,9 +320,10 @@
 
 # Risk, RD and RR rows for one horizon by the delta method from a covariance matrix of the risks:
 # `gradients` holds the Jacobians (rows: target risk, comparator risk) with respect to the parameters
-# whose covariance is `vcov` (NULL for point estimates only).
+# whose covariance is `vcov` (NULL for point estimates only). NA risks, gradients or covariances give NA
+# standard errors.
 .deltaContrastRows <- function(horizon, risks, gradients, vcov, competing) {
-  if (is.null(vcov) || anyNA(gradients)) {
+  if (is.null(vcov)) {
     return(.riskContrastRows(horizon, risks, list(NULL, NULL), competing))
   }
   variance <- function(gradient) as.numeric(t(gradient) %*% vcov %*% gradient)

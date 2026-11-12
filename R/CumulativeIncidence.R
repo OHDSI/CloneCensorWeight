@@ -81,7 +81,8 @@
   return(.ajFunctionals(times, hazards$outcome$dLambda0, qD, tau))
 }
 
-# Person-level influence of a functional of one strategy's hazard increments with the given gradients.
+# Person-level influence of a functional of one strategy's hazard increments with the given gradients
+# (or of several functionals, with one gradient column each; see .hazardInfluence()).
 .strategyInfluence <- function(hazards, gradientY, gradientD, nPersons) {
   influence <- .hazardInfluence(hazards$segments, hazards$outcome, gradientY, 1, nPersons)
   if (!is.null(hazards$death)) {
@@ -168,10 +169,14 @@ computeCumulativeIncidence <- function(weightedClones, horizons = NULL) {
     }
     risk <- numeric(length(taus))
     se <- numeric(length(taus))
-    for (i in seq_along(taus)) {
-      functionals <- .strategyFunctionals(hazards, times, taus[i])
-      risk[i] <- functionals$risk
-      se[i] <- sqrt(sum(.strategyInfluence(hazards, functionals$gradRiskY, functionals$gradRiskD, nPersons)^2))
+    # The influences of a block of time points are computed in one pass over the segments:
+    blockSize <- max(1, floor(1e7 / nrow(strategySegments)))
+    for (block in split(seq_along(taus), (seq_along(taus) - 1) %/% blockSize)) {
+      functionals <- lapply(taus[block], .strategyFunctionals, hazards = hazards, times = times)
+      risk[block] <- vapply(functionals, function(f) f$risk, numeric(1))
+      gradient <- function(name) matrix(unlist(lapply(functionals, function(f) f[[name]])), nrow = length(times), ncol = length(block))
+      influence <- .strategyInfluence(hazards, gradient("gradRiskY"), gradient("gradRiskD"), nPersons)
+      se[block] <- sqrt(colSums(influence^2))
     }
     limits <- .riskLimits(risk, se, competing)
     isOutcome <- strategySegments$outcome == 1
