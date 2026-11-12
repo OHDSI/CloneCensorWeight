@@ -2,10 +2,10 @@
 
 # Cohort IDs of the Eunomia design built by createExtractionTestDatabase().
 extractionIds <- list(
-  targetId = 101, # all ankle sprains (concept 81151) of persons with person_id divisible by 10
+  targetId = 101, # all ankle sprains (concept 81151) of persons with person_id divisible by 10, plus extractionBoundary
   treatmentId = 102, # ibuprofen (1177480) drug eras, plus hand-made eras for prior-use edge cases
   comparatorTreatmentId = 103, # acetaminophen (1125315) drug eras
-  outcomeIds = c(3, 1) # Eunomia's GI bleed and celecoxib cohorts (Eunomia::createCohorts)
+  outcomeIds = c(3, 1) # Eunomia's GI bleed and celecoxib cohorts (Eunomia::createCohorts), plus extractionBoundary
 )
 
 # Offsets (days relative to the first index date) of hand-made treatment eras, one per person, and
@@ -17,12 +17,111 @@ extractionEdgeEras <- data.frame(
   priorUse = c(TRUE, FALSE, FALSE, TRUE, TRUE)
 )
 
+# Hand-made persons for the boundaries of eligibility and of the outcome window, each with one entry in
+# the eligible cohort. Their person IDs are odd, so they have no death records. `entries` gives the
+# expected result of each entry (kept or dropped) under three sets of arguments:
+# - keptDefault: the default arguments (washout 365 days, prior-use lookback 365 days);
+# - keptStudy: washoutPeriod = 0, firstOnly = FALSE, priorUseLookback = 180, studyStartDate = "19800101"
+#   and studyEndDate = "20101231";
+# - keptWashout100: washoutPeriod = 100 and removeSubjectsWithPriorTreatment = FALSE.
+# "secondObsPeriod" has two observation periods with a gap; its index date is 100 days into the second,
+# and the first holds a treatment era (days -251 to -176) and an outcome (day -220).
+# `outcomes` (outcome cohort 3) are stored when the outcome is in the index observation period.
+extractionBoundary <- list(
+  entries = data.frame(
+    personId = seq(990001, by = 2, length.out = 11),
+    case = c(
+      "washoutExact", "washoutShort", "obsStart", "studyStart", "beforeStudyStart", "studyEnd",
+      "afterStudyEnd", "cohortEndAfterStudyEnd", "outcomeAtObsEnd", "outcomeAtObsStart", "secondObsPeriod"
+    ),
+    cohortStartDate = as.Date(c(
+      "2004-12-31", "2004-12-30", "2004-01-01", "1980-01-01", "1979-12-31", "2010-12-31",
+      "2011-01-01", "2010-06-01", "2003-01-01", "2003-01-01", "2005-06-09"
+    )),
+    cohortEndDate = as.Date(c(
+      "2005-01-31", "2005-01-30", "2004-01-31", "1980-01-31", "1980-01-30", "2011-01-30",
+      "2011-01-31", "2011-03-01", "2003-01-31", "2003-01-31", "2005-06-30"
+    )),
+    keptDefault = c(TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE),
+    keptStudy = c(TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, FALSE),
+    keptWashout100 = c(TRUE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE)
+  ),
+  observationPeriods = data.frame(
+    case = c(
+      "washoutExact", "washoutShort", "obsStart", "studyStart", "beforeStudyStart", "studyEnd",
+      "afterStudyEnd", "cohortEndAfterStudyEnd", "outcomeAtObsEnd", "outcomeAtObsStart", "secondObsPeriod",
+      "secondObsPeriod"
+    ),
+    startDate = as.Date(c(
+      "2004-01-01", "2004-01-01", "2004-01-01", "1975-01-01", "1975-01-01", "2005-01-01",
+      "2005-01-01", "2005-01-01", "2001-01-01", "2001-01-01", "2001-01-01", "2005-03-01"
+    )),
+    endDate = as.Date(c(
+      "2012-12-31", "2012-12-31", "2012-12-31", "1985-12-31", "1985-12-31", "2015-12-31",
+      "2015-12-31", "2015-12-31", "2008-12-31", "2008-12-31", "2004-12-31", "2012-12-31"
+    ))
+  ),
+  outcomes = data.frame(
+    case = c(
+      "outcomeAtObsEnd", "outcomeAtObsEnd", "outcomeAtObsStart", "outcomeAtObsStart", "secondObsPeriod",
+      "secondObsPeriod"
+    ),
+    outcomeDate = as.Date(c("2008-12-31", "2009-01-01", "2001-01-01", "2000-12-31", "2004-11-01", "2005-04-01")),
+    stored = c(TRUE, FALSE, TRUE, FALSE, FALSE, TRUE)
+  ),
+  eras = data.frame(
+    case = "secondObsPeriod",
+    startDate = as.Date("2004-10-01"),
+    endDate = as.Date("2004-12-15")
+  )
+)
+
+# The person ID of a case in extractionBoundary.
+boundaryPersonId <- function(case) {
+  return(extractionBoundary$entries$personId[match(case, extractionBoundary$entries$case)])
+}
+
+# Inserts the persons, observation periods, eligible-cohort entries, treatment eras (cohort 102) and
+# outcomes (cohort 3) of extractionBoundary.
+insertExtractionBoundaryRows <- function(connection) {
+  sqlDate <- function(x) sprintf("CAST('%s' AS DATE)", format(x, "%Y%m%d"))
+  entries <- extractionBoundary$entries
+  periods <- extractionBoundary$observationPeriods
+  outcomes <- extractionBoundary$outcomes
+  eras <- extractionBoundary$eras
+  insertCohortSql <- "INSERT INTO main.cohort (cohort_definition_id, subject_id, cohort_start_date, cohort_end_date) VALUES (%d, %d, %s, %s);"
+  sql <- c(
+    sprintf(
+      "INSERT INTO main.person (person_id, gender_concept_id, year_of_birth, month_of_birth, day_of_birth, race_concept_id, ethnicity_concept_id) VALUES (%d, %d, 1950, 1, 1, 0, 0);",
+      entries$personId,
+      rep(c(8507L, 8532L), length.out = nrow(entries))
+    ),
+    sprintf(
+      "INSERT INTO main.observation_period (observation_period_id, person_id, observation_period_start_date, observation_period_end_date, period_type_concept_id) VALUES (%d, %d, %s, %s, 44814724);",
+      990000L + seq_len(nrow(periods)),
+      boundaryPersonId(periods$case),
+      sqlDate(periods$startDate),
+      sqlDate(periods$endDate)
+    ),
+    sprintf(insertCohortSql, extractionIds$targetId, entries$personId, sqlDate(entries$cohortStartDate), sqlDate(entries$cohortEndDate)),
+    sprintf(insertCohortSql, extractionIds$treatmentId, boundaryPersonId(eras$case), sqlDate(eras$startDate), sqlDate(eras$endDate)),
+    sprintf(insertCohortSql, 3L, boundaryPersonId(outcomes$case), sqlDate(outcomes$outcomeDate), sqlDate(outcomes$outcomeDate))
+  )
+  DatabaseConnector::renderTranslateExecuteSql(
+    connection = connection,
+    sql = paste(sql, collapse = "\n"),
+    progressBar = FALSE,
+    reportOverallTime = FALSE
+  )
+}
+
 # Creates a copy of the Eunomia GiBleed database with Eunomia's cohorts 1-4, the cohorts in
 # `extractionIds`, and death records (none in Eunomia): death on the last day of observation for
 # persons with person_id divisible by 20, a second, earlier death record (100 days before the end of
 # observation) for those divisible by 40, and a death on the first day of observation (before most
 # index dates) for those divisible by 30. Hand-made treatment eras (extractionEdgeEras) are added for
-# five persons whose first index date has 365 days of prior observation and no other prior use.
+# five persons whose first index date has 365 days of prior observation and no other prior use. The
+# hand-made persons of extractionBoundary are added last.
 # Returns the connection details, with the persons of the edge cases as attribute "edgePersons".
 createExtractionTestDatabase <- function() {
   databaseFile <- tempfile(fileext = ".sqlite")
@@ -116,6 +215,7 @@ createExtractionTestDatabase <- function() {
       reportOverallTime = FALSE
     )
   }
+  insertExtractionBoundaryRows(connection)
   attr(connectionDetails, "edgePersons") <- edgePersons
   return(connectionDetails)
 }

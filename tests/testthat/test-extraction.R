@@ -44,6 +44,31 @@ expectMatchesReference <- function(data, expected) {
   expect_equal(as.data.frame(attr(data, "metaData")$attrition), expected$attrition)
 }
 
+# Whether each hand-made entry of extractionBoundary is in the cohorts of `data`, named by case.
+boundaryKept <- function(data) {
+  entries <- extractionBoundary$entries
+  return(stats::setNames(as.character(entries$personId) %in% collectCohorts(data)$personId, entries$case))
+}
+
+# The expected kept flags of extractionBoundary in column `column`, named by case.
+expectedBoundaryKept <- function(column) {
+  return(stats::setNames(extractionBoundary$entries[[column]], extractionBoundary$entries$case))
+}
+
+# The cohorts row(s) of a hand-made case.
+boundaryCohort <- function(data, case) {
+  cohorts <- collectCohorts(data)
+  return(cohorts[cohorts$personId == as.character(boundaryPersonId(case)), ])
+}
+
+# The rows of a collected table for one rowId, as a data frame.
+rowsOf <- function(table, rowId) {
+  rows <- as.data.frame(collect(table))
+  rows <- rows[rows$rowId == rowId, ]
+  rownames(rows) <- NULL
+  return(rows)
+}
+
 defaultArgs <- createGetDbCloneCensorWeightDataArgs(covariateSettings = extractionCovariateSettings())
 defaultData <- extractQuietly(defaultArgs, connectionDetails = connectionDetails)
 defaultExpected <- computeExpectedExtraction(rawTables, defaultArgs)
@@ -208,6 +233,113 @@ test_that("Extraction matches the reference with all entries, no washout, and a 
   dataStart <- extractQuietly(args, connectionDetails = connectionDetails)
   on.exit(close(dataStart), add = TRUE)
   expectMatchesReference(dataStart, computeExpectedExtraction(rawTables, args))
+})
+
+test_that("Hand-made entries on the washout, observation start, and study period boundaries are kept or dropped", {
+  # Default arguments: 365 days of washout, no study period
+  expect_equal(boundaryKept(defaultData), expectedBoundaryKept("keptDefault"))
+  expect_equal(boundaryCohort(defaultData, "washoutExact")$daysFromObsStart, 365)
+  # Without a study end date, the cohort end and the observation end are not truncated
+  cohort <- boundaryCohort(defaultData, "cohortEndAfterStudyEnd")
+  expect_equal(cohort$daysToCohortEnd, 273)
+  expect_equal(cohort$daysToObsEnd, 2039)
+
+  args <- createGetDbCloneCensorWeightDataArgs(
+    studyStartDate = "19800101",
+    studyEndDate = "20101231",
+    washoutPeriod = 0,
+    firstOnly = FALSE,
+    priorUseLookback = 180,
+    covariateSettings = extractionCovariateSettings()
+  )
+  data <- extractQuietly(args, connectionDetails = connectionDetails)
+  on.exit(close(data))
+  expect_equal(boundaryKept(data), expectedBoundaryKept("keptStudy"))
+  expect_equal(boundaryCohort(data, "obsStart")$daysFromObsStart, 0)
+  expect_equal(boundaryCohort(data, "studyStart")$cohortStartDate, as.Date("1980-01-01"))
+  # The cohort end (2011-03-01) and the observation end are truncated at the study end date, 213 days
+  # after the index date
+  cohort <- boundaryCohort(data, "cohortEndAfterStudyEnd")
+  expect_equal(cohort$daysToCohortEnd, 213)
+  expect_equal(cohort$daysToObsEnd, 213)
+  cohort <- boundaryCohort(data, "studyEnd")
+  expect_equal(cohort$daysToCohortEnd, 0)
+  expect_equal(cohort$daysToObsEnd, 0)
+})
+
+test_that("Outcomes on the first and last day of the index observation period are stored", {
+  outcomeAtObsEnd <- boundaryCohort(defaultData, "outcomeAtObsEnd")
+  outcomeAtObsStart <- boundaryCohort(defaultData, "outcomeAtObsStart")
+  expect_equal(outcomeAtObsEnd$daysToObsEnd, 2191)
+  expect_equal(outcomeAtObsStart$daysFromObsStart, 730)
+  # Outcomes on the last day of observation and the day after: only the first is stored
+  expect_equal(
+    rowsOf(defaultData$outcomes, outcomeAtObsEnd$rowId),
+    data.frame(rowId = outcomeAtObsEnd$rowId, outcomeId = 3, daysToEvent = 2191L)
+  )
+  # Outcomes on the first day of observation and the day before: only the first is stored
+  expect_equal(
+    rowsOf(defaultData$outcomes, outcomeAtObsStart$rowId),
+    data.frame(rowId = outcomeAtObsStart$rowId, outcomeId = 3, daysToEvent = -730L)
+  )
+
+  # In CohortMethod's study population, the outcome on the last day of observation is counted on riskEnd,
+  # and the outcome on the first day of observation is a prior outcome
+  for (riskStart in c(0, 1)) {
+    population <- suppressMessages(CohortMethod::createStudyPopulation(
+      defaultData,
+      outcomeId = 3,
+      createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+        removeSubjectsWithPriorOutcome = TRUE,
+        riskWindowStart = riskStart,
+        riskWindowEnd = 99999
+      )
+    ))
+    row <- population[population$rowId == outcomeAtObsEnd$rowId, ]
+    expect_equal(nrow(row), 1)
+    expect_equal(row$riskEnd, 2191)
+    expect_equal(row$daysToEvent, 2191)
+    expect_equal(row$outcomeCount, 1)
+    expect_equal(row$survivalTime, 2191 - riskStart + 1)
+    expect_false(outcomeAtObsStart$rowId %in% population$rowId)
+  }
+})
+
+test_that("The index observation period is the one that contains the index date", {
+  # secondObsPeriod: the index date is 100 days into the second of two observation periods; the first
+  # holds a treatment era on days -251 to -176 and an outcome on day -220
+  args <- createGetDbCloneCensorWeightDataArgs(
+    washoutPeriod = 100,
+    removeSubjectsWithPriorTreatment = FALSE,
+    covariateSettings = extractionCovariateSettings()
+  )
+  data <- extractQuietly(args, connectionDetails = connectionDetails)
+  on.exit(close(data))
+  expectMatchesReference(data, computeExpectedExtraction(rawTables, args))
+  expect_equal(boundaryKept(data), expectedBoundaryKept("keptWashout100"))
+  cohort <- boundaryCohort(data, "secondObsPeriod")
+  expect_equal(nrow(cohort), 1)
+  expect_equal(cohort$daysFromObsStart, 100)
+  expect_equal(cohort$daysToObsEnd, 2762)
+  # The era in the first period overlaps the lookback window, so it is stored
+  expect_equal(
+    rowsOf(data$treatments, cohort$rowId),
+    data.frame(rowId = cohort$rowId, treatmentId = 102, daysToStart = -251L, daysToEnd = -176L)
+  )
+  # The outcome in the first period is not stored; the one in the second period before index is
+  expect_equal(
+    rowsOf(data$outcomes, cohort$rowId),
+    data.frame(rowId = cohort$rowId, outcomeId = 3, daysToEvent = -69L)
+  )
+
+  # The era in the first period is prior use
+  args <- createGetDbCloneCensorWeightDataArgs(washoutPeriod = 100, covariateSettings = extractionCovariateSettings())
+  dataPriorUse <- extractQuietly(args, connectionDetails = connectionDetails)
+  on.exit(close(dataPriorUse), add = TRUE)
+  expectMatchesReference(dataPriorUse, computeExpectedExtraction(rawTables, args))
+  expected <- expectedBoundaryKept("keptWashout100")
+  expected["secondObsPeriod"] <- FALSE
+  expect_equal(boundaryKept(dataPriorUse), expected)
 })
 
 test_that("A single treatment role extracts only that treatment", {
