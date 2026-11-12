@@ -13,3 +13,4 @@
 ^vignettes/MultipleAnalyses\.Rmd$
 ^vignettes/Simulation\.Rmd$
 ^vignettes/SingleStudy\.Rmd$
+^\.claude$

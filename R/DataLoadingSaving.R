@@ -127,7 +127,6 @@ getDbCloneCensorWeightData <- function(connectionDetails = NULL,
                                        targetTable = exposureTable,
                                        cdmVersion = "5",
                                        getDbCloneCensorWeightDataArgs) {
-  .assertDatabasePackagesInstalled()
   errorMessages <- checkmate::makeAssertCollection()
   checkmate::assertClass(connectionDetails, "ConnectionDetails", null.ok = TRUE, add = errorMessages)
   checkmate::assertClass(connection, "DatabaseConnectorConnection", null.ok = TRUE, add = errorMessages)
@@ -304,18 +303,6 @@ getDbCloneCensorWeightData <- function(connectionDetails = NULL,
   class(data) <- "CloneCensorWeightData"
   attr(class(data), "package") <- "CloneCensorWeight"
   return(data)
-}
-
-.assertDatabasePackagesInstalled <- function() {
-  for (package in c("DatabaseConnector", "SqlRender")) {
-    if (!requireNamespace(package, quietly = TRUE)) {
-      stop(sprintf(
-        "The %s package is required to extract data from a database. Please install it with install.packages(\"%s\").",
-        package,
-        package
-      ))
-    }
-  }
 }
 
 # Reads a parameterized SQL file from inst/sql/sql_server, renders it, and translates it to `dbms`.

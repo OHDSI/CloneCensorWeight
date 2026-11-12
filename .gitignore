@@ -10,3 +10,4 @@ docs/
 extras
 vignettes/*.html
 vignettes/*-woven*
+.claude/
