@@ -3,9 +3,12 @@ Type: Package
 Title: Clone-Censor-Weight Target Trial Emulation
 Version: 0.1.0
 Authors@R:
-    c(person("William J.", "O'Brien",
-             email = "wobrien8@its.jnj.com",
+    c(person("Marc A.", "Suchard",
+             email = "msuchard@ucla.edu",
              role  = c("aut", "cre")),
+      person("William J.", "O'Brien",
+             email = "wobrien8@its.jnj.com",
+             role  = "aut"),
       person("Patrick", "Ryan",
              email = "ryan@ohdsi.org",
              role  = "ctb"),
@@ -51,6 +54,9 @@ Suggests:
     rmarkdown,
     testthat (>= 3.0.0),
     withr
+Remotes:
+    ohdsi/Cyclops@develop,
+    ohdsi/CohortMethod@left-censored
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 URL: https://ohdsi.github.io/CloneCensorWeight

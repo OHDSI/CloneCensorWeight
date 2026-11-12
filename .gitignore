@@ -8,3 +8,5 @@
 cohortmethod-reference/
 docs/
 extras
+vignettes/*.html
+vignettes/*-woven*

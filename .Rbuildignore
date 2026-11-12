@@ -7,3 +7,5 @@
 ^\.Rproj\.user$
 ^NEWS\.md$
 ^\.agent-shell$
+^\.github$
+^_pkgdown\.yml$
