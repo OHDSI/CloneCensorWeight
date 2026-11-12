@@ -4,15 +4,26 @@
 \alias{createTimeBasis}
 \title{Create a time basis}
 \usage{
-createTimeBasis(type = "indicator", intervalLength = 1, df = 4)
+createTimeBasis(
+  type = "indicator",
+  intervalLength = 1,
+  df = 4,
+  degree = 2,
+  raw = TRUE
+)
 }
 \arguments{
-\item{type}{The basis: \code{"indicator"} (one indicator per interval), \code{"naturalSpline"}, or
-\code{"linear"}.}
+\item{type}{The basis: \code{"indicator"} (one indicator per interval), \code{"naturalSpline"},
+\code{"linear"}, or \code{"polynomial"}.}
 
 \item{intervalLength}{The length of each interval in days.}
 
 \item{df}{Degrees of freedom of the natural spline.}
+
+\item{degree}{Degree of the polynomial (\code{stats::poly(k, degree, raw = raw)} of the 0-based
+interval index \code{k}).}
+
+\item{raw}{Use raw (not orthogonal) polynomials?}
 }
 \value{
 An object of type \code{TimeBasis}.
@@ -21,7 +32,9 @@ An object of type \code{TimeBasis}.
 Create a time basis
 }
 \details{
-Defines how time enters a pooled (discrete-time) model.
+Defines how time enters a pooled (discrete-time) model. Every model that uses a basis also has an
+intercept, so \code{"indicator"} has one column per interval except the first (the reference), and a
+single interval gives no basis columns.
 }
 \examples{
 timeBasis <- createTimeBasis(type = "naturalSpline", intervalLength = 7, df = 3)

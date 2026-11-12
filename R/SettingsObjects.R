@@ -459,12 +459,17 @@ CreateClonesArgs <- R6Class(
 #' Create a time basis
 #'
 #' @details
-#' Defines how time enters a pooled (discrete-time) model.
+#' Defines how time enters a pooled (discrete-time) model. Every model that uses a basis also has an
+#' intercept, so `"indicator"` has one column per interval except the first (the reference), and a
+#' single interval gives no basis columns.
 #'
-#' @param type           The basis: `"indicator"` (one indicator per interval), `"naturalSpline"`, or
-#'                       `"linear"`.
+#' @param type           The basis: `"indicator"` (one indicator per interval), `"naturalSpline"`,
+#'                       `"linear"`, or `"polynomial"`.
 #' @param intervalLength The length of each interval in days.
 #' @param df             Degrees of freedom of the natural spline.
+#' @param degree         Degree of the polynomial (`stats::poly(k, degree, raw = raw)` of the 0-based
+#'                       interval index `k`).
+#' @param raw            Use raw (not orthogonal) polynomials?
 #'
 #' @return
 #' An object of type `TimeBasis`.
@@ -475,7 +480,9 @@ CreateClonesArgs <- R6Class(
 #' @export
 createTimeBasis <- function(type = "indicator",
                             intervalLength = 1,
-                            df = 4) {
+                            df = 4,
+                            degree = 2,
+                            raw = TRUE) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -490,11 +497,15 @@ TimeBasis <- R6Class(
     type = NULL,
     intervalLength = NULL,
     df = NULL,
+    degree = 2,
+    raw = TRUE,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
-      checkmate::assertChoice(self$type, c("indicator", "naturalSpline", "linear"), add = errorMessages)
+      checkmate::assertChoice(self$type, c("indicator", "naturalSpline", "linear", "polynomial"), add = errorMessages)
       checkmate::assertInt(self$intervalLength, lower = 1, add = errorMessages)
       checkmate::assertInt(self$df, lower = 1, add = errorMessages)
+      checkmate::assertInt(self$degree, lower = 1, add = errorMessages)
+      checkmate::assertLogical(self$raw, len = 1, any.missing = FALSE, add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
     }
   )

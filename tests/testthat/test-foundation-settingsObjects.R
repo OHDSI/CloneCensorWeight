@@ -140,6 +140,9 @@ test_that("TimeBasis round trip and validation", {
   expect_error(createTimeBasis(type = "cubic"), "type")
   expect_error(createTimeBasis(intervalLength = 0), "intervalLength")
   expect_error(createTimeBasis(df = 0), "df")
+  expectRoundTrip(createTimeBasis(type = "polynomial", intervalLength = 7, degree = 3, raw = FALSE), TimeBasis)
+  expect_error(createTimeBasis(type = "polynomial", degree = 0), "degree")
+  expect_error(createTimeBasis(raw = NA), "raw")
 })
 
 test_that("FitCensoringModelsArgs round trip and validation", {
