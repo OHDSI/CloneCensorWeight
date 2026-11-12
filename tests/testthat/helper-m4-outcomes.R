@@ -1,0 +1,260 @@
+# Fixtures and hand-written references for the outcome-model tests (module M4).
+
+# Weighted clones for initiateWithin(grace) (strategy 1) vs notInitiateWithin(grace) (strategy 2),
+# built directly from persons following Phase1Contracts sections 5.2 and 5.4 ("eventsFirst"):
+# - persons with outcomes, competing deaths (when competingEvents = "death"), early and late
+#   initiation, and the last `sharedPersons` rows sharing a personSeqId with the first rows;
+# - initiateWithin clones have weight 1 up to day `grace` and 1 / pi after it;
+# - notInitiateWithin clones are split at every outcome or death day of all clones within
+#   [riskStart, grace] and at day `grace`, with weights growing over the segments;
+# - a few extra splits that keep the weight (`extraSplits`).
+# `outcomeRate` and `deathRate` are the shares of persons with an outcome or death day drawn uniformly
+# from [riskStart, riskStart + maxDays] (kept only within the risk window).
+createM4Fixture <- function(n = 120,
+                            riskStart = 0,
+                            competingEvents = "death",
+                            seed = 1,
+                            grace = 4,
+                            maxDays = 25,
+                            sharedPersons = 10,
+                            extraSplits = TRUE,
+                            outcomeRate = 0.45,
+                            deathRate = 0.25) {
+  set.seed(seed)
+  rowId <- seq_len(n)
+  personSeqId <- rowId
+  personSeqId[(n - sharedPersons + 1):n] <- seq_len(sharedPersons)
+  followUp <- sample(4:maxDays, n, replace = TRUE)
+  riskEnd <- riskStart + followUp
+  nominalRiskEnd <- riskStart + maxDays
+  outcomeDay <- ifelse(runif(n) < outcomeRate, riskStart + sample(0:maxDays, n, replace = TRUE), NA)
+  deathDay <- ifelse(runif(n) < deathRate, riskStart + sample(0:maxDays, n, replace = TRUE), NA)
+  if (competingEvents == "none") {
+    deathDay[] <- NA
+  }
+  outcomeDay[!is.na(outcomeDay) & outcomeDay > riskEnd] <- NA
+  deathDay[!is.na(deathDay) & deathDay > riskEnd] <- NA
+  outcomeDay[!is.na(deathDay) & !is.na(outcomeDay) & deathDay < outcomeDay] <- NA
+  deathDay[!is.na(deathDay) & !is.na(outcomeDay) & deathDay >= outcomeDay] <- NA
+  treatmentDay <- ifelse(runif(n) < 0.6, sample(0:(grace + 4), n, replace = TRUE), NA)
+  persons <- data.frame(
+    rowId = rowId,
+    personSeqId = as.integer(personSeqId),
+    riskStart = as.integer(riskStart),
+    riskEnd = as.integer(riskEnd),
+    nominalRiskEnd = as.integer(nominalRiskEnd),
+    outcomeDay = as.integer(outcomeDay),
+    deathDay = as.integer(deathDay),
+    treatmentDay = as.integer(treatmentDay),
+    comparatorTreatmentDay = NA_integer_
+  )
+
+  clones <- list()
+  for (strategyId in 1:2) {
+    if (strategyId == 1) {
+      deviationDay <- ifelse(is.na(treatmentDay) | treatmentDay > grace, grace, NA)
+    } else {
+      deviationDay <- ifelse(!is.na(treatmentDay) & treatmentDay <= grace, treatmentDay, NA)
+    }
+    candidates <- cbind(outcomeDay, deathDay, deviationDay, riskEnd)
+    endDay <- apply(candidates, 1, min, na.rm = TRUE)
+    first <- apply(candidates == endDay, 1, function(x) which(x %in% TRUE)[1])
+    endReason <- c("outcome", "death", "deviation", "riskEnd")[first]
+    endReason[endReason == "riskEnd" & riskEnd < nominalRiskEnd] <- "observationEnd"
+    clones[[strategyId]] <- data.frame(
+      rowId = rowId,
+      personSeqId = as.integer(personSeqId),
+      strategyId = as.integer(strategyId),
+      riskStart = as.integer(riskStart),
+      deviationDay = as.integer(deviationDay),
+      endDay = as.integer(endDay),
+      endReason = endReason
+    )
+  }
+  clones <- do.call(rbind, clones)
+  clones <- clones[clones$endDay >= riskStart, ]
+  clones <- clones[order(clones$rowId, clones$strategyId), ]
+  clones$cloneRowId <- seq_len(nrow(clones))
+  clones$survivalTime <- clones$endDay - clones$riskStart + 1L
+  clones$outcomeCount <- as.integer(clones$endReason == "outcome")
+  clones <- clones[, c("cloneRowId", "rowId", "personSeqId", "strategyId", "riskStart", "deviationDay", "endDay", "survivalTime", "endReason", "outcomeCount")]
+  rownames(clones) <- NULL
+
+  # Segments on the survival time scale t = day - riskStart + 1.
+  eventTimes <- sort(unique(c(clones$survivalTime[clones$endReason %in% c("outcome", "death")])))
+  graceTime <- grace - riskStart + 1
+  piHat <- runif(n, 0.3, 0.9)
+  slope <- runif(n, 0, 0.15)
+  segments <- list()
+  for (i in seq_len(nrow(clones))) {
+    clone <- clones[i, ]
+    endTime <- clone$survivalTime
+    if (clone$strategyId == 1) {
+      cuts <- graceTime
+    } else {
+      cuts <- c(eventTimes[eventTimes <= graceTime], graceTime)
+    }
+    if (extraSplits && clone$rowId %% 3 == 0) {
+      cuts <- c(cuts, round(endTime / 2), endTime - 1)
+    }
+    cuts <- sort(unique(cuts[cuts > 0 & cuts < endTime]))
+    startTime <- c(0, cuts)
+    stopTime <- c(cuts, endTime)
+    if (clone$strategyId == 1) {
+      weight <- ifelse(startTime >= graceTime, 1 / piHat[clone$rowId], 1)
+    } else {
+      changes <- cumsum(startTime %in% c(0, eventTimes[eventTimes <= graceTime], graceTime))
+      weight <- exp(slope[clone$rowId] * (changes - 1)) * (1 + 0.2 * (startTime >= graceTime))
+    }
+    last <- seq_along(startTime) == length(startTime)
+    segments[[i]] <- data.frame(
+      cloneRowId = clone$cloneRowId,
+      rowId = clone$rowId,
+      personSeqId = clone$personSeqId,
+      strategyId = clone$strategyId,
+      startTime = as.numeric(startTime),
+      stopTime = as.numeric(stopTime),
+      weight = weight,
+      outcome = as.integer(last & clone$endReason == "outcome"),
+      competing = as.integer(last & clone$endReason == "death")
+    )
+  }
+  segments <- do.call(rbind, segments)
+  segments <- cbind(segmentId = seq_len(nrow(segments)), segments)
+  personWeights <- m4PersonWeights(segments)
+  strategies <- list(
+    createTreatmentStrategy(1, sprintf("Initiate within %d days", grace), "initiateWithin", graceEnd = grace),
+    createTreatmentStrategy(2, sprintf("Do not initiate within %d days", grace), "notInitiateWithin", graceEnd = grace)
+  )
+  metaData <- list(
+    strategies = lapply(strategies, function(strategy) strategy$toList()),
+    outcomeId = 3,
+    treatmentIds = c(treatment = 21),
+    sameDayOrdering = "eventsFirst",
+    competingEvents = competingEvents,
+    attrition = dplyr::tibble(
+      description = "Original cohorts",
+      targetPersons = as.integer(n),
+      comparatorPersons = 0L,
+      targetExposures = as.integer(n),
+      comparatorExposures = 0L
+    ),
+    targetId = 1
+  )
+  return(list(persons = persons, clones = clones, segments = segments, personWeights = personWeights, metaData = metaData))
+}
+
+# The personWeights table of segments sorted by cloneRowId and startTime.
+m4PersonWeights <- function(segments) {
+  last <- !duplicated(segments$cloneRowId, fromLast = TRUE)
+  return(data.frame(
+    cloneRowId = segments$cloneRowId[last],
+    strategyId = segments$strategyId[last],
+    maxWeight = as.vector(tapply(segments$weight, segments$cloneRowId, max)),
+    weightAtEnd = segments$weight[last]
+  ))
+}
+
+# Builds the weighted CcwClones object of a fixture (the caller closes it).
+createM4WeightedClones <- function(fixture) {
+  ccwClones <- .createCcwClones(fixture$persons, fixture$clones, fixture$metaData)
+  weightsMetaData <- list(stabilized = FALSE, truncation = createWeightTruncation("none")$toList())
+  return(.addSegments(ccwClones, fixture$segments, fixture$personWeights, weightsMetaData))
+}
+
+# Fits the outcome model on a fixture (closing the Andromeda object).
+fitM4 <- function(fixture, ...) {
+  weightedClones <- createM4WeightedClones(fixture)
+  on.exit(close(weightedClones))
+  args <- createFitOutcomeModelArgs(..., control = m4Control)
+  return(suppressMessages(fitOutcomeModel(weightedClones, args)))
+}
+
+# Newton steps with a tight standardized-gradient criterion (coordinate descent converges slowly on
+# raw polynomial bases).
+m4Control <- Cyclops::createControl(algorithm = "newton", convergenceType = "kkt", tolerance = 1e-10, noiseLevel = "silent")
+
+getM4Estimate <- function(model, estimand, column = "estimate") {
+  return(model$estimates[[column]][model$estimates$estimand == estimand])
+}
+
+# Segments with the survival-package columns: target indicator x and the multi-state factor (censoring
+# first).
+toSurvivalData <- function(segments) {
+  segments$x <- as.integer(segments$strategyId == 1)
+  segments$state <- factor(
+    ifelse(segments$outcome == 1, "outcome", ifelse(segments$competing == 1, "death", "censor")),
+    levels = c("censor", "outcome", "death")
+  )
+  return(segments)
+}
+
+# Sums row-level influence (rows of survfit residuals) by person; returns a vector indexed by the sorted
+# unique personSeqIds of `allPersons` (0 for persons absent from the fit).
+personInfluence <- function(rowInfluence, personSeqId, allPersons) {
+  sums <- rowsum(rowInfluence, personSeqId)
+  result <- numeric(length(allPersons))
+  result[match(as.integer(rownames(sums)), allPersons)] <- sums[, 1]
+  return(result)
+}
+
+# Clone x interval rows built independently of the package: one row per clone and interval of
+# `intervalLength` days entered, with the weight of the segment covering the interval's first day.
+expandM4Rows <- function(segments, intervalLength) {
+  rows <- list()
+  for (cloneRowId in unique(segments$cloneRowId)) {
+    clone <- segments[segments$cloneRowId == cloneRowId, ]
+    endTime <- max(clone$stopTime)
+    nIntervals <- ceiling(endTime / intervalLength)
+    k <- seq_len(nIntervals) - 1
+    firstDay <- k * intervalLength + 1
+    weight <- vapply(firstDay, function(t) clone$weight[clone$startTime < t & clone$stopTime >= t], numeric(1))
+    last <- k == nIntervals - 1
+    rows[[length(rows) + 1]] <- data.frame(
+      cloneRowId = cloneRowId,
+      personSeqId = clone$personSeqId[1],
+      x = as.integer(clone$strategyId[1] == 1),
+      k = k,
+      weight = weight,
+      y = as.integer(last & any(clone$outcome == 1)),
+      death = as.integer(last & any(clone$competing == 1))
+    )
+  }
+  return(do.call(rbind, rows))
+}
+
+# Young et al. (2020) nonparametric discrete-time hazards and cumulative incidence of one strategy, from
+# clone x interval rows (written from the formulas in the paper): the outcome hazard among rows with no
+# death in the interval, the death hazard among all rows, and
+# CIF(K) = sum_{k < K} h_Y,k (1 - h_D,k) prod_{j < k} (1 - h_Y,j) (1 - h_D,j).
+youngNonparametricCif <- function(rows, nIntervals) {
+  hazardY <- numeric(nIntervals)
+  hazardD <- numeric(nIntervals)
+  for (k in seq_len(nIntervals) - 1) {
+    atRisk <- rows[rows$k == k, ]
+    noDeath <- atRisk[atRisk$death == 0, ]
+    hazardD[k + 1] <- sum(atRisk$weight * atRisk$death) / sum(atRisk$weight)
+    hazardY[k + 1] <- sum(noDeath$weight * noDeath$y) / sum(noDeath$weight)
+  }
+  return(youngCif(hazardY, hazardD))
+}
+
+youngCif <- function(hazardY, hazardD) {
+  survival <- cumprod((1 - hazardY) * (1 - hazardD))
+  return(cumsum(hazardY * (1 - hazardD) * c(1, utils::head(survival, -1))))
+}
+
+# Numerical infinitesimal-jackknife influence of a statistic of the segments: the derivative with
+# respect to multiplying all segment weights of one person by (1 + epsilon), by central differences.
+numericalPersonInfluence <- function(segments, statistic, persons = sort(unique(segments$personSeqId)), epsilon = 1e-5) {
+  influence <- matrix(0, length(persons), length(statistic(segments)))
+  for (i in seq_along(persons)) {
+    up <- segments
+    down <- segments
+    inPerson <- segments$personSeqId == persons[i]
+    up$weight[inPerson] <- up$weight[inPerson] * (1 + epsilon)
+    down$weight[inPerson] <- down$weight[inPerson] * (1 - epsilon)
+    influence[i, ] <- (statistic(up) - statistic(down)) / (2 * epsilon)
+  }
+  return(influence)
+}
