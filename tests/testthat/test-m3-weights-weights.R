@@ -51,29 +51,30 @@ test_that("Weights equal hand-computed values on a six-person fixture", {
   # 2 (t = 2, starts), 3 (t = 1, outcome on day 1), 4 (t = 3, starts), 5 and 6 (t = 3).
   # Breslow: Lambda(1) = 1/6, Lambda(2) = 1/6 + 1/4, Lambda(3) = 5/12 + 1/3.
   # Pooled logistic, daily indicators: h = 1/6, 1/4, 1/3.
+  # Every clone followed after day tau + 1 = 3 is also split at the end of that day (t = 4).
   clones <- buildM3Clones(handPersons(), m3Strategies(graceEnd = 2), "eventsFirst")
   initiate <- handSegments(
-    cloneRowId = c(1, 1, 2, 2, 3, 4, 4, 5, 6),
-    startTime = c(0, 3, 0, 3, 0, 0, 3, 0, 0),
-    stopTime = c(3, 11, 3, 6, 2, 3, 7, 3, 3),
-    weight = c(1, 5 / 3, 1, 5 / 3, 1, 1, 5 / 3, 1, 1),
-    outcome = c(0, 0, 0, 1, 1, 0, 0, 0, 0),
+    cloneRowId = c(1, 1, 1, 2, 2, 2, 3, 4, 4, 4, 5, 6),
+    startTime = c(0, 3, 4, 0, 3, 4, 0, 0, 3, 4, 0, 0),
+    stopTime = c(3, 4, 11, 3, 4, 6, 2, 3, 4, 7, 3, 3),
+    weight = c(1, 5 / 3, 5 / 3, 1, 5 / 3, 5 / 3, 1, 1, 5 / 3, 5 / 3, 1, 1),
+    outcome = c(0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0),
     competing = 0
   )
   deferCox <- handSegments(
-    cloneRowId = c(7, 8, 9, 10, 10, 11, 11, 12, 12),
-    startTime = c(0, 0, 0, 0, 2, 0, 2, 0, 2),
-    stopTime = c(1, 2, 2, 2, 3, 2, 11, 2, 9),
-    weight = exp(c(0, 1 / 6, 1 / 6, 1 / 6, 5 / 12, 1 / 6, 3 / 4, 1 / 6, 3 / 4)),
-    outcome = c(0, 0, 1, 0, 0, 0, 0, 0, 0),
-    competing = c(0, 0, 0, 0, 0, 0, 0, 0, 1)
+    cloneRowId = c(7, 8, 9, 10, 10, 11, 11, 11, 12, 12, 12),
+    startTime = c(0, 0, 0, 0, 2, 0, 2, 4, 0, 2, 4),
+    stopTime = c(1, 2, 2, 2, 3, 2, 4, 11, 2, 4, 9),
+    weight = exp(c(0, 1 / 6, 1 / 6, 1 / 6, 5 / 12, 1 / 6, 3 / 4, 3 / 4, 1 / 6, 3 / 4, 3 / 4)),
+    outcome = c(0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0),
+    competing = c(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
   )
   models <- suppressMessages(fitCensoringModels(clones, data, m3Args("cox", useCovariates = FALSE)))
   weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
   expect_equal(collectSegments(weighted)[, columns], rbind(initiate, deferCox), tolerance = 1e-12)
 
   deferLogistic <- deferCox
-  deferLogistic$weight <- c(1, 6 / 5, 6 / 5, 6 / 5, 8 / 5, 6 / 5, 12 / 5, 6 / 5, 12 / 5)
+  deferLogistic$weight <- c(1, 6 / 5, 6 / 5, 6 / 5, 8 / 5, 6 / 5, 12 / 5, 12 / 5, 6 / 5, 12 / 5, 12 / 5)
   models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic", useCovariates = FALSE)))
   weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
   # Cyclops converges to about 1e-7 relative on the saturated numerator model:
@@ -87,20 +88,20 @@ test_that("Weights equal hand-computed values on a six-person fixture", {
   # clone 7 (initiates on day 0) has no segments, 8 ends on day 0 and 10 on day 1.
   clones <- buildM3Clones(handPersons(), m3Strategies(graceEnd = 2), "deviationFirst")
   initiate <- handSegments(
-    cloneRowId = c(1, 1, 2, 2, 3, 4, 4, 5, 6),
-    startTime = c(0, 2, 0, 2, 0, 0, 2, 0, 0),
-    stopTime = c(2, 11, 2, 6, 2, 2, 7, 2, 2),
-    weight = c(1, 5 / 3, 1, 5 / 3, 1, 1, 5 / 3, 1, 1),
-    outcome = c(0, 0, 0, 1, 1, 0, 0, 0, 0),
+    cloneRowId = c(1, 1, 1, 2, 2, 2, 3, 4, 4, 4, 5, 6),
+    startTime = c(0, 2, 4, 0, 2, 4, 0, 0, 2, 4, 0, 0),
+    stopTime = c(2, 4, 11, 2, 4, 6, 2, 2, 4, 7, 2, 2),
+    weight = c(1, 5 / 3, 5 / 3, 1, 5 / 3, 5 / 3, 1, 1, 5 / 3, 5 / 3, 1, 1),
+    outcome = c(0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0),
     competing = 0
   )
   defer <- handSegments(
-    cloneRowId = c(8, 9, 10, 11, 11, 12, 12),
-    startTime = c(0, 0, 0, 0, 2, 0, 2),
-    stopTime = c(1, 2, 2, 2, 11, 2, 9),
-    weight = exp(c(1 / 6, 11 / 30, 11 / 30, 11 / 30, 7 / 10, 11 / 30, 7 / 10)),
-    outcome = c(0, 1, 0, 0, 0, 0, 0),
-    competing = c(0, 0, 0, 0, 0, 0, 1)
+    cloneRowId = c(8, 9, 10, 11, 11, 11, 12, 12, 12),
+    startTime = c(0, 0, 0, 0, 2, 4, 0, 2, 4),
+    stopTime = c(1, 2, 2, 2, 4, 11, 2, 4, 9),
+    weight = exp(c(1 / 6, 11 / 30, 11 / 30, 11 / 30, 7 / 10, 7 / 10, 11 / 30, 7 / 10, 7 / 10)),
+    outcome = c(0, 1, 0, 0, 0, 0, 0, 0, 0),
+    competing = c(0, 0, 0, 0, 0, 0, 0, 0, 1)
   )
   models <- suppressMessages(fitCensoringModels(clones, data, m3Args("cox", useCovariates = FALSE)))
   weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))

@@ -16,7 +16,8 @@ createBootstrapArgs(
 
 \item{seed}{The random seed.}
 
-\item{ci}{How to compute confidence intervals: \code{"percentile"} or \code{"normal"}.}
+\item{ci}{How to compute confidence intervals: \code{"percentile"} or \code{"normal"}
+(bias-corrected), as the \code{"perc"} and \code{"norm"} types of \code{\link[boot:boot.ci]{boot::boot.ci()}}.}
 
 \item{fixHyperparameters}{Reuse the prior variances selected by cross-validation on the full data
 in every replicate?}
@@ -28,8 +29,8 @@ An object of type \code{BootstrapArgs}.
 Create a parameter object for the bootstrap
 }
 \details{
-The bootstrap resamples persons (so all clones of a person stay together) and re-estimates the
-censoring models and weights in every replicate.
+The bootstrap (\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}) resamples persons (so all clones of a person stay
+together) and re-estimates the censoring models and weights in every replicate.
 }
 \examples{
 args <- createBootstrapArgs(replicates = 500)

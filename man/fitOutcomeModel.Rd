@@ -52,9 +52,14 @@ weighted Breslow estimator when \code{competingEvents = "none"}. When \code{comp
 model of death is also fitted, and risks combine the two cause-specific Breslow hazards by
 Aalen-Johansen.
 \item \code{"logistic"}: weighted pooled logistic regression (Cyclops \code{lr}) on one row per clone and interval
-of \code{timeBasis$intervalLength} days that the clone enters, with the weight that applies on the
-clone's first day in the interval, and covariates intercept, target indicator, time basis, and (if
-\code{armByTimeInteraction}) their interaction. Risks are \code{1 - prod(1 - h)} without competing events;
+of \code{timeBasis$intervalLength} days that the clone enters (intervals counted from \code{riskStart}),
+with the weight that applies on the clone's last day in the interval (the weight of its last
+segment in the interval), and covariates intercept, target indicator, time basis, and (if
+\code{armByTimeInteraction}) their interaction. The weighted clones must be split on the same interval
+grid, by \code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}. With daily intervals (the
+default) every row carries the exact weight of its day, so a saturated time basis per strategy
+gives the weighted Kaplan-Meier or Aalen-Johansen risks. Risks are \code{1 - prod(1 - h)} without
+competing events;
 with competing death, the outcome model is fitted to rows with no death in the interval, a death
 model to all rows, and the risk is that of Young et al. (2020). The model is fitted to the
 weighted numbers of rows with and without an event per strategy and interval, which have the
@@ -76,8 +81,8 @@ standard errors are infinitesimal-jackknife standard errors (for \code{"cox"}, i
 of the hazard ratio and the baseline hazards); for \code{"logistic"} they use the delta method with a
 numerical Jacobian. With \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the
 inverse of the weighted information; the \code{"cox"} risks then have no standard errors, and \code{"km"} is
-not supported. \code{varianceEstimator = "bootstrap"} is computed by the bootstrap driver, not by this
-function.
+not supported. \code{varianceEstimator = "bootstrap"} is computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by
+this function.
 }
 \examples{
 \dontrun{

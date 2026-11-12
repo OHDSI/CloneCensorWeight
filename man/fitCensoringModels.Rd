@@ -81,11 +81,13 @@ the Breslow cumulative hazard of a model without covariates (Cox), or the pooled
 with the time basis only. If the pooled logistic numerator model fails and \code{stopOnError = FALSE},
 an intercept-only numerator is used and the error is recorded in the diagnostics.
 
-The Cox model treats initiation days as continuous times with Breslow ties, so
-\verb{exp(-Lambda0(d + 1) exp(X beta))} is not the probability of no initiation on days \verb{0..d} when
-the daily probability of initiating is large (for example \code{exp(-0.3) = 0.74} against \code{1 - 0.3 = 0.7} for one day). The resulting weights do not reproduce the population, and weighted risks can
-be biased when initiation is confounded. Prefer \code{hazardModelType = "logistic"} for short grace
-periods with many initiations per day.
+The default, \code{hazardModelType = "logistic"} with a daily indicator basis, is the exact
+discrete-time hazard of initiation. The Cox model treats initiation days as continuous times with
+Breslow ties, so \verb{exp(-Lambda0(d + 1) exp(X beta))} is not the probability of no initiation on days
+\verb{0..d} when the daily probability of initiating is large (for example \code{exp(-0.3) = 0.74} against
+\code{1 - 0.3 = 0.7} for one day, as when many persons start on day 0). The resulting weights do not
+reproduce the population, and weighted risks can be biased when initiation is confounded. The Cox
+model is meant for long horizons (for example \code{"neverInitiate"}) with few initiations per day.
 
 With \code{useCovariates = FALSE} the models have only an intercept and time, so they equal their
 numerator models.

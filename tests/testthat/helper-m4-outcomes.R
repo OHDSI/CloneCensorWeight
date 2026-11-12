@@ -155,18 +155,46 @@ m4PersonWeights <- function(segments) {
   ))
 }
 
-# Builds the weighted CcwClones object of a fixture (the caller closes it).
-createM4WeightedClones <- function(fixture) {
-  ccwClones <- .createCcwClones(fixture$persons, fixture$clones, fixture$metaData)
-  weightsMetaData <- list(stabilized = FALSE, truncation = createWeightTruncation("none")$toList())
-  return(.addSegments(ccwClones, fixture$segments, fixture$personWeights, weightsMetaData))
+# Splits segments (sorted by cloneRowId and startTime) at every multiple of `intervalLength` on the t
+# scale, keeping their weights, as computeCensoringWeights(outcomeTimeBasis = ) does (Phase1Contracts
+# section 9, amendment 5). The outcome and competing-event flags stay on the last piece.
+m4SplitOnGrid <- function(segments, intervalLength) {
+  # Grid points m L strictly inside (startTime, stopTime]:
+  first <- floor(segments$startTime / intervalLength)
+  nPieces <- pmax(0, ceiling(segments$stopTime / intervalLength) - 1 - first) + 1
+  index <- rep(seq_len(nrow(segments)), nPieces)
+  piece <- sequence(nPieces) - 1
+  last <- piece == nPieces[index] - 1
+  pieces <- segments[index, ]
+  pieces$startTime <- ifelse(piece == 0, segments$startTime[index], (first[index] + piece) * intervalLength)
+  pieces$stopTime <- ifelse(last, segments$stopTime[index], (first[index] + piece + 1) * intervalLength)
+  pieces$outcome <- as.integer(pieces$outcome * last)
+  pieces$competing <- as.integer(pieces$competing * last)
+  pieces$segmentId <- seq_len(nrow(pieces))
+  rownames(pieces) <- NULL
+  return(pieces)
 }
 
-# Fits the outcome model on a fixture (closing the Andromeda object).
+# Builds the weighted CcwClones object of a fixture (the caller closes it). With `cutIntervalLength`,
+# the segments are split on that interval grid and the weights metaData records it, as for clones
+# weighted with computeCensoringWeights(outcomeTimeBasis = createTimeBasis(intervalLength = )).
+createM4WeightedClones <- function(fixture, cutIntervalLength = NA_integer_) {
+  ccwClones <- .createCcwClones(fixture$persons, fixture$clones, fixture$metaData)
+  weightsMetaData <- list(stabilized = FALSE, truncation = createWeightTruncation("none")$toList(), cutIntervalLength = as.integer(cutIntervalLength))
+  segments <- fixture$segments
+  if (!is.na(cutIntervalLength)) {
+    segments <- m4SplitOnGrid(segments, cutIntervalLength)
+  }
+  return(.addSegments(ccwClones, segments, fixture$personWeights, weightsMetaData))
+}
+
+# Fits the outcome model on a fixture (closing the Andromeda object). The pooled logistic model gets
+# segments split on its interval grid.
 fitM4 <- function(fixture, ...) {
-  weightedClones <- createM4WeightedClones(fixture)
-  on.exit(close(weightedClones))
   args <- createFitOutcomeModelArgs(..., control = m4Control)
+  cutIntervalLength <- if (args$modelType == "logistic") args$timeBasis$intervalLength else NA_integer_
+  weightedClones <- createM4WeightedClones(fixture, cutIntervalLength)
+  on.exit(close(weightedClones))
   return(suppressMessages(fitOutcomeModel(weightedClones, args)))
 }
 
@@ -199,7 +227,8 @@ personInfluence <- function(rowInfluence, personSeqId, allPersons) {
 }
 
 # Clone x interval rows built independently of the package: one row per clone and interval of
-# `intervalLength` days entered, with the weight of the segment covering the interval's first day.
+# `intervalLength` days entered, with the weight of the segment covering the clone's last day in the
+# interval (Phase1Contracts section 9, amendment 6).
 expandM4Rows <- function(segments, intervalLength) {
   rows <- list()
   for (cloneRowId in unique(segments$cloneRowId)) {
@@ -207,8 +236,8 @@ expandM4Rows <- function(segments, intervalLength) {
     endTime <- max(clone$stopTime)
     nIntervals <- ceiling(endTime / intervalLength)
     k <- seq_len(nIntervals) - 1
-    firstDay <- k * intervalLength + 1
-    weight <- vapply(firstDay, function(t) clone$weight[clone$startTime < t & clone$stopTime >= t], numeric(1))
+    lastDay <- pmin((k + 1) * intervalLength, endTime)
+    weight <- vapply(lastDay, function(t) clone$weight[clone$startTime < t & clone$stopTime >= t], numeric(1))
     last <- k == nIntervals - 1
     rows[[length(rows) + 1]] <- data.frame(
       cloneRowId = cloneRowId,

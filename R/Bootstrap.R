@@ -1,0 +1,438 @@
+# Copyright 2026 Observational Health Data Sciences and Informatics
+#
+# This file is part of CloneCensorWeight
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#' Bootstrap a clone-censor-weight analysis
+#'
+#' @description
+#' Estimates the outcome model's estimates with a person-level nonparametric bootstrap that repeats the
+#' whole analysis in every replicate: the study population, the clones, the censoring models, the
+#' weights and the outcome model. The bootstrap standard errors and confidence intervals therefore
+#' include the estimation of the censoring weights, which the robust variance of [fitOutcomeModel()]
+#' ignores.
+#'
+#' @details
+#' The persons (`personSeqId`) of the `cohorts` table of `cloneCensorWeightData` are resampled with
+#' replacement: each replicate draws multinomial counts (`n` draws among the `n` persons). All counts
+#' are drawn with the seed of `fitOutcomeModelArgs$bootstrapArgs` before any model is fitted. In each
+#' replicate a new [CloneCensorWeightData] holds each drawn person as many times as drawn, every copy
+#' with its own row IDs and `personSeqId`, so copies are distinct persons in every step of the
+#' analysis. With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
+#' models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
+#' every replicate, without cross-validation. The pooled logistic outcome model gets clones split on
+#' its interval grid (`computeCensoringWeights(outcomeTimeBasis = )`).
+#'
+#' A replicate in which the analysis fails (for example because a censoring model cannot be fitted)
+#' gets `NA` estimates, with a warning, and replicates with a missing or infinite estimate are left out
+#' of that estimate's standard error and limits, as in [boot::boot.ci()]. Ratios (hazard, odds and risk
+#' ratios) are summarized on the log scale. The standard error is the standard deviation of the
+#' replicates. The 95% limits follow [boot::boot.ci()]: with `bootstrapArgs$ci = "percentile"` they are
+#' its `"perc"` limits, the (R + 1) 0.025 and (R + 1) 0.975 order statistics of the R replicates,
+#' interpolated on the normal quantile scale (the smallest or largest replicate when R < 39); with
+#' `"normal"` its `"norm"` limits, the bias-corrected `2 t0 - mean(t) -+ 1.96 sd(t)`. The p-value tests
+#' no effect with the estimate divided by its bootstrap standard error.
+#'
+#' @param cloneCensorWeightData     An object of type [CloneCensorWeightData].
+#' @param outcomeId                 The ID of the outcome.
+#' @param createStudyPopulationArgs An object of type `CreateStudyPopulationArgs` as created using
+#'                                  [CohortMethod::createCreateStudyPopulationArgs()].
+#' @param createClonesArgs          An object of type `CreateClonesArgs` as created using
+#'                                  [createCreateClonesArgs()].
+#' @param fitCensoringModelsArgs    An object of type `FitCensoringModelsArgs` as created using
+#'                                  [createFitCensoringModelsArgs()].
+#' @param computeWeightsArgs        An object of type `ComputeWeightsArgs` as created using
+#'                                  [createComputeWeightsArgs()].
+#' @param fitOutcomeModelArgs       An object of type `FitOutcomeModelArgs` as created using
+#'                                  [createFitOutcomeModelArgs()]. Its `bootstrapArgs` set the number of
+#'                                  replicates, the seed, the type of interval, and whether the
+#'                                  hyperparameters are fixed. Its `varianceEstimator` is not used.
+#' @param censoringModels           The censoring models of the full data, as created by
+#'                                  [fitCensoringModels()] with `fitCensoringModelsArgs` on the clones of
+#'                                  this analysis, or `NULL` to fit them.
+#' @param counts                    For testing: `NULL`, or a matrix of non-negative integer counts with
+#'                                  one row per person (in increasing order of `personSeqId`) and one
+#'                                  column per replicate, used instead of drawing counts. It sets the
+#'                                  number of replicates.
+#' @param returnCounts              Return the counts of the replicates?
+#'
+#' @return
+#' An object of class `CcwOutcomeModel` (see [fitOutcomeModel()]) with `varianceEstimator =
+#' "bootstrap"`: the full-data estimates with their bootstrap standard errors, limits and p-values,
+#' the full-data coefficients with their bootstrap covariance (`vcov`), the counts of the full-data
+#' clones, and `metaData$bootstrap` (the settings, the number of replicates, the number of failed
+#' replicates, and the fixed prior variances). It also holds `replicates`, a matrix with one row per
+#' replicate and one column per estimand of the estimates, and, with `returnCounts = TRUE`,
+#' `bootstrapCounts`, the counts (persons by replicates, with the `personSeqId` as row names).
+#'
+#' @references
+#' Davison AC, Hinkley DV. Bootstrap Methods and Their Application. Cambridge University Press; 1997.
+#'
+#' @examples
+#' \dontrun{
+#' data <- simulateCloneCensorWeightData(n = 1000, seed = 1)
+#' result <- bootstrapCcwAnalysis(
+#'   cloneCensorWeightData = data,
+#'   outcomeId = 3,
+#'   createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+#'     riskWindowEnd = 365,
+#'     endAnchor = "cohort start"
+#'   ),
+#'   createClonesArgs = createCreateClonesArgs(
+#'     strategies = list(
+#'       createTreatmentStrategy(1, "Initiate within 30 days", "initiateWithin", graceEnd = 30),
+#'       createTreatmentStrategy(2, "Not within 30 days", "notInitiateWithin", graceEnd = 30)
+#'     )
+#'   ),
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+#'   computeWeightsArgs = createComputeWeightsArgs(),
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(
+#'     modelType = "km",
+#'     horizons = 365,
+#'     bootstrapArgs = createBootstrapArgs(replicates = 200)
+#'   )
+#' )
+#' result
+#' }
+#'
+#' @export
+bootstrapCcwAnalysis <- function(cloneCensorWeightData,
+                                 outcomeId,
+                                 createStudyPopulationArgs,
+                                 createClonesArgs,
+                                 fitCensoringModelsArgs,
+                                 computeWeightsArgs,
+                                 fitOutcomeModelArgs,
+                                 censoringModels = NULL,
+                                 counts = NULL,
+                                 returnCounts = FALSE) {
+  errorMessages <- checkmate::makeAssertCollection()
+  .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
+  checkmate::assertNumber(outcomeId, add = errorMessages)
+  checkmate::assertR6(createStudyPopulationArgs, "CreateStudyPopulationArgs", add = errorMessages)
+  checkmate::assertR6(createClonesArgs, "CreateClonesArgs", add = errorMessages)
+  checkmate::assertR6(fitCensoringModelsArgs, "FitCensoringModelsArgs", add = errorMessages)
+  checkmate::assertR6(computeWeightsArgs, "ComputeWeightsArgs", add = errorMessages)
+  # CohortMethod has an R6 class with the same name; require members only this package's class has.
+  checkmate::assertR6(fitOutcomeModelArgs, "FitOutcomeModelArgs", public = c("horizons", "bootstrapArgs"), add = errorMessages)
+  checkmate::assertClass(censoringModels, "CcwCensoringModels", null.ok = TRUE, add = errorMessages)
+  checkmate::assertMatrix(counts, min.cols = 1, null.ok = TRUE, add = errorMessages)
+  if (!is.null(counts)) {
+    checkmate::assertIntegerish(counts, lower = 0, any.missing = FALSE, add = errorMessages)
+  }
+  checkmate::assertFlag(returnCounts, add = errorMessages)
+  checkmate::reportAssertions(collection = errorMessages)
+  bootstrapArgs <- fitOutcomeModelArgs$bootstrapArgs
+
+  personSeqIds <- cloneCensorWeightData$cohorts |>
+    dplyr::distinct(.data$personSeqId) |>
+    dplyr::arrange(.data$personSeqId) |>
+    pull()
+  nPersons <- length(personSeqIds)
+  if (is.null(counts)) {
+    # Drawn before any model is fitted: model fitting can use the random number generator.
+    set.seed(bootstrapArgs$seed)
+    counts <- stats::rmultinom(bootstrapArgs$replicates, size = nPersons, prob = rep(1, nPersons))
+  } else {
+    if (nrow(counts) != nPersons) {
+      stop(sprintf("counts must have one row per person (%d), but has %d", nPersons, nrow(counts)))
+    }
+    if (!is.null(rownames(counts)) && !identical(rownames(counts), as.character(personSeqIds))) {
+      stop("The row names of counts must be the personSeqIds in increasing order")
+    }
+  }
+  storage.mode(counts) <- "integer"
+  dimnames(counts) <- list(as.character(personSeqIds), NULL)
+  nReplicates <- ncol(counts)
+
+  start <- Sys.time()
+  message("Fitting the analysis on the full data")
+  full <- .runBootstrapAnalysis(
+    cloneCensorWeightData = cloneCensorWeightData,
+    outcomeId = outcomeId,
+    createStudyPopulationArgs = createStudyPopulationArgs,
+    createClonesArgs = createClonesArgs,
+    fitCensoringModelsArgs = fitCensoringModelsArgs,
+    computeWeightsArgs = computeWeightsArgs,
+    fitOutcomeModelArgs = fitOutcomeModelArgs,
+    censoringModels = censoringModels
+  )
+  fixedPriorVariances <- NULL
+  if (bootstrapArgs$fixHyperparameters) {
+    variances <- lapply(full$censoringModels, function(model) model$priorVariance)
+    names(variances) <- as.character(seq_along(variances))
+    variances <- variances[!vapply(variances, function(variance) is.null(variance) || is.na(variance), logical(1))]
+    if (length(variances) > 0) {
+      fixedPriorVariances <- variances
+    }
+  }
+
+  estimands <- full$estimates$estimand
+  replicates <- matrix(NA_real_, nReplicates, length(estimands), dimnames = list(NULL, estimands))
+  coefficientReplicates <- NULL
+  if (!is.null(full$coefficients)) {
+    coefficientReplicates <- matrix(NA_real_, nReplicates, length(full$coefficients), dimnames = list(NULL, names(full$coefficients)))
+  }
+  failures <- character(0)
+  for (replicate in seq_len(nReplicates)) {
+    message(sprintf("Bootstrap replicate %d of %d", replicate, nReplicates))
+    resampled <- .resampleCloneCensorWeightData(cloneCensorWeightData, personSeqIds, counts[, replicate])
+    result <- tryCatch(
+      suppressMessages(.runBootstrapAnalysis(
+        cloneCensorWeightData = resampled,
+        outcomeId = outcomeId,
+        createStudyPopulationArgs = createStudyPopulationArgs,
+        createClonesArgs = createClonesArgs,
+        fitCensoringModelsArgs = fitCensoringModelsArgs,
+        computeWeightsArgs = computeWeightsArgs,
+        fitOutcomeModelArgs = fitOutcomeModelArgs,
+        fixedPriorVariances = fixedPriorVariances
+      )),
+      error = function(e) conditionMessage(e)
+    )
+    close(resampled)
+    if (is.character(result)) {
+      failures <- c(failures, sprintf("replicate %d: %s", replicate, result))
+      next
+    }
+    replicates[replicate, ] <- result$estimates$estimate[match(estimands, result$estimates$estimand)]
+    if (!is.null(coefficientReplicates)) {
+      coefficientReplicates[replicate, ] <- result$coefficients[colnames(coefficientReplicates)]
+    }
+  }
+  if (length(failures) > 0) {
+    warning(sprintf(
+      "The analysis failed in %d of %d bootstrap replicates, which are left out: %s",
+      length(failures), nReplicates, paste(utils::head(failures, 3), collapse = "; ")
+    ))
+  }
+
+  vcov <- NULL
+  if (!is.null(coefficientReplicates)) {
+    vcov <- stats::cov(coefficientReplicates, use = "pairwise.complete.obs")
+  }
+  metaData <- full$metaData
+  result <- list(
+    modelType = fitOutcomeModelArgs$modelType,
+    varianceEstimator = "bootstrap",
+    estimates = .bootstrapEstimates(full$estimates, replicates, bootstrapArgs$ci),
+    coefficients = full$coefficients,
+    vcov = vcov,
+    counts = full$counts,
+    metaData = list(
+      strategies = metaData$strategies,
+      outcomeId = metaData$outcomeId,
+      targetId = metaData$targetId,
+      competingEvents = metaData$competingEvents,
+      riskStart = full$riskStart,
+      args = fitOutcomeModelArgs$toList(),
+      bootstrap = list(
+        replicates = nReplicates,
+        failedReplicates = length(failures),
+        seed = bootstrapArgs$seed,
+        ci = bootstrapArgs$ci,
+        fixHyperparameters = bootstrapArgs$fixHyperparameters,
+        fixedPriorVariances = fixedPriorVariances
+      )
+    ),
+    replicates = replicates
+  )
+  if (returnCounts) {
+    result$bootstrapCounts <- counts
+  }
+  class(result) <- "CcwOutcomeModel"
+  delta <- Sys.time() - start
+  message(paste("Bootstrapping the analysis took", signif(delta, 3), attr(delta, "units")))
+  return(result)
+}
+
+# The analysis of one (full or resampled) data set, up to the point estimates of the outcome model.
+.runBootstrapAnalysis <- function(cloneCensorWeightData,
+                                  outcomeId,
+                                  createStudyPopulationArgs,
+                                  createClonesArgs,
+                                  fitCensoringModelsArgs,
+                                  computeWeightsArgs,
+                                  fitOutcomeModelArgs,
+                                  censoringModels = NULL,
+                                  fixedPriorVariances = NULL) {
+  population <- createStudyPopulation(
+    cloneCensorWeightData = cloneCensorWeightData,
+    outcomeId = outcomeId,
+    createStudyPopulationArgs = createStudyPopulationArgs
+  )
+  clones <- createClones(population, cloneCensorWeightData, createClonesArgs)
+  on.exit(close(clones))
+  if (is.null(censoringModels)) {
+    censoringModels <- fitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = fixedPriorVariances)
+  }
+  outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
+  weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)
+  point <- .fitOutcomeModelPoint(weightedClones, fitOutcomeModelArgs)
+  return(list(
+    estimates = point$estimates,
+    coefficients = point$coefficients,
+    censoringModels = censoringModels,
+    counts = .getOutcomeCounts(weightedClones),
+    metaData = attr(weightedClones, "metaData"),
+    riskStart = createStudyPopulationArgs$riskWindowStart
+  ))
+}
+
+# A new CloneCensorWeightData in which the person with personSeqIds[i] appears counts[i] times, each
+# copy with new personSeqIds (numbered by person and copy) and row IDs (numbered by copy and source
+# row), and the outcomes, treatments and covariates of its rows. The caller closes it.
+.resampleCloneCensorWeightData <- function(cloneCensorWeightData, personSeqIds, counts) {
+  drawn <- counts > 0
+  resampled <- Andromeda::andromeda(
+    copies = tibble(personSeqId = as.integer(personSeqIds[drawn]), copies = as.integer(counts[drawn]))
+  )
+  for (table in c("cohorts", "outcomes", "treatments", "covariates")) {
+    resampled[[paste0("source", table)]] <- cloneCensorWeightData[[table]]
+  }
+  .andromedaExecute(resampled, "
+    CREATE TABLE personCopies AS
+    SELECT personSeqId,
+      copy,
+      CAST(ROW_NUMBER() OVER (ORDER BY personSeqId, copy) AS INTEGER) AS newPersonSeqId
+    FROM (
+      SELECT personSeqId,
+        UNNEST(range(copies)) AS copy
+      FROM copies
+    );")
+  .andromedaExecute(resampled, "
+    CREATE TABLE rowIdMap AS
+    SELECT sourceCohorts.rowId,
+      personCopies.newPersonSeqId,
+      CAST(ROW_NUMBER() OVER (ORDER BY personCopies.newPersonSeqId, sourceCohorts.rowId) AS INTEGER) AS newRowId
+    FROM sourceCohorts
+    INNER JOIN personCopies
+      ON sourceCohorts.personSeqId = personCopies.personSeqId;")
+  .andromedaExecute(resampled, "
+    CREATE TABLE cohorts AS
+    SELECT rowIdMap.newRowId AS rowId,
+      rowIdMap.newPersonSeqId AS personSeqId,
+      sourceCohorts.* EXCLUDE (rowId, personSeqId)
+    FROM sourceCohorts
+    INNER JOIN rowIdMap
+      ON sourceCohorts.rowId = rowIdMap.rowId
+    ORDER BY rowIdMap.newRowId;")
+  for (table in c("outcomes", "treatments", "covariates")) {
+    .andromedaExecute(resampled, sprintf("
+      CREATE TABLE %1$s AS
+      SELECT rowIdMap.newRowId AS rowId,
+        source%1$s.* EXCLUDE (rowId)
+      FROM source%1$s
+      INNER JOIN rowIdMap
+        ON source%1$s.rowId = rowIdMap.rowId
+      ORDER BY rowIdMap.newRowId;", table))
+  }
+  for (table in c("copies", "personCopies", "rowIdMap", "sourcecohorts", "sourceoutcomes", "sourcetreatments", "sourcecovariates")) {
+    .andromedaExecute(resampled, sprintf("DROP TABLE %s;", table))
+  }
+  resampled$covariateRef <- cloneCensorWeightData$covariateRef
+  resampled$analysisRef <- cloneCensorWeightData$analysisRef
+
+  metaData <- attr(cloneCensorWeightData, "metaData")
+  metaData$populationSize <- .andromedaSql(resampled, "SELECT COUNT(*) AS n FROM cohorts;")$n
+  attr(resampled, "metaData") <- metaData
+  class(resampled) <- "CloneCensorWeightData"
+  attr(class(resampled), "package") <- "CloneCensorWeight"
+  return(resampled)
+}
+
+# The estimates table of the bootstrap: the full-data estimates `t0` (estimand, estimate, logEstimate)
+# with the standard errors, limits and p-values from the replicates (one column per estimand). Ratios
+# are summarized on the log scale.
+.bootstrapEstimates <- function(t0, replicates, ci) {
+  rows <- list()
+  for (i in seq_len(nrow(t0))) {
+    estimand <- t0$estimand[i]
+    estimate <- t0$estimate[i]
+    t <- replicates[, estimand]
+    if (grepl("^(hr|or|rr_.*)$", estimand)) {
+      logEstimate <- log(estimate)
+      logT <- log(t)
+      seLogEstimate <- .bootstrapSe(logT)
+      limits <- exp(.bootstrapLimits(logEstimate, logT, ci))
+      rows[[i]] <- .estimateRow(
+        estimand = estimand,
+        estimate = estimate,
+        logEstimate = logEstimate,
+        seLogEstimate = seLogEstimate,
+        lb95 = limits[1],
+        ub95 = limits[2],
+        p = 2 * stats::pnorm(-abs(logEstimate / seLogEstimate))
+      )
+    } else {
+      se <- .bootstrapSe(t)
+      limits <- .bootstrapLimits(estimate, t, ci)
+      isDifference <- grepl("^(rd|rmst|rmtl)_[0-9]+$", estimand)
+      rows[[i]] <- .estimateRow(
+        estimand = estimand,
+        estimate = estimate,
+        se = se,
+        lb95 = limits[1],
+        ub95 = limits[2],
+        p = if (isDifference) 2 * stats::pnorm(-abs(estimate / se)) else NA_real_
+      )
+    }
+  }
+  return(dplyr::bind_rows(rows))
+}
+
+.bootstrapSe <- function(t) {
+  t <- t[is.finite(t)]
+  if (length(t) < 2) {
+    return(NA_real_)
+  }
+  return(stats::sd(t))
+}
+
+# The 95% limits of boot::boot.ci() from the full-data estimate t0 and the replicates t (non-finite
+# replicates are left out). "percentile" (type "perc"): the (R + 1) alpha order statistics, alpha =
+# 0.025 and 0.975, interpolated on the normal quantile scale when (R + 1) alpha is not an integer
+# (Davison and Hinkley 1997, equation 5.8), and the smallest or largest replicate when (R + 1) alpha is
+# below 1 or above R. "normal" (type "norm"): t0 - bias -+ z sd(t), with bias = mean(t) - t0.
+.bootstrapLimits <- function(t0, t, ci, conf = 0.95) {
+  t <- t[is.finite(t)]
+  nReplicates <- length(t)
+  if (nReplicates < 2 || !is.finite(t0)) {
+    return(c(NA_real_, NA_real_))
+  }
+  if (ci == "normal") {
+    bias <- mean(t) - t0
+    margin <- stats::sd(t) * stats::qnorm((1 + conf) / 2)
+    return(c(t0 - bias - margin, t0 - bias + margin))
+  }
+  alpha <- (1 + c(-conf, conf)) / 2
+  rank <- (nReplicates + 1) * alpha
+  k <- trunc(rank)
+  sorted <- sort(t)
+  limits <- numeric(2)
+  for (i in 1:2) {
+    if (k[i] == 0) {
+      limits[i] <- sorted[1]
+    } else if (k[i] >= nReplicates) {
+      limits[i] <- sorted[nReplicates]
+    } else if (k[i] == rank[i]) {
+      limits[i] <- sorted[k[i]]
+    } else {
+      # Interpolation between the k-th and (k + 1)-th order statistics on the normal quantile scale:
+      z <- stats::qnorm(c(alpha[i], k[i] / (nReplicates + 1), (k[i] + 1) / (nReplicates + 1)))
+      limits[i] <- sorted[k[i]] + (z[1] - z[2]) / (z[3] - z[2]) * (sorted[k[i] + 1] - sorted[k[i]])
+    }
+  }
+  return(limits)
+}

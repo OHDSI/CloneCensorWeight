@@ -10,7 +10,8 @@ computeTrueRisks(
   horizons,
   graceRegime = "binaryAtG",
   nTruth = 1e+06,
-  seed = NULL
+  seed = NULL,
+  riskStart = 0
 )
 }
 \arguments{
@@ -22,8 +23,8 @@ computeTrueRisks(
 \code{graceStart = 0} and no \code{prohibitedTreatments}. Their position in the list is the
 \code{strategyId} of the result.}
 
-\item{horizons}{The days (since index) at which to compute the risks, from 0 to \code{maxDays}. The
-risk at day h includes outcomes on day h.}
+\item{horizons}{The days (since index) at which to compute the risks, from \code{riskStart} to
+\code{maxDays}. The risk at day h includes outcomes on day h.}
 
 \item{graceRegime}{How the \code{initiateWithin} strategies are defined: \code{"binaryAtG"} or \code{"naturalGrace"}
 (see details). Other strategy types ignore it.}
@@ -31,6 +32,10 @@ risk at day h includes outcomes on day h.}
 \item{nTruth}{The number of persons to simulate.}
 
 \item{seed}{The seed for the random number generator, or \code{NULL} to leave it as it is.}
+
+\item{riskStart}{The first day of the risk window of the analysis (\code{riskWindowStart}): the risks
+are those of outcomes from day \code{riskStart} on, among persons with no outcome or
+death before it (see details).}
 }
 \value{
 A tibble with columns \code{strategyId} (the position in \code{strategies}), \code{day} (the horizon), and \code{risk}.
@@ -65,14 +70,17 @@ Under DGP \code{"a"}, with G equal to the DGP's \code{graceEnd}, the two grace r
 Under DGP \code{"b"}, the binary-at-G regime moves the start of persons who would not start by G to
 earlier days, where the effect has had longer to build up.
 
-The risks count outcomes from day 0 (the index date), so they are the estimands of analyses with
-\code{riskStart = 0}. An analysis with \code{riskStart = 1} (with CohortMethod's default removal of persons
-with the outcome before \code{riskStart}, and of persons with no day at risk) estimates the risk on days
-1 to h among persons with no outcome or death on day 0, which is \code{(risk(h) - risk(0)) / (1 - p0)},
-where \code{risk(0)} is the risk at horizon 0 and \code{p0} the probability of the outcome or death on day 0,
-the mean over X of \code{1 - (1 - hY(0 | X)) (1 - hD(0 | X))}, with \code{hY} and \code{hD} the untreated daily
-outcome and death hazards. This holds for every strategy, because the treatment changes no hazard
-on day 0 under any strategy.
+With \code{riskStart = 0} the risks count outcomes from day 0 (the index date), the estimands of analyses
+with \code{riskStart = 0}. An analysis with \code{riskStart = r > 0} (with CohortMethod's default removal of
+persons with the outcome before \code{riskStart}, and with the clones of persons who die before
+\code{riskStart} dropped) estimates the risk on days r to h among persons with no outcome or death on days
+0 to r - 1. With \code{riskStart = r}, the risk at horizon h is therefore
+\code{(risk(h) - risk(r - 1)) / (1 - p)}, where \code{risk()} is the risk counted from day 0 and \code{p} the
+probability of the outcome or death on days 0 to r - 1, the mean over X of
+\code{1 - ((1 - hY(X)) (1 - hD(X)))^r}, with \code{hY} and \code{hD} the untreated daily outcome and death hazards.
+This holds when the treatment changes no hazard before day r under any strategy: always for
+\code{riskStart = 1}, and for \code{riskStart <= graceEnd + 1} under DGP \code{"a"}. Other values stop with an
+error.
 }
 \examples{
 data <- simulateCloneCensorWeightData(n = 100, seed = 1)

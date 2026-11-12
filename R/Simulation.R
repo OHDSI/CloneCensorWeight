@@ -470,14 +470,17 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #' Under DGP `"b"`, the binary-at-G regime moves the start of persons who would not start by G to
 #' earlier days, where the effect has had longer to build up.
 #'
-#' The risks count outcomes from day 0 (the index date), so they are the estimands of analyses with
-#' `riskStart = 0`. An analysis with `riskStart = 1` (with CohortMethod's default removal of persons
-#' with the outcome before `riskStart`, and of persons with no day at risk) estimates the risk on days
-#' 1 to h among persons with no outcome or death on day 0, which is `(risk(h) - risk(0)) / (1 - p0)`,
-#' where `risk(0)` is the risk at horizon 0 and `p0` the probability of the outcome or death on day 0,
-#' the mean over X of `1 - (1 - hY(0 | X)) (1 - hD(0 | X))`, with `hY` and `hD` the untreated daily
-#' outcome and death hazards. This holds for every strategy, because the treatment changes no hazard
-#' on day 0 under any strategy.
+#' With `riskStart = 0` the risks count outcomes from day 0 (the index date), the estimands of analyses
+#' with `riskStart = 0`. An analysis with `riskStart = r > 0` (with CohortMethod's default removal of
+#' persons with the outcome before `riskStart`, and with the clones of persons who die before
+#' `riskStart` dropped) estimates the risk on days r to h among persons with no outcome or death on days
+#' 0 to r - 1. With `riskStart = r`, the risk at horizon h is therefore
+#' `(risk(h) - risk(r - 1)) / (1 - p)`, where `risk()` is the risk counted from day 0 and `p` the
+#' probability of the outcome or death on days 0 to r - 1, the mean over X of
+#' `1 - ((1 - hY(X)) (1 - hD(X)))^r`, with `hY` and `hD` the untreated daily outcome and death hazards.
+#' This holds when the treatment changes no hazard before day r under any strategy: always for
+#' `riskStart = 1`, and for `riskStart <= graceEnd + 1` under DGP `"a"`. Other values stop with an
+#' error.
 #'
 #' @param settings    The simulation settings: `metaData$simulationSettings` of an object created by
 #'                    [simulateCloneCensorWeightData()].
@@ -485,12 +488,15 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #'                    [createTreatmentStrategy()], all referring to the `"treatment"` role, with
 #'                    `graceStart = 0` and no `prohibitedTreatments`. Their position in the list is the
 #'                    `strategyId` of the result.
-#' @param horizons    The days (since index) at which to compute the risks, from 0 to `maxDays`. The
-#'                    risk at day h includes outcomes on day h.
+#' @param horizons    The days (since index) at which to compute the risks, from `riskStart` to
+#'                    `maxDays`. The risk at day h includes outcomes on day h.
 #' @param graceRegime How the `initiateWithin` strategies are defined: `"binaryAtG"` or `"naturalGrace"`
 #'                    (see details). Other strategy types ignore it.
 #' @param nTruth      The number of persons to simulate.
 #' @param seed        The seed for the random number generator, or `NULL` to leave it as it is.
+#' @param riskStart   The first day of the risk window of the analysis (`riskWindowStart`): the risks
+#'                    are those of outcomes from day `riskStart` on, among persons with no outcome or
+#'                    death before it (see details).
 #'
 #' @return
 #' A tibble with columns `strategyId` (the position in `strategies`), `day` (the horizon), and `risk`.
@@ -511,7 +517,8 @@ computeTrueRisks <- function(settings,
                              horizons,
                              graceRegime = "binaryAtG",
                              nTruth = 1e6,
-                             seed = NULL) {
+                             seed = NULL,
+                             riskStart = 0) {
   .assertSimulationSettings(settings)
   errorMessages <- checkmate::makeAssertCollection()
   checkmate::assertList(strategies, min.len = 1, add = errorMessages)
@@ -522,7 +529,19 @@ computeTrueRisks <- function(settings,
   checkmate::assertChoice(graceRegime, c("binaryAtG", "naturalGrace"), add = errorMessages)
   checkmate::assertCount(nTruth, positive = TRUE, add = errorMessages)
   checkmate::assertInt(seed, null.ok = TRUE, add = errorMessages)
+  checkmate::assertInt(riskStart, lower = 0, upper = settings$maxDays, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
+  if (any(horizons < riskStart)) {
+    stop("Horizons must be on or after riskStart")
+  }
+  # Day of the first hazard the treatment can change, under any strategy:
+  firstTreatedDay <- if (settings$dgp == "a") settings$graceEnd + 1 else 1
+  if (riskStart > firstTreatedDay) {
+    stop(sprintf(
+      "riskStart = %d is not supported: the treatment can change hazards from day %d under DGP '%s', so persons at risk on day riskStart differ between strategies",
+      riskStart, firstTreatedDay, settings$dgp
+    ))
+  }
   for (strategy in strategies) {
     if (strategy$graceStart > 0) {
       stop("Not yet supported in this version: graceStart > 0")
@@ -551,16 +570,23 @@ computeTrueRisks <- function(settings,
   naturalStartDay <- .constantHazardEventDay(initiationE, .dailyCumulativeHazard(eta$initiation), Inf)
   deathDay <- .constantHazardEventDay(deathE, .dailyCumulativeHazard(eta$death), maxDays)
 
+  # Probability of the outcome or death on days 0..riskStart - 1 (untreated hazards):
+  pBefore <- 0
+  if (riskStart > 0) {
+    noEventDay <- (1 - stats::plogis(eta$outcome)) * (1 - stats::plogis(eta$death))
+    pBefore <- mean(1 - noEventDay^riskStart)
+  }
   results <- list()
   for (i in seq_along(strategies)) {
     path <- .strategyPath(strategies[[i]], graceRegime, naturalStartDay, laterStartE, u, eta, settings)
     outcomeDay <- .outcomeEventDay(outcomeE, eta$outcome, path, settings)
     outcomeDay <- outcomeDay[outcomeDay <= deathDay & is.finite(outcomeDay)]
     risk <- cumsum(tabulate(outcomeDay + 1, nbins = maxDays + 1)) / nTruth
+    riskBefore <- if (riskStart > 0) risk[riskStart] else 0
     results[[i]] <- tibble(
       strategyId = as.integer(i),
       day = as.integer(horizons),
-      risk = risk[horizons + 1]
+      risk = (risk[horizons + 1] - riskBefore) / (1 - pBefore)
     )
   }
   return(dplyr::bind_rows(results))

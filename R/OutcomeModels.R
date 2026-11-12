@@ -33,9 +33,14 @@
 #'   model of death is also fitted, and risks combine the two cause-specific Breslow hazards by
 #'   Aalen-Johansen.
 #' - `"logistic"`: weighted pooled logistic regression (Cyclops `lr`) on one row per clone and interval
-#'   of `timeBasis$intervalLength` days that the clone enters, with the weight that applies on the
-#'   clone's first day in the interval, and covariates intercept, target indicator, time basis, and (if
-#'   `armByTimeInteraction`) their interaction. Risks are `1 - prod(1 - h)` without competing events;
+#'   of `timeBasis$intervalLength` days that the clone enters (intervals counted from `riskStart`),
+#'   with the weight that applies on the clone's last day in the interval (the weight of its last
+#'   segment in the interval), and covariates intercept, target indicator, time basis, and (if
+#'   `armByTimeInteraction`) their interaction. The weighted clones must be split on the same interval
+#'   grid, by `computeCensoringWeights(outcomeTimeBasis = timeBasis)`. With daily intervals (the
+#'   default) every row carries the exact weight of its day, so a saturated time basis per strategy
+#'   gives the weighted Kaplan-Meier or Aalen-Johansen risks. Risks are `1 - prod(1 - h)` without
+#'   competing events;
 #'   with competing death, the outcome model is fitted to rows with no death in the interval, a death
 #'   model to all rows, and the risk is that of Young et al. (2020). The model is fitted to the
 #'   weighted numbers of rows with and without an event per strategy and interval, which have the
@@ -56,8 +61,8 @@
 #' of the hazard ratio and the baseline hazards); for `"logistic"` they use the delta method with a
 #' numerical Jacobian. With `varianceEstimator = "modelBased"` the hazard ratio or odds ratio uses the
 #' inverse of the weighted information; the `"cox"` risks then have no standard errors, and `"km"` is
-#' not supported. `varianceEstimator = "bootstrap"` is computed by the bootstrap driver, not by this
-#' function.
+#' not supported. `varianceEstimator = "bootstrap"` is computed by [bootstrapCcwAnalysis()], not by
+#' this function.
 #'
 #' @param weightedClones      A `CcwClones` object with weighted segments, as created by
 #'                            `computeCensoringWeights()`.
@@ -102,7 +107,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   checkmate::assertR6(fitOutcomeModelArgs, "FitOutcomeModelArgs", add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   if (fitOutcomeModelArgs$varianceEstimator == "bootstrap") {
-    stop("varianceEstimator = \"bootstrap\" requires refitting the censoring models in every replicate. Use the bootstrap driver")
+    stop("varianceEstimator = \"bootstrap\" requires refitting the censoring models in every replicate. Use the bootstrap driver, bootstrapCcwAnalysis()")
   }
   if (fitOutcomeModelArgs$varianceEstimator == "modelBased" && fitOutcomeModelArgs$modelType == "km") {
     stop("varianceEstimator = \"modelBased\" is not available for modelType = \"km\"")
@@ -192,7 +197,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     personSeqIds = personSeqIds,
     riskStart = riskStart,
     competingEvents = metaData$competingEvents,
-    strategies = metaData$strategies
+    strategies = metaData$strategies,
+    cutIntervalLength = metaData$weights$cutIntervalLength
   ))
 }
 
@@ -443,10 +449,10 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # Pooled logistic ----------------------------------------------------------------------------------
 
 # One row per clone and interval of `intervalLength` days the clone enters (interval k covers t in
-# (k L, (k + 1) L], counted from riskStart), with the weight that applies on the clone's first day in
-# the interval (t = k L + 1), the person's frequency weight `count`, and indicators of the outcome and
-# of a competing event in the interval. `segments` must hold all segments of each clone, sorted by
-# cloneRowId and startTime.
+# (k L, (k + 1) L], counted from riskStart), with the weight that applies on the clone's last day in
+# the interval (t = min((k + 1) L, end of follow-up)), the person's frequency weight `count`, and
+# indicators of the outcome and of a competing event in the interval. `segments` must hold all segments
+# of each clone, sorted by cloneRowId and startTime.
 .expandToIntervals <- function(segments, intervalLength) {
   cloneIndex <- match(segments$cloneRowId, unique(segments$cloneRowId))
   last <- !duplicated(cloneIndex, fromLast = TRUE)
@@ -454,11 +460,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   nIntervals <- ceiling(lastSegments$stopTime / intervalLength)
   rowClone <- rep(seq_len(nrow(lastSegments)), nIntervals)
   interval <- sequence(nIntervals) - 1L
-  firstDay <- interval * intervalLength + 1
-  # Find the segment with startTime < firstDay <= stopTime of each row's clone:
+  lastDay <- pmin((interval + 1) * intervalLength, lastSegments$stopTime[rowClone])
+  # Find the segment with startTime < lastDay <= stopTime of each row's clone:
   span <- max(lastSegments$stopTime) + 1
   segmentKey <- cloneIndex * span + segments$startTime
-  rowKey <- rowClone * span + firstDay
+  rowKey <- rowClone * span + lastDay
   segment <- findInterval(rowKey, segmentKey, left.open = TRUE)
   isLast <- interval == nIntervals[rowClone] - 1
   return(data.frame(
@@ -469,44 +475,6 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     count = lastSegments$count[rowClone],
     y = as.integer(isLast & lastSegments$outcome[rowClone] == 1),
     death = as.integer(isLast & lastSegments$competing[rowClone] == 1)
-  ))
-}
-
-# Time-basis columns (Phase1Contracts section 4) of the 0-based interval index: `build(k)` computes them
-# for the interval indices k, and `names` names them. Columns that are zero at every interval in
-# `interval` are dropped. The natural-spline knots (quantiles) and the orthogonal polynomial (centring
-# and scaling) depend on the distribution of the rows' interval indices `interval`; each row counts
-# `multiplicity` times (its person's frequency weight), so frequency weights give the basis of the data
-# with persons copied.
-.timeBasisColumns <- function(timeBasis, interval, multiplicity = rep(1, length(interval))) {
-  intervals <- sort(unique(interval))
-  maxInterval <- max(intervals)
-  if (timeBasis$type == "indicator") {
-    build <- function(k) {
-      columns <- matrix(0, length(k), maxInterval)
-      later <- k >= 1 & k <= maxInterval
-      columns[cbind(which(later), k[later])] <- 1
-      return(columns)
-    }
-    names <- sprintf("time%d", seq_len(maxInterval))
-  } else if (timeBasis$type == "linear") {
-    build <- function(k) matrix(as.numeric(k), ncol = 1)
-    names <- "time"
-  } else {
-    sample <- rep(intervals, .sumBy(multiplicity, match(interval, intervals), length(intervals)))
-    if (timeBasis$type == "polynomial") {
-      basis <- stats::poly(sample, degree = timeBasis$degree, raw = timeBasis$raw)
-      names <- sprintf("time%d", seq_len(timeBasis$degree))
-    } else {
-      basis <- splines::ns(sample, df = timeBasis$df)
-      names <- sprintf("time%d", seq_len(ncol(basis)))
-    }
-    build <- function(k) unclass(stats::predict(basis, k))[, , drop = FALSE]
-  }
-  keep <- colSums(build(intervals) != 0) > 0
-  return(list(
-    build = function(k) build(k)[, keep, drop = FALSE],
-    names = names[keep]
   ))
 }
 
@@ -663,14 +631,24 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (isTRUE(prior$useCrossValidation)) {
     stop("Cross-validation is not supported for the pooled logistic outcome model, which is fitted to rows aggregated by strategy and interval. Use a prior with a fixed variance")
   }
+  # Each row takes the weight of the clone's last segment in its interval, which is the weight of its
+  # last day in the interval only when the segments are split on the interval grid:
+  if (!isTRUE(data$cutIntervalLength == intervalLength)) {
+    stop(sprintf(
+      "The pooled logistic outcome model with intervals of %d days needs weighted clones split on that grid, but they are split on %s. Use computeCensoringWeights(outcomeTimeBasis = ...) with the outcome model's timeBasis",
+      intervalLength,
+      if (is.null(data$cutIntervalLength) || is.na(data$cutIntervalLength)) "no interval grid" else sprintf("intervals of %d days", data$cutIntervalLength)
+    ))
+  }
   rows <- .expandToIntervals(data$segments, intervalLength)
   rows <- rows[rows$weight > 0, ]
   basis <- .timeBasisColumns(timeBasis, rows$interval, rows$count)
+  basisNames <- if (timeBasis$type == "linear") "time" else sprintf("time%d", basis$labels)
   # The design depends on a row only through its cell: the comparator's intervals 0, ..., nIntervals - 1
   # are cells 1, ..., nIntervals, and the target's intervals the next nIntervals cells.
   nIntervals <- max(rows$interval) + 1
   cellInterval <- rep(seq_len(nIntervals) - 1, 2)
-  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(cellInterval), basis$names, fitOutcomeModelArgs$armByTimeInteraction)
+  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(cellInterval), basisNames, fitOutcomeModelArgs$armByTimeInteraction)
   rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))

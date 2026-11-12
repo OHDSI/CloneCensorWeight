@@ -48,12 +48,13 @@
 #' with the time basis only. If the pooled logistic numerator model fails and `stopOnError = FALSE`,
 #' an intercept-only numerator is used and the error is recorded in the diagnostics.
 #'
-#' The Cox model treats initiation days as continuous times with Breslow ties, so
-#' `exp(-Lambda0(d + 1) exp(X beta))` is not the probability of no initiation on days `0..d` when
-#' the daily probability of initiating is large (for example `exp(-0.3) = 0.74` against `1 - 0.3 =
-#' 0.7` for one day). The resulting weights do not reproduce the population, and weighted risks can
-#' be biased when initiation is confounded. Prefer `hazardModelType = "logistic"` for short grace
-#' periods with many initiations per day.
+#' The default, `hazardModelType = "logistic"` with a daily indicator basis, is the exact
+#' discrete-time hazard of initiation. The Cox model treats initiation days as continuous times with
+#' Breslow ties, so `exp(-Lambda0(d + 1) exp(X beta))` is not the probability of no initiation on days
+#' `0..d` when the daily probability of initiating is large (for example `exp(-0.3) = 0.74` against
+#' `1 - 0.3 = 0.7` for one day, as when many persons start on day 0). The resulting weights do not
+#' reproduce the population, and weighted risks can be biased when initiation is confounded. The Cox
+#' model is meant for long horizons (for example `"neverInitiate"`) with few initiations per day.
 #'
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
@@ -490,27 +491,16 @@ fitCensoringModels <- function(clones,
 
 # Pooled logistic initiation hazard ----------------------------------------------------------------
 
-# The time-basis columns (without intercept) for intervals k = 0..nIntervals - 1. The basis is built
-# once on this grid, so its knots do not depend on which rows are in a model. The indicator basis has
-# a column for each of `indicatorIntervals` except the first (the reference), named by its interval.
+# The time-basis columns (without intercept) for intervals k = 0..nIntervals - 1, from the shared
+# .timeBasisColumns(). The basis is built once on this grid (each interval counted once), so its knots
+# do not depend on which rows are in a model. The indicator basis has a column for each of
+# `indicatorIntervals` except the first (the reference), named by its interval.
 .createTimeBasisMatrix <- function(timeBasis, nIntervals, indicatorIntervals = seq_len(nIntervals) - 1) {
   k <- seq_len(nIntervals) - 1
-  if (nIntervals <= 1 || (timeBasis$type == "indicator" && length(indicatorIntervals) <= 1)) {
-    return(matrix(numeric(0), nrow = nIntervals, ncol = 0))
-  }
-  basis <- switch(timeBasis$type,
-    indicator = outer(k, indicatorIntervals[-1], "==") * 1,
-    linear = matrix(k, ncol = 1),
-    polynomial = stats::poly(k, degree = min(timeBasis$degree, nIntervals - 1), raw = timeBasis$raw),
-    naturalSpline = splines::ns(k, df = min(timeBasis$df, nIntervals - 1))
-  )
-  basis <- matrix(as.numeric(basis), nrow = nIntervals)
-  if (timeBasis$type == "indicator") {
-    colnames(basis) <- paste0("timeBasis", indicatorIntervals[-1])
-  } else {
-    colnames(basis) <- paste0("timeBasis", seq_len(ncol(basis)))
-  }
-  return(basis)
+  basis <- .timeBasisColumns(timeBasis, if (timeBasis$type == "indicator") indicatorIntervals else k)
+  columns <- basis$build(k)
+  colnames(columns) <- sprintf("timeBasis%d", basis$labels)
+  return(columns)
 }
 
 # Intercept-only logistic MLE on the hazard rows.

@@ -7,14 +7,15 @@
 createFitOutcomeModelArgs(
   modelType = "cox",
   horizons = c(365),
-  timeBasis = createTimeBasis(intervalLength = 30),
+  timeBasis = createTimeBasis(type = "naturalSpline", intervalLength = 1, df = 4),
   armByTimeInteraction = FALSE,
   varianceEstimator = "robust",
   bootstrapArgs = createBootstrapArgs(),
   useCovariates = FALSE,
   stratified = FALSE,
   prior = Cyclops::createPrior("none"),
-  control = Cyclops::createControl()
+  control = Cyclops::createControl(algorithm = "newton", convergenceType = "kkt",
+    tolerance = 1e-10, noiseLevel = "silent")
 )
 }
 \arguments{
@@ -30,10 +31,10 @@ by the pooled logistic model.}
 \item{armByTimeInteraction}{Add strategy-by-time interactions to the pooled logistic model?}
 
 \item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person),
-\code{"bootstrap"}, or \code{"modelBased"}.}
+\code{"bootstrap"} (computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}), or \code{"modelBased"}.}
 
 \item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
-\code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used when \code{varianceEstimator = "bootstrap"}.}
+\code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}.}
 
 \item{useCovariates}{Add the baseline covariates to the outcome model?}
 
@@ -55,6 +56,15 @@ Create an object defining the parameter values for the weighted (marginal struct
 model fitted to the clones.
 
 This version requires \code{useCovariates = FALSE} and \code{stratified = FALSE}.
+
+The pooled logistic model needs weighted clones cut on its interval grid
+(\code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}). Its default, daily intervals with a
+natural spline of time, uses the exact daily weights.
+
+The default \code{control} (Newton steps until the Karush-Kuhn-Tucker conditions hold to \code{1e-10}) fits
+the models to the precision of their reference implementations (\code{survival::coxph()} and
+\code{stats::glm()}), also on ill-scaled time bases, where Cyclops' default coordinate descent stops
+early.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

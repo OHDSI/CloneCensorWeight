@@ -110,8 +110,12 @@ test_that("Cox initiation-hazard weights equal those of ccwr on untied data", {
     survival::Surv(Tstart, Tstop, .censoring) ~ x1 + x2 + x3,
     data = finalData$Control, ties = "efron", control = m3CoxControl()
   ))), tolerance = 1e-6)
-  # ccwr splits at every follow-up time, so each of our segments ends where one of its rows ends:
-  expected <- unname(control$weight_Cox)[match(paste(segments$rowId, segments$stopTime), paste(control$id, control$Tstop))]
+  # ccwr splits at every follow-up time, so the last day of each of our segments is in one of its rows
+  # (our segments also end at the end of day G + 1, where ccwr's rows need not):
+  expected <- vapply(seq_len(nrow(segments)), function(i) {
+    row <- which(control$id == segments$rowId[i] & control$Tstart < segments$stopTime[i] & segments$stopTime[i] <= control$Tstop)
+    if (length(row) == 1) unname(control$weight_Cox[row]) else NA_real_
+  }, numeric(1))
   expect_false(anyNA(expected))
   expect_equal(segments$weight, expected, tolerance = 1e-6)
 })

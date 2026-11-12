@@ -519,9 +519,18 @@ TimeBasis <- R6Class(
 #' period is always used. For `"notInitiateWithin"` and `"neverInitiate"` strategies the hazard of
 #' initiation is modelled with `hazardModelType`.
 #'
-#' @param hazardModelType          The hazard model: `"cox"` or `"logistic"` (pooled logistic).
+#' The default hazard model, pooled logistic regression with a daily indicator time basis, is the
+#' exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
+#' times with Breslow ties, so its survival of non-initiation, `exp(-Lambda0(d + 1) exp(X beta))`, is
+#' biased when many persons initiate on the same day (for example on day 0): `exp(-h)` is larger than
+#' `1 - h` for a daily probability `h`. Use `"cox"` only for long horizons (for example
+#' `"neverInitiate"` strategies) with few initiations per day.
+#'
+#' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
+#'                                 `"cox"` (see details for its ties caveat).
 #' @param timeBasis                An object of type `TimeBasis` as created using
-#'                                 [createTimeBasis()], used by the pooled logistic model.
+#'                                 [createTimeBasis()], used by the pooled logistic model. The default
+#'                                 is a daily indicator basis.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
 #'                                 `"artificial"`.
 #' @param useCovariates            Use the baseline covariates in the censoring models?
@@ -540,10 +549,10 @@ TimeBasis <- R6Class(
 #' An object of type `FitCensoringModelsArgs`.
 #'
 #' @examples
-#' args <- createFitCensoringModelsArgs(hazardModelType = "logistic")
+#' args <- createFitCensoringModelsArgs(hazardModelType = "cox")
 #'
 #' @export
-createFitCensoringModelsArgs <- function(hazardModelType = "cox",
+createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
                                          censoringMechanisms = "artificial",
                                          useCovariates = TRUE,
@@ -708,12 +717,13 @@ ComputeWeightsArgs <- R6Class(
 #' Create a parameter object for the bootstrap
 #'
 #' @details
-#' The bootstrap resamples persons (so all clones of a person stay together) and re-estimates the
-#' censoring models and weights in every replicate.
+#' The bootstrap ([bootstrapCcwAnalysis()]) resamples persons (so all clones of a person stay
+#' together) and re-estimates the censoring models and weights in every replicate.
 #'
 #' @param replicates         The number of bootstrap replicates.
 #' @param seed               The random seed.
-#' @param ci                 How to compute confidence intervals: `"percentile"` or `"normal"`.
+#' @param ci                 How to compute confidence intervals: `"percentile"` or `"normal"`
+#'                           (bias-corrected), as the `"perc"` and `"norm"` types of [boot::boot.ci()].
 #' @param fixHyperparameters Reuse the prior variances selected by cross-validation on the full data
 #'                           in every replicate?
 #'
@@ -762,6 +772,15 @@ BootstrapArgs <- R6Class(
 #'
 #' This version requires `useCovariates = FALSE` and `stratified = FALSE`.
 #'
+#' The pooled logistic model needs weighted clones cut on its interval grid
+#' (`computeCensoringWeights(outcomeTimeBasis = timeBasis)`). Its default, daily intervals with a
+#' natural spline of time, uses the exact daily weights.
+#'
+#' The default `control` (Newton steps until the Karush-Kuhn-Tucker conditions hold to `1e-10`) fits
+#' the models to the precision of their reference implementations (`survival::coxph()` and
+#' `stats::glm()`), also on ill-scaled time bases, where Cyclops' default coordinate descent stops
+#' early.
+#'
 #' @param modelType            The outcome model: `"cox"`, `"logistic"` (pooled logistic), or `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
 #' @param horizons             Days since index at which risks, risk differences and risk ratios are
@@ -770,9 +789,9 @@ BootstrapArgs <- R6Class(
 #'                             by the pooled logistic model.
 #' @param armByTimeInteraction Add strategy-by-time interactions to the pooled logistic model?
 #' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
-#'                             `"bootstrap"`, or `"modelBased"`.
+#'                             `"bootstrap"` (computed by [bootstrapCcwAnalysis()]), or `"modelBased"`.
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
-#'                             [createBootstrapArgs()], used when `varianceEstimator = "bootstrap"`.
+#'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?
 #' @param stratified           Fit a stratified model?
 #' @param prior                The prior used to fit the model. See [Cyclops::createPrior()].
@@ -788,14 +807,19 @@ BootstrapArgs <- R6Class(
 #' @export
 createFitOutcomeModelArgs <- function(modelType = "cox",
                                       horizons = c(365),
-                                      timeBasis = createTimeBasis(intervalLength = 30),
+                                      timeBasis = createTimeBasis(type = "naturalSpline",
+                                                                  intervalLength = 1,
+                                                                  df = 4),
                                       armByTimeInteraction = FALSE,
                                       varianceEstimator = "robust",
                                       bootstrapArgs = createBootstrapArgs(),
                                       useCovariates = FALSE,
                                       stratified = FALSE,
                                       prior = Cyclops::createPrior("none"),
-                                      control = Cyclops::createControl()) {
+                                      control = Cyclops::createControl(algorithm = "newton",
+                                                                       convergenceType = "kkt",
+                                                                       tolerance = 1e-10,
+                                                                       noiseLevel = "silent")) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)

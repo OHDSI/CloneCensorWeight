@@ -241,3 +241,51 @@
 .assertStudyPopulation <- function(x, add = NULL, .var.name = checkmate::vname(x)) {
   return(checkmate::makeAssertion(x, .checkStudyPopulation(x), .var.name, add))
 }
+
+# Time basis ---------------------------------------------------------------------------------------
+
+# The time-basis columns (Phase1Contracts section 4, without the intercept) of a pooled model, shared by
+# the censoring models and the pooled logistic outcome model. The basis is defined by the interval
+# indices `interval` (0-based) of the rows the model is fitted to, each row counting `multiplicity`
+# times (a person's frequency weight, so frequency weights give the basis of the data with persons
+# copied; rows counting 0 times are left out):
+# - "indicator": one column per distinct interval except the first (the reference);
+# - "linear": the interval index;
+# - "polynomial": stats::poly(k, degree, raw = raw), whose centring and scaling (orthogonal) depend on
+#   the distribution of the rows' intervals;
+# - "naturalSpline": splines::ns(k, df), with knots at quantiles of the rows' intervals.
+# The degree and df are capped at the number of distinct intervals minus 1, and a single distinct
+# interval gives no columns. Columns that are zero at every distinct interval are dropped. Returns
+# `build(k)`, the columns at the interval indices k, and `labels`: the interval of each indicator
+# column, or the column number.
+.timeBasisColumns <- function(timeBasis, interval, multiplicity = rep(1, length(interval))) {
+  interval <- interval[multiplicity > 0]
+  multiplicity <- multiplicity[multiplicity > 0]
+  intervals <- sort(unique(interval))
+  nDistinct <- length(intervals)
+  if (nDistinct <= 1) {
+    return(list(build = function(k) matrix(numeric(0), nrow = length(k), ncol = 0), labels = integer(0)))
+  }
+  if (timeBasis$type == "indicator") {
+    levels <- intervals[-1]
+    build <- function(k) outer(k, levels, "==") * 1
+    labels <- levels
+  } else if (timeBasis$type == "linear") {
+    build <- function(k) matrix(as.numeric(k), ncol = 1)
+    labels <- 1L
+  } else {
+    sample <- rep(intervals, .sumBy(multiplicity, match(interval, intervals), nDistinct))
+    if (timeBasis$type == "polynomial") {
+      basis <- stats::poly(sample, degree = min(timeBasis$degree, nDistinct - 1), raw = timeBasis$raw)
+    } else {
+      basis <- splines::ns(sample, df = min(timeBasis$df, nDistinct - 1))
+    }
+    build <- function(k) matrix(unclass(stats::predict(basis, k)), nrow = length(k))
+    labels <- seq_len(ncol(basis))
+  }
+  keep <- colSums(build(intervals) != 0) > 0
+  return(list(
+    build = function(k) build(k)[, keep, drop = FALSE],
+    labels = labels[keep]
+  ))
+}

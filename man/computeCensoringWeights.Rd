@@ -7,7 +7,8 @@
 computeCensoringWeights(
   clones,
   censoringModels,
-  computeWeightsArgs = createComputeWeightsArgs()
+  computeWeightsArgs = createComputeWeightsArgs(),
+  outcomeTimeBasis = NULL
 )
 }
 \arguments{
@@ -19,6 +20,10 @@ ordering).}
 
 \item{computeWeightsArgs}{An object of type \code{ComputeWeightsArgs} as created using
 \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.}
+
+\item{outcomeTimeBasis}{\code{NULL}, or the object of type \code{TimeBasis} (as created using
+\code{\link[=createTimeBasis]{createTimeBasis()}}) of the pooled logistic outcome model to be fitted to
+these clones: the clones are then also split on its interval grid.}
 }
 \value{
 The \code{clones} object, with two more tables:
@@ -31,8 +36,9 @@ last segment weight of each clone with segments, before truncation.
 }
 
 \code{metaData$weights} holds whether the weights are stabilized, the truncation rule, the cap used per
-strategy, and a summary of the untruncated weights. The tables are added in place, but the returned
-object must be used, because only it carries \code{metaData$weights}.
+strategy, a summary of the untruncated weights, and \code{cutIntervalLength}, the interval length of the
+\code{outcomeTimeBasis} grid the clones are split on (\code{NA} without one). The tables are added in place,
+but the returned object must be used, because only it carries \code{metaData$weights}.
 }
 \description{
 Computes the inverse probability of censoring weights of every clone from the censoring models, and
@@ -61,6 +67,15 @@ that falls inside the clone's window where the weight varies (days \code{riskSta
 \code{"notInitiateWithin"}, all follow-up for \code{"neverInitiate"}). A segment \verb{(startTime, stopTime]} gets
 the weight of its last day, which is exact for estimators that use the weights only at event times
 (Cox, Kaplan-Meier and Aalen-Johansen).
+
+Every clone is also split at the end of day \code{tau + 1} (or of day \code{riskStart}, if later), where \code{tau}
+is the largest \code{graceEnd} of the two strategies, so the weight of the segment that contains that day
+is exactly \code{W(tau + 1)}, the weight \code{\link[=computeCovariateBalance]{computeCovariateBalance()}} uses. With \code{outcomeTimeBasis}, every
+clone is also split at the end of every interval of \code{outcomeTimeBasis$intervalLength} days (counted
+from \code{riskStart}), so the weight of a clone's last segment in an interval is its weight on its last
+day in that interval, as the pooled logistic outcome model requires. With daily intervals every
+segment is one day long. These extra splits do not change any weight at an event time, so the Cox,
+Kaplan-Meier and Aalen-Johansen estimates are the same with and without them.
 
 Weights are truncated per strategy: the cap is the \code{upper} percentile (\code{quantile} type 7) of the
 clones' maximum weight, or the fixed value.

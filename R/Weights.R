@@ -43,6 +43,15 @@
 #' the weight of its last day, which is exact for estimators that use the weights only at event times
 #' (Cox, Kaplan-Meier and Aalen-Johansen).
 #'
+#' Every clone is also split at the end of day `tau + 1` (or of day `riskStart`, if later), where `tau`
+#' is the largest `graceEnd` of the two strategies, so the weight of the segment that contains that day
+#' is exactly `W(tau + 1)`, the weight [computeCovariateBalance()] uses. With `outcomeTimeBasis`, every
+#' clone is also split at the end of every interval of `outcomeTimeBasis$intervalLength` days (counted
+#' from `riskStart`), so the weight of a clone's last segment in an interval is its weight on its last
+#' day in that interval, as the pooled logistic outcome model requires. With daily intervals every
+#' segment is one day long. These extra splits do not change any weight at an event time, so the Cox,
+#' Kaplan-Meier and Aalen-Johansen estimates are the same with and without them.
+#'
 #' Weights are truncated per strategy: the cap is the `upper` percentile (`quantile` type 7) of the
 #' clones' maximum weight, or the fixed value.
 #'
@@ -52,6 +61,9 @@
 #'                           ordering).
 #' @param computeWeightsArgs An object of type `ComputeWeightsArgs` as created using
 #'                           [createComputeWeightsArgs()].
+#' @param outcomeTimeBasis   `NULL`, or the object of type `TimeBasis` (as created using
+#'                           [createTimeBasis()]) of the pooled logistic outcome model to be fitted to
+#'                           these clones: the clones are then also split on its interval grid.
 #'
 #' @return
 #' The `clones` object, with two more tables:
@@ -63,8 +75,9 @@
 #'   last segment weight of each clone with segments, before truncation.
 #'
 #' `metaData$weights` holds whether the weights are stabilized, the truncation rule, the cap used per
-#' strategy, and a summary of the untruncated weights. The tables are added in place, but the returned
-#' object must be used, because only it carries `metaData$weights`.
+#' strategy, a summary of the untruncated weights, and `cutIntervalLength`, the interval length of the
+#' `outcomeTimeBasis` grid the clones are split on (`NA` without one). The tables are added in place,
+#' but the returned object must be used, because only it carries `metaData$weights`.
 #'
 #' @examples
 #' \dontrun{
@@ -78,14 +91,20 @@
 #' @export
 computeCensoringWeights <- function(clones,
                                     censoringModels,
-                                    computeWeightsArgs = createComputeWeightsArgs()) {
+                                    computeWeightsArgs = createComputeWeightsArgs(),
+                                    outcomeTimeBasis = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   checkmate::assertClass(censoringModels, "CcwCensoringModels", add = errorMessages)
   checkmate::assertR6(computeWeightsArgs, "ComputeWeightsArgs", add = errorMessages)
+  checkmate::assertR6(outcomeTimeBasis, "TimeBasis", null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(clones, "metaData")
   .checkModelsMatchClones(censoringModels, metaData)
+  graceEnds <- unlist(lapply(metaData$strategies, function(strategy) strategy$graceEnd))
+  # The day after the grace periods, whose weight computeCovariateBalance() reads (NA: no grace period):
+  balanceDay <- if (length(graceEnds) == 0) NA_integer_ else as.integer(max(graceEnds) + 1)
+  cutIntervalLength <- if (is.null(outcomeTimeBasis)) NA_integer_ else as.integer(outcomeTimeBasis$intervalLength)
 
   start <- Sys.time()
   on.exit(.dropTables(clones, "ccwW"))
@@ -137,6 +156,32 @@ computeCensoringWeights <- function(clones,
       survivalTime AS cutTime
     FROM ccwWClones
     WHERE survivalTime > 0;")
+  # The end of the day after the grace periods (or of riskStart, if later):
+  if (!is.na(balanceDay)) {
+    .andromedaExecute(clones, sprintf("
+      INSERT INTO ccwWCuts
+      SELECT cloneRowId,
+        GREATEST(%1$d, riskStart) - riskStart + 1 AS cutTime
+      FROM ccwWClones
+      WHERE GREATEST(%1$d, riskStart) - riskStart + 1 < survivalTime
+      EXCEPT
+      SELECT cloneRowId, cutTime FROM ccwWCuts;", balanceDay))
+  }
+  # The ends of the intervals of the outcome model's grid:
+  if (!is.na(cutIntervalLength)) {
+    .andromedaExecute(clones, sprintf("
+      INSERT INTO ccwWCuts
+      SELECT cloneRowId,
+        cutTime
+      FROM (
+        SELECT cloneRowId,
+          CAST(UNNEST(range(%1$d, survivalTime, %1$d)) AS INTEGER) AS cutTime
+        FROM ccwWClones
+        WHERE survivalTime > %1$d
+      )
+      EXCEPT
+      SELECT cloneRowId, cutTime FROM ccwWCuts;", cutIntervalLength))
+  }
 
   # Segments, with the day whose survival gives the weight (binary: 1 after the switch, 0 before):
   .andromedaExecute(clones, sprintf("
@@ -221,7 +266,8 @@ computeCensoringWeights <- function(clones,
     stabilized = computeWeightsArgs$stabilized,
     truncation = computeWeightsArgs$truncation$toList(),
     caps = caps,
-    untruncatedSummary = .summarizePersonWeights(clones)
+    untruncatedSummary = .summarizePersonWeights(clones),
+    cutIntervalLength = cutIntervalLength
   )
   clones <- .addSegments(clones, clones$ccwWFinalSegments, clones$ccwWPersonWeights, weightsMetaData)
   delta <- Sys.time() - start

@@ -206,11 +206,11 @@ test_that("A single interval (notInitiateWithin(0)) gives an intercept-only time
   ps <- models[[1]]$predictions$propensityScore[match(rows$rowId, models[[1]]$predictions$rowId)]
   expect_equal(ps, unname(fitted(reference)), tolerance = 1e-6)
 
-  # With riskStart = 1 all follow-up is after G = 0, so each clone has one segment with W = 1 / pi in
-  # the initiate arm and W = 1 / (1 - pi) in the defer arm:
+  # With riskStart = 1 all follow-up is after G = 0, so every segment has W = 1 / pi in the initiate
+  # arm and W = 1 / (1 - pi) in the defer arm. The only split is at the end of day tau + 1 = 1 (t = 1):
   weighted <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(stabilized = FALSE, truncation = createWeightTruncation("none"))))
   segments <- collectSegments(weighted)
-  expect_false(any(duplicated(segments$cloneRowId)))
+  expect_true(all(segments$startTime %in% c(0, 1)))
   pi <- unname(fitted(reference))[match(segments$rowId, rows$rowId)]
   expected <- ifelse(segments$strategyId == 1, 1 / pi, 1 / (1 - pi))
   expect_equal(segments$weight, expected, tolerance = 1e-6)

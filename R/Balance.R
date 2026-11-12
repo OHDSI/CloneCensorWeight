@@ -27,11 +27,9 @@
 #' comparator (strategy 2) groups. Each clone has the covariates of its person. The "before" columns
 #' of the result compare these clones crudely; the "after" columns weight each clone by W(d), the
 #' weight of its segment that contains day d (time `d - riskStart + 1`), which is the weight the outcome
-#' models use for risk-set membership on day d. For `initiateWithin` and `notInitiateWithin` strategies
-#' W is constant after the grace period, so this is exactly W(τ + 1). For a `neverInitiate` strategy W
-#' keeps changing and segments are cut only at outcome and competing-event days, so the segment's
-#' weight is W on the first such day on or after day d (or on the clone's last day, if none follows),
-#' not W(τ + 1) itself. The two agree when an outcome or competing event falls on day d.
+#' models use for risk-set membership on day d. [computeCensoringWeights()] splits every clone at the
+#' end of day d, so this is exactly W(d) for every strategy type, also for a `neverInitiate` strategy,
+#' whose weight keeps changing after the grace period.
 #'
 #' @param weightedClones              An object of type [CcwClones] with segments and weights, as created
 #'                                    by `computeCensoringWeights()`.

@@ -305,9 +305,12 @@ refSegments <- function(clones, cutsByClone) {
 
 # The t-scale cuts of each clone (contract section 5.4): G - riskStart + 1 for initiateWithin (G - riskStart
 # with deviationFirst), and the distinct outcome and competing-event times of all clones inside the
-# window where W varies for the hazard strategies.
-refCuts <- function(clones, strategies, sameDayOrdering, horizons) {
+# window where W varies for the hazard strategies. Contract section 9, amendment 5: also the end of day
+# tau + 1 (tau the largest graceEnd; riskStart if later), and with `cutIntervalLength` every multiple of
+# it (the outcome model's grid).
+refCuts <- function(clones, strategies, sameDayOrdering, horizons, cutIntervalLength = NULL) {
   eventTimes <- sort(unique(clones$survivalTime[clones$endReason %in% c("outcome", "death")]))
+  graceEnds <- unlist(lapply(strategies, function(strategy) strategy$graceEnd))
   cuts <- list()
   for (i in seq_len(nrow(clones))) {
     clone <- clones[i, ]
@@ -319,6 +322,13 @@ refCuts <- function(clones, strategies, sameDayOrdering, horizons) {
       windowEnd <- horizons[[clone$strategyId]]
       c <- eventTimes[eventTimes + clone$riskStart - 1 <= windowEnd]
     }
+    if (length(graceEnds) > 0) {
+      c <- c(c, max(max(graceEnds) + 1, clone$riskStart) - clone$riskStart + 1)
+    }
+    if (!is.null(cutIntervalLength)) {
+      c <- c(c, seq(cutIntervalLength, clone$survivalTime, by = cutIntervalLength))
+    }
+    c <- sort(unique(c))
     cuts[[as.character(clone$cloneRowId)]] <- c[c > 0 & c < clone$survivalTime]
   }
   return(cuts)

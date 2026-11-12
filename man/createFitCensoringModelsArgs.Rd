@@ -5,7 +5,7 @@
 \title{Create a parameter object for fitting the censoring models}
 \usage{
 createFitCensoringModelsArgs(
-  hazardModelType = "cox",
+  hazardModelType = "logistic",
   timeBasis = createTimeBasis(),
   censoringMechanisms = "artificial",
   useCovariates = TRUE,
@@ -21,10 +21,12 @@ createFitCensoringModelsArgs(
 )
 }
 \arguments{
-\item{hazardModelType}{The hazard model: \code{"cox"} or \code{"logistic"} (pooled logistic).}
+\item{hazardModelType}{The hazard model: \code{"logistic"} (pooled logistic, the default) or
+\code{"cox"} (see details for its ties caveat).}
 
 \item{timeBasis}{An object of type \code{TimeBasis} as created using
-\code{\link[=createTimeBasis]{createTimeBasis()}}, used by the pooled logistic model.}
+\code{\link[=createTimeBasis]{createTimeBasis()}}, used by the pooled logistic model. The default
+is a daily indicator basis.}
 
 \item{censoringMechanisms}{The censoring mechanisms to weight for. This version supports only
 \code{"artificial"}.}
@@ -59,8 +61,15 @@ Create an object defining the parameter values for fitting the models of artific
 (deviation from a strategy). For \code{"initiateWithin"} strategies a binary model at the end of the grace
 period is always used. For \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies the hazard of
 initiation is modelled with \code{hazardModelType}.
+
+The default hazard model, pooled logistic regression with a daily indicator time basis, is the
+exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
+times with Breslow ties, so its survival of non-initiation, \verb{exp(-Lambda0(d + 1) exp(X beta))}, is
+biased when many persons initiate on the same day (for example on day 0): \code{exp(-h)} is larger than
+\code{1 - h} for a daily probability \code{h}. Use \code{"cox"} only for long horizons (for example
+\code{"neverInitiate"} strategies) with few initiations per day.
 }
 \examples{
-args <- createFitCensoringModelsArgs(hazardModelType = "logistic")
+args <- createFitCensoringModelsArgs(hazardModelType = "cox")
 
 }

@@ -602,7 +602,7 @@ test_that("Pooled logistic hazards of intervals one strategy never enters are no
   expect_false(is.na(getM4Estimate(model, "rd_9", "se")))
 
   # The point estimates for the bootstrap driver are the same:
-  weightedClones <- createM4WeightedClones(fixture)
+  weightedClones <- createM4WeightedClones(fixture, 5)
   on.exit(close(weightedClones))
   args <- createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons, timeBasis = timeBasis, armByTimeInteraction = TRUE, control = m4Control)
   point <- suppressWarnings(.fitOutcomeModelPoint(weightedClones, args))
@@ -695,7 +695,7 @@ test_that("The pooled logistic sandwich does not depend on the person block size
   rows <- .expandToIntervals(data$segments, 2)
   basis <- .timeBasisColumns(createTimeBasis("polynomial", intervalLength = 2, degree = 2), rows$interval)
   nIntervals <- max(rows$interval) + 1
-  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(rep(seq_len(nIntervals) - 1, 2)), basis$names, TRUE)
+  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(rep(seq_len(nIntervals) - 1, 2)), sprintf("time%d", basis$labels), TRUE)
   rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
   noDeath <- rows$death == 0
   fits <- list(
@@ -809,8 +809,9 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
   copyFixture$segments <- copySegments
   copyFixture$personWeights <- m4PersonWeights(copySegments)
 
-  weightedClones <- createM4WeightedClones(fixture)
-  copyWeightedClones <- createM4WeightedClones(copyFixture)
+  # Split on the 3-day grid of the pooled logistic models (KM and Cox do not depend on it):
+  weightedClones <- createM4WeightedClones(fixture, 3)
+  copyWeightedClones <- createM4WeightedClones(copyFixture, 3)
   on.exit({
     close(weightedClones)
     close(copyWeightedClones)
@@ -849,7 +850,7 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
 
 test_that(".fitOutcomeModelPoint equals the point estimates of fitOutcomeModel", {
   fixture <- createM4Fixture(riskStart = 0, competingEvents = "none")
-  weightedClones <- createM4WeightedClones(fixture)
+  weightedClones <- createM4WeightedClones(fixture, 3)
   on.exit(close(weightedClones))
   for (modelType in c("cox", "logistic", "km")) {
     args <- createFitOutcomeModelArgs(modelType = modelType, horizons = c(5, 14), timeBasis = createTimeBasis("linear", intervalLength = 3), control = m4Control)
