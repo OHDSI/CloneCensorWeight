@@ -2,24 +2,40 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{saveCcwAnalysisList}
 \alias{saveCcwAnalysisList}
-\title{Save a list of CCW analyses to a JSON file}
+\title{Save a list of CcwAnalysis to file}
 \usage{
 saveCcwAnalysisList(ccwAnalysisList, file)
 }
 \arguments{
-\item{ccwAnalysisList}{A list of \code{CcwAnalysis} objects.}
+\item{ccwAnalysisList}{A list of objects of type \code{CcwAnalysis} as created using the
+\code{\link[=createCcwAnalysis]{createCcwAnalysis()}} function.}
 
-\item{file}{Path to the output JSON file.}
+\item{file}{The name of the file where the results will be written.}
 }
 \value{
-Invisibly returns \code{file}.
+Returns no output.
 }
 \description{
-Save a list of CCW analyses to a JSON file
+Write a list of objects of type \code{CcwAnalysis} to file. The file is in JSON format.
 }
 \examples{
-\dontrun{
-saveCcwAnalysisList(analysisList, "analyses.json")
-}
+analysis <- createCcwAnalysis(
+  analysisId = 1,
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+    )
+  ),
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+  computeWeightsArgs = createComputeWeightsArgs(),
+  fitOutcomeModelArgs = createFitOutcomeModelArgs()
+)
+file <- tempfile(fileext = ".json")
+saveCcwAnalysisList(list(analysis), file)
+analysisList <- loadCcwAnalysisList(file)
+unlink(file)
 
 }

@@ -1,1126 +1,1395 @@
-# -------------------------------------------------------------------------
-# Internal helpers for covariate settings serialization
-# -------------------------------------------------------------------------
+# Copyright 2026 Observational Health Data Sciences and Informatics
+#
+# This file is part of CloneCensorWeight
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-# Preserves the S3/S4 class of a covariateSettings object as a list member
-# so that jsonlite can serialize it. Mirrors CohortMethod's approach.
-.convertAttrToMember <- function(object) {
-  result <- lapply(object, function(x) x)
-  result[["attr_class"]] <- class(object)
-  result
-}
+# The code from here to the end of .convertEmptyListToLogical() is copied from CohortMethod
+# (R/SettingsObjects.R, Copyright Observational Health Data Sciences and Informatics, Apache 2.0),
+# because CohortMethod does not export it. Replace it with the CohortMethod exports once they exist.
 
-# Restores the class attribute after deserializing from JSON.
-.convertMemberToAttr <- function(object) {
-  if (!is.null(object[["attr_class"]])) {
-    cls <- object[["attr_class"]]
-    object[["attr_class"]] <- NULL
-    class(object) <- cls
+.recurseToList <- function(x) {
+  if ("toList" %in% names(x)) {
+    return(x$toList())
+  } else if (is.list(x)) {
+    for (i in seq_along(x)) {
+      # If member is NULL then assigning NULL will remove it from the list altogether.
+      if (!is.null(x[[i]])) {
+        x[[i]] <- .recurseToList(x[[i]])
+      }
+    }
+    if (is.object(x)) {
+      # jsonlite::toJSON throws error on S3 objects
+      class(x) <- NULL
+    }
+    return(x)
+  } else {
+    return(x)
   }
-  object
 }
 
-# Reconstruct a plain list into a typed settings object. Used by load functions.
-.reconstructSettings <- function(settingsList, className) {
-  obj <- get(className)$new()
-  nms <- intersect(names(settingsList), ls(obj))
-  for (nm in nms) {
-    if (!is.function(obj[[nm]])) obj[[nm]] <- settingsList[[nm]]
-  }
-  obj
-}
-
-
-# -------------------------------------------------------------------------
-# AbstractSerializableSettings
-# -------------------------------------------------------------------------
-
-#' Abstract base class for serializable settings
-#'
-#' Provides `toList()`, `toJson()`, and `validate()` to all settings classes.
-#' Users should not instantiate this class directly; use the concrete subclasses.
-#'
-#' @export
-AbstractSerializableSettings <- R6::R6Class(
+AbstractSerializableSettings <- R6Class(
   "AbstractSerializableSettings",
   public = list(
-    #' @description Convert settings to a plain R list.
-    #' @return A named list.
-    toList = function() {
-      nms  <- ls(self)
-      vals <- lapply(nms, function(n) self[[n]])
-      names(vals) <- nms
-      isFunc <- vapply(vals, is.function, logical(1))
-      vals[!isFunc]
-    },
-    #' @description Convert settings to a JSON string.
-    #' @return A JSON character string.
-    toJson = function() {
-      jsonlite::toJSON(self$toList(), auto_unbox = TRUE, null = "null",
-                       pretty = TRUE)
-    },
-    #' @description Validate settings. Throws informative errors on invalid input.
-    #' @return Invisibly returns `self`.
-    validate = function() invisible(self)
-  )
-)
-
-
-# -------------------------------------------------------------------------
-# ArmDefinition
-# -------------------------------------------------------------------------
-
-#' @title ArmDefinition class
-#' @description R6 class representing a treatment strategy arm. Use
-#'   [createArmDefinition()] to construct.
-#' @export
-ArmDefinition <- R6::R6Class(
-  "ArmDefinition",
-  inherit = AbstractSerializableSettings,
-  public = list(
-    #' @field armId Unique arm identifier.
-    armId        = NULL,
-    #' @field strategyType One of `"initiateWithin"` or `"deferBeyond"`.
-    strategyType = NULL,
-    #' @field gracePeriod Days from cohort start defining the protocol window.
-    gracePeriod  = NULL,
-    #' @field label Optional display label.
-    label        = NULL,
-
-    #' @description Create an `ArmDefinition`.
-    #' @param armId Unique arm identifier (character).
-    #' @param strategyType `"initiateWithin"` or `"deferBeyond"`.
-    #' @param gracePeriod Days from cohort start defining the protocol window.
-    #' @param label Optional display label (character or `NULL`).
-    initialize = function(armId        = NULL,
-                          strategyType = NULL,
-                          gracePeriod  = 0,
-                          label        = NULL) {
-      self$armId        <- armId
-      self$strategyType <- strategyType
-      self$gracePeriod  <- gracePeriod
-      self$label        <- label
+    initialize = function(typedList, untypedList, json) {
+      if (!missing(typedList)) {
+        # Initialize with list where objects already have correct type
+        args <- typedList
+        requireTyping <- FALSE
+      } else if (!missing(untypedList)) {
+        # Initialize with list where objects are still lists, amd need to be converted to right type.
+        args <- untypedList
+        requireTyping <- TRUE
+      } else if (!missing(json)) {
+        # Initialize with a JSON string
+        args <- jsonlite::fromJSON(json, simplifyDataFrame = FALSE)
+        requireTyping <- TRUE
+      } else {
+        stop("Must provide either typedList, untypedList, or json argument to constructor")
+      }
+      self$fromList(args, requireTyping)
       self$validate()
-      invisible(self)
     },
-
-    #' @description Validate the arm definition.
-    #' @return Invisibly returns `self`.
-    validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertCharacter(self$armId, len = 1, min.chars = 1,
-                                 any.missing = FALSE, add = errs)
-      checkmate::assertChoice(self$strategyType,
-                              choices = c("initiateWithin", "deferBeyond"),
-                              add = errs)
-      checkmate::assertNumeric(self$gracePeriod, len = 1, lower = 0,
-                               any.missing = FALSE, add = errs)
-      checkmate::assertCharacter(self$label, len = 1, null.ok = TRUE, add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
+    toList = function() {
+      # Using is(x, "environment") instead of is.environment(x) because former is FALSE for R6 objects.
+      asList <- Filter(function(x) !is.function(x) & !is(x, "environment"), as.list(self))
+      asList <- .recurseToList(asList)
+      return(asList)
+    },
+    toJson  = function() {
+      # Unlike CohortMethod, digits = NA (15 significant digits) instead of jsonlite's default of 4
+      # decimal places, so that reloaded settings keep their values.
+      jsonlite::toJSON(
+        self$toList(),
+        auto_unbox = TRUE,
+        pretty = TRUE,
+        null = "null",
+        digits = NA
+      )
+    },
+    fromList = function(list, requireTyping) {
+      for (name in names(list)) {
+        if (name %in% names(self)) {
+          self[[name]] <- list[[name]]
+        }
+      }
     }
   )
 )
 
-#' Create an arm definition
-#'
-#' Defines one of the two treatment strategies in a clone-censor-weight
-#' analysis.
-#'
-#' @param armId      A unique character identifier for this arm.
-#' @param strategyType One of `"initiateWithin"` or `"deferBeyond"`.
-#'   `"initiateWithin"`: the clone is artificially censored if treatment has
-#'   **not** occurred by day `gracePeriod`.
-#'   `"deferBeyond"`: the clone is artificially censored if treatment occurs
-#'   **within** `gracePeriod` days; treatment after that window is permitted.
-#' @param gracePeriod Number of days from cohort start defining the protocol
-#'   window. Must be `>= 0`.
-#' @param label Optional display label used in plots and tables.
-#'
-#' @return An `ArmDefinition` object.
-#'
-#' @examples
-#' armVaccinate <- createArmDefinition(
-#'   armId        = "rzv_within90",
-#'   strategyType = "initiateWithin",
-#'   gracePeriod  = 90,
-#'   label        = "RZV within 90 days"
-#' )
-#' armDeferred <- createArmDefinition(
-#'   armId        = "no_rzv_within90",
-#'   strategyType = "deferBeyond",
-#'   gracePeriod  = 90,
-#'   label        = "No RZV within 90 days"
-#' )
-#'
-#' @export
-createArmDefinition <- function(armId, strategyType, gracePeriod = 0,
-                                label = NULL) {
-  ArmDefinition$new(armId = armId, strategyType = strategyType,
-                    gracePeriod = gracePeriod, label = label)
+.dateCheck <- function(date) {
+  if (date != "") {
+    tryCatch({
+      dateFormatted <- paste0(
+        substr(x = date, start = 1, stop = 4), "-",
+        substr(x = date, start = 5, stop = 6), "-",
+        substr(x = date, start = 7, stop = 8)
+      )
+
+      date <- as.Date(dateFormatted)
+    }, error = function(e) {
+      stop(sprintf("Date: %s (%s) is not valid", date, dateFormatted))
+    })
+    checkmate::assertDate(date, lower = "1000-01-01", upper = "2999-12-31")
+  }
 }
 
+.convertAttrToMember <- function(object) {
+  if (is.function(object)) {
+    return(list(serialized_code = as.character(serialize(object, NULL))))
+  } else if (is.list(object)) {
+    if (length(object) > 0) {
+      for (i in 1:length(object)) {
+        if (!is.null(object[[i]])) {
+          object[[i]] <- .convertAttrToMember(object[[i]])
+        }
+      }
+    }
+    a <- names(attributes(object))
+    a <- a[!a %in% c("names", "class")]
+    class <- class(object)
+    if (length(class) > 1 || class != "list") {
+      class(object) <- "list"
+      object$attr_class <- class
+    }
+    if (length(a) > 0) {
+      object[paste("attr", a, sep = "_")] <- attributes(object)[a]
+    }
+  }
+  return(object)
+}
 
-# -------------------------------------------------------------------------
-# GetDbCloneCensorWeightDataArgs
-# -------------------------------------------------------------------------
+.convertMemberToAttr <- function(object) {
+  if (is.list(object)) {
+    if (length(object) > 0) {
+      if (length(object) == 1 && !is.null(names(object)) && names(object) == "serialized_code") {
+        return(unserialize(as.raw(sapply(object$serialized_code, strtoi, base = 16L))))
+      }
+      for (i in 1:length(object)) {
+        if (!is.null(object[[i]])) {
+          object[[i]] <- .convertMemberToAttr(object[[i]])
+        }
+      }
+      attrNames <- names(object)[grep("^attr_", names(object))]
+      cleanNames <- gsub("^attr_", "", attrNames)
+      if (any(cleanNames == "class")) {
+        class(object) <- object$attr_class
+        object$attr_class <- NULL
+        attrNames <- attrNames[attrNames != "attr_class"]
+        cleanNames <- cleanNames[cleanNames != "class"]
+      }
+      if (any(cleanNames == "row.names") &&  length(object$attr_row.names) ==  0) {
+        object$attr_row.names <- as.character(c())
+      }
+      attributes(object)[cleanNames] <- object[attrNames]
+      object[attrNames] <- NULL
+    }
+  }
+  return(object)
+}
 
-#' @title GetDbCloneCensorWeightDataArgs class
-#' @description R6 class for data extraction arguments. Use
-#'   [createGetDbCloneCensorWeightDataArgs()] to construct.
+.convertEmptyListToLogical <- function(object) {
+  # To mimic FeatureExtraction covariate settings behavior: empty vectors are logical
+  if (is.list(object)) {
+    if (length(object) > 0) {
+      for (i in 1:length(object)) {
+        if (!is.null(object[[i]])) {
+          object[[i]] <- .convertEmptyListToLogical(object[[i]])
+        }
+      }
+
+      idx <-sapply(object, function(x) is.list(x) && length(x) == 0)
+      object[idx] <- sapply(object[idx], as.logical)
+    }
+  }
+  return(object)
+}
+
+# End of code copied from CohortMethod --------------------------------------------------------------
+
+.treatmentRoles <- c("treatment", "comparatorTreatment")
+
+# Re-types a CohortMethod settings object from an untyped list by calling its public factory.
+# Fields the factory does not know are dropped; missing fields take the factory's defaults.
+.typeCohortMethodSettings <- function(untypedList, factory) {
+  args <- untypedList[intersect(names(untypedList), names(formals(factory)))]
+  return(do.call(factory, args))
+}
+
+# Treatment strategy -------------------------------------------------------------------------------
+
+#' Create a treatment strategy
+#'
+#' @details
+#' A treatment strategy is one arm of the emulated target trial. Strategies refer to treatments by
+#' role (`"treatment"` or `"comparatorTreatment"`), never by cohort ID. The roles are mapped to cohort
+#' IDs by [createTargetTreatmentOutcomes()].
+#'
+#' Strategy types:
+#'
+#' - `"initiateWithin"`: start the treatment on a day in `graceStart..graceEnd` (days since index).
+#' - `"notInitiateWithin"`: do not start the treatment on or before day `graceEnd`.
+#' - `"neverInitiate"`: never start the treatment during follow-up.
+#'
+#' This version only supports `graceStart = 0` and no `prohibitedTreatments` when creating clones.
+#'
+#' @param strategyId           An integer identifying the strategy. Used for labels and serialization;
+#'                             within an analysis the strategies are numbered by their position.
+#' @param label                A short label for the strategy, used in output.
+#' @param type                 The strategy type: `"initiateWithin"`, `"notInitiateWithin"`, or
+#'                             `"neverInitiate"`.
+#' @param treatment            The role of the treatment the strategy refers to: `"treatment"` or
+#'                             `"comparatorTreatment"`.
+#' @param graceStart           First day (since index) of the grace period.
+#' @param graceEnd             Last day (since index) of the grace period. Required for
+#'                             `"initiateWithin"` and `"notInitiateWithin"`; must be `NULL` for
+#'                             `"neverInitiate"`.
+#' @param prohibitedTreatments Roles of treatments whose start is a deviation from the strategy, or
+#'                             `NULL`.
+#'
+#' @return
+#' An object of type `TreatmentStrategy`.
+#'
+#' @examples
+#' initiate <- createTreatmentStrategy(
+#'   strategyId = 1,
+#'   label = "Initiate within 7 days",
+#'   type = "initiateWithin",
+#'   graceEnd = 7
+#' )
+#' defer <- createTreatmentStrategy(
+#'   strategyId = 2,
+#'   label = "Do not initiate within 7 days",
+#'   type = "notInitiateWithin",
+#'   graceEnd = 7
+#' )
+#'
 #' @export
-GetDbCloneCensorWeightDataArgs <- R6::R6Class(
+createTreatmentStrategy <- function(strategyId,
+                                    label,
+                                    type,
+                                    treatment = "treatment",
+                                    graceStart = 0,
+                                    graceEnd = NULL,
+                                    prohibitedTreatments = NULL) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(TreatmentStrategy$new(typedList = args))
+}
+
+TreatmentStrategy <- R6Class(
+  "TreatmentStrategy",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    strategyId = NULL,
+    label = NULL,
+    type = NULL,
+    treatment = NULL,
+    graceStart = NULL,
+    graceEnd = NULL,
+    prohibitedTreatments = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertInt(self$strategyId, add = errorMessages)
+      checkmate::assertString(self$label, add = errorMessages)
+      checkmate::assertChoice(self$type, c("initiateWithin", "notInitiateWithin", "neverInitiate"), add = errorMessages)
+      checkmate::assertChoice(self$treatment, .treatmentRoles, add = errorMessages)
+      checkmate::assertInt(self$graceStart, lower = 0, add = errorMessages)
+      checkmate::assertInt(self$graceEnd, lower = 0, null.ok = TRUE, add = errorMessages)
+      checkmate::assertCharacter(self$prohibitedTreatments, any.missing = FALSE, null.ok = TRUE, add = errorMessages)
+      checkmate::assertSubset(self$prohibitedTreatments, .treatmentRoles, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      if (self$type == "neverInitiate") {
+        if (!is.null(self$graceEnd)) {
+          stop("graceEnd must be NULL for strategy type 'neverInitiate'")
+        }
+      } else {
+        if (is.null(self$graceEnd)) {
+          stop(sprintf("graceEnd is required for strategy type '%s'", self$type))
+        }
+        if (self$graceEnd < self$graceStart) {
+          stop("graceEnd must be greater than or equal to graceStart")
+        }
+      }
+      if (self$treatment %in% self$prohibitedTreatments) {
+        stop("A strategy cannot prohibit its own treatment")
+      }
+    }
+  )
+)
+
+# Data extraction ----------------------------------------------------------------------------------
+
+#' Create a parameter object for extracting clone-censor-weight data
+#'
+#' @details
+#' Create an object defining the parameter values for extracting a [CloneCensorWeightData] object from
+#' the database.
+#'
+#' @param studyStartDate                    A calendar date specifying the minimum date that a cohort
+#'                                          index date can appear. Date format is 'yyyymmdd', or `""`
+#'                                          for no restriction.
+#' @param studyEndDate                      A calendar date specifying the maximum date that a cohort
+#'                                          index date can appear. Date format is 'yyyymmdd', or `""`
+#'                                          for no restriction.
+#' @param washoutPeriod                     The minimum required continuous observation time (days)
+#'                                          prior to index date.
+#' @param firstOnly                         Keep only the first index date per person?
+#' @param priorUseLookback                  How many days before the index date to look for prior use
+#'                                          of the treatments.
+#' @param removeSubjectsWithPriorTreatment  Remove persons who used one of the treatments in the
+#'                                          `priorUseLookback` window before index?
+#' @param maxCohortSize                     If the eligible cohort is larger than this number it will
+#'                                          be sampled to this size. `0` means no maximum.
+#' @param covariateSettings                 An object of type `covariateSettings` as created using
+#'                                          [FeatureExtraction::createCovariateSettings()], or a list of
+#'                                          such objects.
+#'
+#' @return
+#' An object of type `GetDbCloneCensorWeightDataArgs`.
+#'
+#' @examples
+#' args <- createGetDbCloneCensorWeightDataArgs(washoutPeriod = 180)
+#'
+#' @export
+createGetDbCloneCensorWeightDataArgs <- function(studyStartDate = "",
+                                                 studyEndDate = "",
+                                                 washoutPeriod = 365,
+                                                 firstOnly = TRUE,
+                                                 priorUseLookback = 365,
+                                                 removeSubjectsWithPriorTreatment = TRUE,
+                                                 maxCohortSize = 0,
+                                                 covariateSettings = FeatureExtraction::createDefaultCovariateSettings()) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(GetDbCloneCensorWeightDataArgs$new(typedList = args))
+}
+
+GetDbCloneCensorWeightDataArgs <- R6Class(
   "GetDbCloneCensorWeightDataArgs",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field washoutPeriod Required days of prior observation.
-    washoutPeriod   = NULL,
-    #' @field covariateSettings A FeatureExtraction covariate settings object.
+    studyStartDate = NULL,
+    studyEndDate = NULL,
+    washoutPeriod = NULL,
+    firstOnly = NULL,
+    priorUseLookback = NULL,
+    removeSubjectsWithPriorTreatment = NULL,
+    maxCohortSize = NULL,
     covariateSettings = NULL,
-    #' @field maxCohortSize Maximum eligible subjects; 0 means no limit.
-    maxCohortSize   = NULL,
-
-    #' @description Create `GetDbCloneCensorWeightDataArgs`.
-    #' @param washoutPeriod Required days of prior observation.
-    #' @param covariateSettings A FeatureExtraction covariate settings object.
-    #' @param maxCohortSize Maximum eligible subjects (0 = no limit).
-    initialize = function(washoutPeriod   = 365,
-                          covariateSettings = NULL,
-                          maxCohortSize   = 0) {
-      self$washoutPeriod    <- washoutPeriod
-      self$covariateSettings <- covariateSettings
-      self$maxCohortSize    <- maxCohortSize
-      invisible(self)
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertCharacter(self$studyStartDate, len = 1, add = errorMessages)
+      checkmate::assertCharacter(self$studyEndDate, len = 1, add = errorMessages)
+      checkmate::assertInt(self$washoutPeriod, lower = 0, add = errorMessages)
+      checkmate::assertFlag(self$firstOnly, add = errorMessages)
+      checkmate::assertInt(self$priorUseLookback, lower = 0, add = errorMessages)
+      checkmate::assertFlag(self$removeSubjectsWithPriorTreatment, add = errorMessages)
+      checkmate::assertInt(self$maxCohortSize, lower = 0, add = errorMessages)
+      checkmate::assertList(self$covariateSettings, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      .dateCheck(self$studyStartDate)
+      .dateCheck(self$studyEndDate)
     },
-
-    #' @description Convert to list, with special handling for covariateSettings.
-    #' @return A named list.
     toList = function() {
-      result <- list(
-        washoutPeriod = self$washoutPeriod,
-        maxCohortSize = self$maxCohortSize
-      )
-      if (!is.null(self$covariateSettings)) {
-        result[["covariateSettings"]] <-
-          .convertAttrToMember(self$covariateSettings)
+      asList <- super$toList()
+      asList$covariateSettings <- .convertAttrToMember(self$covariateSettings)
+      return(asList)
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        self$covariateSettings <- .convertEmptyListToLogical(.convertMemberToAttr(list$covariateSettings))
       }
-      result
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
-    validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertNumeric(self$washoutPeriod, len = 1, lower = 0,
-                               any.missing = FALSE, add = errs)
-      checkmate::assertNumeric(self$maxCohortSize, len = 1, lower = 0,
-                               any.missing = FALSE, add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
     }
   )
 )
 
-#' Create data extraction arguments
+# Cloning ------------------------------------------------------------------------------------------
+
+#' Create a parameter object for creating clones
 #'
-#' @param washoutPeriod Required days of prior observation before cohort entry.
-#'   Subjects without this lookback are excluded.
-#' @param covariateSettings A FeatureExtraction covariate settings object
-#'   (e.g. from [FeatureExtraction::createDefaultCovariateSettings()]). Used
-#'   to build the baseline covariate matrix for IPCW models.
-#' @param maxCohortSize Maximum number of eligible subjects to include. If the
-#'   eligible population exceeds this, a random sample is drawn. `0` means no
-#'   limit.
+#' @details
+#' Create an object defining the parameter values for cloning. Each eligible person is cloned once
+#' per strategy and followed until the first of outcome, death, deviation from the strategy,
+#' observation end, or risk-window end.
 #'
-#' @return A `GetDbCloneCensorWeightDataArgs` object.
+#' Same-day ordering (`sameDayOrdering`):
+#'
+#' - `"eventsFirst"`: on one day the order is outcome, death, deviation, observation end, risk-window
+#'   end. An outcome on the day of a deviation counts.
+#' - `"deviationFirst"`: deviation, outcome, death, observation end, risk-window end.
+#'
+#' @param strategies      A list of exactly two objects of type `TreatmentStrategy` as created using
+#'                        [createTreatmentStrategy()]. The first is the target strategy, the second
+#'                        the comparator (reference) strategy.
+#' @param sameDayOrdering How to order events that happen on the same day: `"eventsFirst"` or
+#'                        `"deviationFirst"`. See details.
+#' @param competingEvents Treat death as a competing event (`"death"`) or not (`"none"`).
+#'
+#' @return
+#' An object of type `CreateClonesArgs`.
 #'
 #' @examples
-#' \dontrun{
-#' args <- createGetDbCloneCensorWeightDataArgs(
-#'   washoutPeriod     = 365,
-#'   covariateSettings = FeatureExtraction::createDefaultCovariateSettings()
+#' args <- createCreateClonesArgs(
+#'   strategies = list(
+#'     createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+#'     createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+#'   )
 #' )
-#' }
 #'
 #' @export
-createGetDbCloneCensorWeightDataArgs <- function(washoutPeriod   = 365,
-                                                 covariateSettings = NULL,
-                                                 maxCohortSize   = 0) {
-  obj <- GetDbCloneCensorWeightDataArgs$new(
-    washoutPeriod   = washoutPeriod,
-    covariateSettings = covariateSettings,
-    maxCohortSize   = maxCohortSize
-  )
-  obj$validate()
-  obj
+createCreateClonesArgs <- function(strategies,
+                                   sameDayOrdering = "eventsFirst",
+                                   competingEvents = "death") {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(CreateClonesArgs$new(typedList = args))
 }
 
-
-# -------------------------------------------------------------------------
-# CreateStudyPopulationArgs
-# -------------------------------------------------------------------------
-
-#' @title CreateStudyPopulationArgs class
-#' @description R6 class for study population arguments. Use
-#'   [createCreateStudyPopulationArgs()] to construct.
-#' @export
-CreateStudyPopulationArgs <- R6::R6Class(
-  "CreateStudyPopulationArgs",
+CreateClonesArgs <- R6Class(
+  "CreateClonesArgs",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field removeSubjectsWithPriorOutcome Remove subjects with prior outcome.
-    removeSubjectsWithPriorOutcome = NULL,
-    #' @field priorOutcomeLookback Days to look back for prior outcome.
-    priorOutcomeLookback           = NULL,
-    #' @field minDaysAtRisk Minimum days of follow-up required.
-    minDaysAtRisk                  = NULL,
-    #' @field riskWindowStart Days from anchor to start of risk window.
-    riskWindowStart                = NULL,
-    #' @field startAnchor Anchor for risk window start.
-    startAnchor                    = NULL,
-    #' @field riskWindowEnd Days from anchor to end of risk window.
-    riskWindowEnd                  = NULL,
-    #' @field endAnchor Anchor for risk window end.
-    endAnchor                      = NULL,
-
-    #' @description Create `CreateStudyPopulationArgs`.
-    #' @param removeSubjectsWithPriorOutcome Logical.
-    #' @param priorOutcomeLookback Days.
-    #' @param minDaysAtRisk Minimum follow-up days.
-    #' @param riskWindowStart Days from anchor.
-    #' @param startAnchor `"cohort start"` or `"cohort end"`.
-    #' @param riskWindowEnd Days from anchor.
-    #' @param endAnchor `"cohort start"` or `"cohort end"`.
-    initialize = function(removeSubjectsWithPriorOutcome = TRUE,
-                          priorOutcomeLookback           = 99999,
-                          minDaysAtRisk                  = 1,
-                          riskWindowStart                = 0,
-                          startAnchor                    = "cohort start",
-                          riskWindowEnd                  = 0,
-                          endAnchor                      = "cohort end") {
-      self$removeSubjectsWithPriorOutcome <- removeSubjectsWithPriorOutcome
-      self$priorOutcomeLookback           <- priorOutcomeLookback
-      self$minDaysAtRisk                  <- minDaysAtRisk
-      self$riskWindowStart                <- riskWindowStart
-      self$startAnchor                    <- startAnchor
-      self$riskWindowEnd                  <- riskWindowEnd
-      self$endAnchor                      <- endAnchor
-      invisible(self)
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    strategies = NULL,
+    sameDayOrdering = NULL,
+    competingEvents = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertLogical(self$removeSubjectsWithPriorOutcome, len = 1,
-                               add = errs)
-      checkmate::assertNumeric(self$priorOutcomeLookback, len = 1, lower = 0,
-                               add = errs)
-      checkmate::assertNumeric(self$minDaysAtRisk, len = 1, lower = 0,
-                               add = errs)
-      checkmate::assertNumeric(self$riskWindowStart, len = 1, add = errs)
-      checkmate::assertChoice(self$startAnchor,
-                              c("cohort start", "cohort end"), add = errs)
-      checkmate::assertNumeric(self$riskWindowEnd, len = 1, add = errs)
-      checkmate::assertChoice(self$endAnchor,
-                              c("cohort start", "cohort end"), add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertList(self$strategies, len = 2, add = errorMessages)
+      for (i in seq_along(self$strategies)) {
+        checkmate::assertR6(self$strategies[[i]], "TreatmentStrategy", add = errorMessages)
+      }
+      checkmate::assertChoice(self$sameDayOrdering, c("eventsFirst", "deviationFirst"), add = errorMessages)
+      checkmate::assertChoice(self$competingEvents, c("death", "none"), add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      if (self$strategies[[1]]$strategyId == self$strategies[[2]]$strategyId) {
+        stop("The two strategies must have different strategyId values")
+      }
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        for (i in seq_along(self$strategies)) {
+          self$strategies[[i]] <- TreatmentStrategy$new(untypedList = self$strategies[[i]])
+        }
+      }
     }
   )
 )
 
-#' Create study population arguments
+# Censoring models ---------------------------------------------------------------------------------
+
+#' Create a time basis
 #'
-#' @param removeSubjectsWithPriorOutcome If `TRUE`, subjects with the outcome
-#'   in the `priorOutcomeLookback` window before cohort entry are excluded.
-#' @param priorOutcomeLookback Days before cohort entry to search for prior
-#'   outcome. Only used when `removeSubjectsWithPriorOutcome = TRUE`.
-#' @param minDaysAtRisk Subjects with fewer days of follow-up are excluded.
-#' @param riskWindowStart Days from `startAnchor` to the start of the risk
-#'   window. Use `0` to start at cohort entry.
-#' @param startAnchor `"cohort start"` or `"cohort end"`.
-#' @param riskWindowEnd Days from `endAnchor` to the end of the risk window.
-#'   Use `0` to end at the natural observation end.
-#' @param endAnchor `"cohort start"` or `"cohort end"`.
+#' @details
+#' Defines how time enters a pooled (discrete-time) model.
 #'
-#' @return A `CreateStudyPopulationArgs` object.
+#' @param type           The basis: `"indicator"` (one indicator per interval), `"naturalSpline"`, or
+#'                       `"linear"`.
+#' @param intervalLength The length of each interval in days.
+#' @param df             Degrees of freedom of the natural spline.
+#'
+#' @return
+#' An object of type `TimeBasis`.
 #'
 #' @examples
-#' args <- createCreateStudyPopulationArgs(
-#'   removeSubjectsWithPriorOutcome = TRUE,
-#'   priorOutcomeLookback           = 365,
-#'   minDaysAtRisk                  = 1,
-#'   riskWindowEnd                  = 730,
-#'   endAnchor                      = "cohort start"
-#' )
+#' timeBasis <- createTimeBasis(type = "naturalSpline", intervalLength = 7, df = 3)
 #'
 #' @export
-createCreateStudyPopulationArgs <- function(
-    removeSubjectsWithPriorOutcome = TRUE,
-    priorOutcomeLookback           = 99999,
-    minDaysAtRisk                  = 1,
-    riskWindowStart                = 0,
-    startAnchor                    = "cohort start",
-    riskWindowEnd                  = 0,
-    endAnchor                      = "cohort end") {
-  obj <- CreateStudyPopulationArgs$new(
-    removeSubjectsWithPriorOutcome = removeSubjectsWithPriorOutcome,
-    priorOutcomeLookback           = priorOutcomeLookback,
-    minDaysAtRisk                  = minDaysAtRisk,
-    riskWindowStart                = riskWindowStart,
-    startAnchor                    = startAnchor,
-    riskWindowEnd                  = riskWindowEnd,
-    endAnchor                      = endAnchor
-  )
-  obj$validate()
-  obj
+createTimeBasis <- function(type = "indicator",
+                            intervalLength = 1,
+                            df = 4) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(TimeBasis$new(typedList = args))
 }
 
-
-# -------------------------------------------------------------------------
-# CreateClonesAndCensorArgs
-# -------------------------------------------------------------------------
-
-#' @title CreateClonesAndCensorArgs class
-#' @description R6 class for cloning arguments. Use
-#'   [createCreateClonesAndCensorArgs()] to construct.
-#' @export
-CreateClonesAndCensorArgs <- R6::R6Class(
-  "CreateClonesAndCensorArgs",
+TimeBasis <- R6Class(
+  "TimeBasis",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field arms List of exactly two `ArmDefinition` objects.
-    arms           = NULL,
-    #' @field intervalLength Person-time interval length in days.
+    type = NULL,
     intervalLength = NULL,
-
-    #' @description Create `CreateClonesAndCensorArgs`.
-    #' @param arms List of exactly two `ArmDefinition` objects.
-    #' @param intervalLength Person-time interval length in days.
-    initialize = function(arms = NULL, intervalLength = 30) {
-      self$arms           <- arms
-      self$intervalLength <- intervalLength
-      invisible(self)
-    },
-
-    #' @description Convert to list, serializing each arm.
-    #' @return A named list.
-    toList = function() {
-      list(
-        arms           = lapply(self$arms, function(a) a$toList()),
-        intervalLength = self$intervalLength
-      )
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    df = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertList(self$arms, len = 2, any.missing = FALSE, add = errs)
-      checkmate::assertNumeric(self$intervalLength, len = 1, lower = 1,
-                               add = errs)
-      checkmate::reportAssertions(errs)
-      if (!all(vapply(self$arms, inherits, logical(1), "ArmDefinition"))) {
-        stop("Each element of `arms` must be an ArmDefinition object.",
-             call. = FALSE)
-      }
-      armIds <- vapply(self$arms, function(a) a$armId, character(1))
-      if (anyDuplicated(armIds)) {
-        stop("Both arms must have distinct `armId` values.", call. = FALSE)
-      }
-      invisible(self)
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertChoice(self$type, c("indicator", "naturalSpline", "linear"), add = errorMessages)
+      checkmate::assertInt(self$intervalLength, lower = 1, add = errorMessages)
+      checkmate::assertInt(self$df, lower = 1, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
     }
   )
 )
 
-#' Create cloning and censoring arguments
+#' Create a parameter object for fitting the censoring models
 #'
-#' @param arms A list of exactly two [createArmDefinition()] objects defining
-#'   the two treatment strategies. The arms must have distinct `armId` values.
-#' @param intervalLength Length in days of each person-time interval used in
-#'   the pooled logistic IPCW models. Default is 30 days.
+#' @details
+#' Create an object defining the parameter values for fitting the models of artificial censoring
+#' (deviation from a strategy). For `"initiateWithin"` strategies a binary model at the end of the grace
+#' period is always used. For `"notInitiateWithin"` and `"neverInitiate"` strategies the hazard of
+#' initiation is modelled with `hazardModelType`.
 #'
-#' @return A `CreateClonesAndCensorArgs` object.
+#' @param hazardModelType          The hazard model: `"cox"` or `"logistic"` (pooled logistic).
+#' @param timeBasis                An object of type `TimeBasis` as created using
+#'                                 [createTimeBasis()], used by the pooled logistic model.
+#' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
+#'                                 `"artificial"`.
+#' @param useCovariates            Use the baseline covariates in the censoring models?
+#' @param excludeCovariateIds      Exclude these covariates from the censoring models.
+#' @param includeCovariateIds      Include only these covariates in the censoring models.
+#' @param maxCohortSizeForFitting  If the risk set is larger than this number, it is sampled to this
+#'                                 size before fitting. `0` means no sampling.
+#' @param errorOnHighCorrelation   Check each covariate for high correlation with the response, and
+#'                                 throw an error if found?
+#' @param stopOnError              If an error occurs while fitting, should the function stop?
+#' @param prior                    The prior used to fit the models. See [Cyclops::createPrior()].
+#' @param control                  The control object used to fit the models. See
+#'                                 [Cyclops::createControl()].
+#'
+#' @return
+#' An object of type `FitCensoringModelsArgs`.
 #'
 #' @examples
-#' arm1 <- createArmDefinition("treated",  "initiateWithin", gracePeriod = 90)
-#' arm2 <- createArmDefinition("deferred", "deferBeyond",    gracePeriod = 90)
-#' args <- createCreateClonesAndCensorArgs(
-#'   arms           = list(arm1, arm2),
-#'   intervalLength = 30
-#' )
+#' args <- createFitCensoringModelsArgs(hazardModelType = "logistic")
 #'
 #' @export
-createCreateClonesAndCensorArgs <- function(arms, intervalLength = 30) {
-  obj <- CreateClonesAndCensorArgs$new(arms = arms, intervalLength = intervalLength)
-  obj$validate()
-  obj
+createFitCensoringModelsArgs <- function(hazardModelType = "cox",
+                                         timeBasis = createTimeBasis(),
+                                         censoringMechanisms = "artificial",
+                                         useCovariates = TRUE,
+                                         excludeCovariateIds = c(),
+                                         includeCovariateIds = c(),
+                                         maxCohortSizeForFitting = 250000,
+                                         errorOnHighCorrelation = TRUE,
+                                         stopOnError = TRUE,
+                                         prior = Cyclops::createPrior("laplace",
+                                                                      exclude = c(0),
+                                                                      useCrossValidation = TRUE),
+                                         control = Cyclops::createControl(noiseLevel = "silent",
+                                                                          cvType = "auto",
+                                                                          seed = 1,
+                                                                          resetCoefficients = TRUE,
+                                                                          tolerance = 2e-07,
+                                                                          cvRepetitions = 10,
+                                                                          startingVariance = 0.01)) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(FitCensoringModelsArgs$new(typedList = args))
 }
 
-
-# -------------------------------------------------------------------------
-# CreateCensoringWeightsArgs
-# -------------------------------------------------------------------------
-
-#' @title CreateCensoringWeightsArgs class
-#' @description R6 class for IPCW weight arguments. Use
-#'   [createCreateCensoringWeightsArgs()] to construct.
-#' @export
-CreateCensoringWeightsArgs <- R6::R6Class(
-  "CreateCensoringWeightsArgs",
+FitCensoringModelsArgs <- R6Class(
+  "FitCensoringModelsArgs",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field artificialCensoringFormula Formula for the artificial-censoring
-    #'   IPCW model, or `NULL` to build automatically from covariates.
-    artificialCensoringFormula = NULL,
-    #' @field classicalCensoringFormula Formula for the classical-censoring
-    #'   IPCW model, or `NULL` to build automatically.
-    classicalCensoringFormula  = NULL,
-    #' @field trim Two-element probability vector for weight trimming.
-    trim      = NULL,
-    #' @field maxWeight Hard cap applied after trimming.
-    maxWeight = NULL,
-
-    #' @description Create `CreateCensoringWeightsArgs`.
-    #' @param artificialCensoringFormula Formula or `NULL`.
-    #' @param classicalCensoringFormula Formula or `NULL`.
-    #' @param trim Two-element probability vector.
-    #' @param maxWeight Hard cap on cumulative weights.
-    initialize = function(artificialCensoringFormula = NULL,
-                          classicalCensoringFormula  = NULL,
-                          trim      = c(0.01, 0.99),
-                          maxWeight = 10) {
-      self$artificialCensoringFormula <- artificialCensoringFormula
-      self$classicalCensoringFormula  <- classicalCensoringFormula
-      self$trim      <- trim
-      self$maxWeight <- maxWeight
-      invisible(self)
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    hazardModelType = NULL,
+    timeBasis = NULL,
+    censoringMechanisms = NULL,
+    useCovariates = NULL,
+    excludeCovariateIds = NULL,
+    includeCovariateIds = NULL,
+    maxCohortSizeForFitting = NULL,
+    errorOnHighCorrelation = NULL,
+    stopOnError = NULL,
+    prior = NULL,
+    control = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertNumeric(self$trim, len = 2, lower = 0, upper = 1,
-                               sorted = TRUE, add = errs)
-      checkmate::assertNumeric(self$maxWeight, len = 1, lower = 1,
-                               add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertChoice(self$hazardModelType, c("cox", "logistic"), add = errorMessages)
+      checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
+      checkmate::assertCharacter(self$censoringMechanisms, min.len = 1, add = errorMessages)
+      checkmate::assertSubset(self$censoringMechanisms, "artificial", add = errorMessages)
+      checkmate::assertFlag(self$useCovariates, add = errorMessages)
+      .assertCovariateId(self$excludeCovariateIds, null.ok = TRUE, add = errorMessages)
+      .assertCovariateId(self$includeCovariateIds, null.ok = TRUE, add = errorMessages)
+      checkmate::assertInt(self$maxCohortSizeForFitting, lower = 0, add = errorMessages)
+      checkmate::assertFlag(self$errorOnHighCorrelation, add = errorMessages)
+      checkmate::assertFlag(self$stopOnError, add = errorMessages)
+      checkmate::assertClass(self$prior, "cyclopsPrior", add = errorMessages)
+      checkmate::assertClass(self$control, "cyclopsControl", add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        self$timeBasis <- TimeBasis$new(untypedList = self$timeBasis)
+        class(self$control) <- "cyclopsControl"
+        class(self$prior) <- "cyclopsPrior"
+      }
     }
   )
 )
 
-#' Create censoring weight arguments
+# Weights ------------------------------------------------------------------------------------------
+
+#' Create a weight truncation rule
 #'
-#' @param artificialCensoringFormula An optional [stats::formula()] for the
-#'   pooled logistic model predicting artificial censoring. If `NULL`, the
-#'   formula is built automatically from all baseline covariates.
-#' @param classicalCensoringFormula An optional [stats::formula()] for the
-#'   pooled logistic model predicting classical (loss-to-follow-up) censoring.
-#'   If `NULL`, built automatically.
-#' @param trim A two-element numeric vector `c(lower, upper)` of quantile
-#'   probabilities at which cumulative weights are trimmed. Default
-#'   `c(0.01, 0.99)`.
-#' @param maxWeight Hard upper cap on cumulative weights applied after
-#'   trimming. Default `10`.
+#' @details
+#' Weights are truncated per strategy. With `type = "percentile"`, the cap is the `upper` percentile
+#' of the maximum weight over the clones of the strategy. With `type = "fixed"`, the cap is `upper`.
 #'
-#' @return A `CreateCensoringWeightsArgs` object.
+#' @param type  The truncation rule: `"none"`, `"percentile"`, or `"fixed"`.
+#' @param upper For `"percentile"`, the percentile in (0, 1). For `"fixed"`, the cap (greater than 1).
+#'              Ignored for `"none"`.
+#'
+#' @return
+#' An object of type `WeightTruncation`.
 #'
 #' @examples
-#' args <- createCreateCensoringWeightsArgs(
-#'   trim      = c(0.01, 0.99),
-#'   maxWeight = 10
-#' )
+#' truncation <- createWeightTruncation(type = "fixed", upper = 20)
 #'
 #' @export
-createCreateCensoringWeightsArgs <- function(artificialCensoringFormula = NULL,
-                                             classicalCensoringFormula  = NULL,
-                                             trim      = c(0.01, 0.99),
-                                             maxWeight = 10) {
-  obj <- CreateCensoringWeightsArgs$new(
-    artificialCensoringFormula = artificialCensoringFormula,
-    classicalCensoringFormula  = classicalCensoringFormula,
-    trim      = trim,
-    maxWeight = maxWeight
-  )
-  obj$validate()
-  obj
+createWeightTruncation <- function(type = "percentile",
+                                   upper = 0.99) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(WeightTruncation$new(typedList = args))
 }
 
+WeightTruncation <- R6Class(
+  "WeightTruncation",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    type = NULL,
+    upper = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertChoice(self$type, c("none", "percentile", "fixed"), add = errorMessages)
+      checkmate::assertNumber(self$upper, null.ok = TRUE, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      if (self$type == "percentile" && (is.null(self$upper) || self$upper <= 0 || self$upper >= 1)) {
+        stop("For percentile truncation, upper must be in (0, 1)")
+      }
+      if (self$type == "fixed" && (is.null(self$upper) || self$upper <= 1)) {
+        stop("For fixed truncation, upper must be greater than 1")
+      }
+    }
+  )
+)
 
-# -------------------------------------------------------------------------
-# FitOutcomeModelArgs
-# -------------------------------------------------------------------------
-
-#' @title FitOutcomeModelArgs class
-#' @description R6 class for outcome model arguments. Use
-#'   [createFitOutcomeModelArgs()] to construct.
+#' Create a parameter object for computing the censoring weights
+#'
+#' @param stabilized Stabilize the weights with a numerator model of time only?
+#' @param truncation An object of type `WeightTruncation` as created using
+#'                   [createWeightTruncation()].
+#'
+#' @return
+#' An object of type `ComputeWeightsArgs`.
+#'
+#' @examples
+#' args <- createComputeWeightsArgs(stabilized = FALSE)
+#'
 #' @export
-FitOutcomeModelArgs <- R6::R6Class(
+createComputeWeightsArgs <- function(stabilized = TRUE,
+                                     truncation = createWeightTruncation()) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(ComputeWeightsArgs$new(typedList = args))
+}
+
+ComputeWeightsArgs <- R6Class(
+  "ComputeWeightsArgs",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    stabilized = NULL,
+    truncation = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertFlag(self$stabilized, add = errorMessages)
+      checkmate::assertR6(self$truncation, "WeightTruncation", add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        self$truncation <- WeightTruncation$new(untypedList = self$truncation)
+      }
+    }
+  )
+)
+
+# Outcome model ------------------------------------------------------------------------------------
+
+#' Create a parameter object for the bootstrap
+#'
+#' @details
+#' The bootstrap resamples persons (so all clones of a person stay together) and re-estimates the
+#' censoring models and weights in every replicate.
+#'
+#' @param replicates         The number of bootstrap replicates.
+#' @param seed               The random seed.
+#' @param ci                 How to compute confidence intervals: `"percentile"` or `"normal"`.
+#' @param fixHyperparameters Reuse the prior variances selected by cross-validation on the full data
+#'                           in every replicate?
+#'
+#' @return
+#' An object of type `BootstrapArgs`.
+#'
+#' @examples
+#' args <- createBootstrapArgs(replicates = 500)
+#'
+#' @export
+createBootstrapArgs <- function(replicates = 200,
+                                seed = 1,
+                                ci = "percentile",
+                                fixHyperparameters = TRUE) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(BootstrapArgs$new(typedList = args))
+}
+
+BootstrapArgs <- R6Class(
+  "BootstrapArgs",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    replicates = NULL,
+    seed = NULL,
+    ci = NULL,
+    fixHyperparameters = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertInt(self$replicates, lower = 1, add = errorMessages)
+      checkmate::assertInt(self$seed, add = errorMessages)
+      checkmate::assertChoice(self$ci, c("percentile", "normal"), add = errorMessages)
+      checkmate::assertFlag(self$fixHyperparameters, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+    }
+  )
+)
+
+#' Create a parameter object for fitting the outcome model
+#'
+#' @details
+#' Create an object defining the parameter values for the weighted (marginal structural) outcome
+#' model fitted to the clones.
+#'
+#' This version requires `useCovariates = FALSE` and `stratified = FALSE`.
+#'
+#' @param modelType            The outcome model: `"cox"`, `"logistic"` (pooled logistic), or `"km"`
+#'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
+#' @param horizons             Days since index at which risks, risk differences and risk ratios are
+#'                             reported.
+#' @param timeBasis            An object of type `TimeBasis` as created using [createTimeBasis()], used
+#'                             by the pooled logistic model.
+#' @param armByTimeInteraction Add strategy-by-time interactions to the pooled logistic model?
+#' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
+#'                             `"bootstrap"`, or `"modelBased"`.
+#' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
+#'                             [createBootstrapArgs()], used when `varianceEstimator = "bootstrap"`.
+#' @param useCovariates        Add the baseline covariates to the outcome model?
+#' @param stratified           Fit a stratified model?
+#' @param prior                The prior used to fit the model. See [Cyclops::createPrior()].
+#' @param control              The control object used to fit the model. See
+#'                             [Cyclops::createControl()].
+#'
+#' @return
+#' An object of type `FitOutcomeModelArgs`.
+#'
+#' @examples
+#' args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
+#'
+#' @export
+createFitOutcomeModelArgs <- function(modelType = "cox",
+                                      horizons = c(365),
+                                      timeBasis = createTimeBasis(intervalLength = 30),
+                                      armByTimeInteraction = FALSE,
+                                      varianceEstimator = "robust",
+                                      bootstrapArgs = createBootstrapArgs(),
+                                      useCovariates = FALSE,
+                                      stratified = FALSE,
+                                      prior = Cyclops::createPrior("none"),
+                                      control = Cyclops::createControl()) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(FitOutcomeModelArgs$new(typedList = args))
+}
+
+FitOutcomeModelArgs <- R6Class(
   "FitOutcomeModelArgs",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field modelType `"cox"` or `"logistic"`.
-    modelType         = NULL,
-    #' @field varianceEstimator `"robust"`, `"bootstrap"`, or `"conventional"`.
+    modelType = NULL,
+    horizons = NULL,
+    timeBasis = NULL,
+    armByTimeInteraction = NULL,
     varianceEstimator = NULL,
-    #' @field nBootstraps Number of bootstrap replicates.
-    nBootstraps       = NULL,
-    #' @field seed Random seed for bootstrap.
-    seed              = NULL,
-
-    #' @description Create `FitOutcomeModelArgs`.
-    #' @param modelType Model type.
-    #' @param varianceEstimator Variance estimator.
-    #' @param nBootstraps Bootstrap replicates.
-    #' @param seed Random seed.
-    initialize = function(modelType         = "cox",
-                          varianceEstimator = "robust",
-                          nBootstraps       = 200,
-                          seed              = 1) {
-      self$modelType         <- modelType
-      self$varianceEstimator <- varianceEstimator
-      self$nBootstraps       <- nBootstraps
-      self$seed              <- seed
-      invisible(self)
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    bootstrapArgs = NULL,
+    useCovariates = NULL,
+    stratified = NULL,
+    prior = NULL,
+    control = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertChoice(self$modelType, c("cox", "logistic"), add = errs)
-      checkmate::assertChoice(self$varianceEstimator,
-                              c("robust", "bootstrap", "conventional"),
-                              add = errs)
-      checkmate::assertCount(self$nBootstraps, positive = TRUE, add = errs)
-      checkmate::assertIntegerish(self$seed, len = 1, add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
-    }
-  )
-)
-
-#' Create outcome model arguments
-#'
-#' @param modelType `"cox"` for a weighted Cox proportional hazards model, or
-#'   `"logistic"` for a weighted pooled logistic model.
-#' @param varianceEstimator Method for computing standard errors that account
-#'   for within-subject clone correlation:
-#'   - `"robust"`: Lin-Wei-Ying sandwich estimator, clustering on subject.
-#'     Fast and appropriate for most studies.
-#'   - `"bootstrap"`: Subject-level bootstrap. Slower but makes fewer
-#'     distributional assumptions.
-#'   - `"conventional"`: Ignores clustering. Not recommended for publication.
-#' @param nBootstraps Number of bootstrap replicates. Only used when
-#'   `varianceEstimator = "bootstrap"`. Default `200`.
-#' @param seed Random seed for the bootstrap. Default `1`.
-#'
-#' @return A `FitOutcomeModelArgs` object.
-#'
-#' @examples
-#' args <- createFitOutcomeModelArgs(
-#'   modelType         = "cox",
-#'   varianceEstimator = "robust"
-#' )
-#'
-#' @export
-createFitOutcomeModelArgs <- function(modelType         = "cox",
-                                      varianceEstimator = "robust",
-                                      nBootstraps       = 200,
-                                      seed              = 1) {
-  obj <- FitOutcomeModelArgs$new(
-    modelType         = modelType,
-    varianceEstimator = varianceEstimator,
-    nBootstraps       = nBootstraps,
-    seed              = seed
-  )
-  obj$validate()
-  obj
-}
-
-
-# -------------------------------------------------------------------------
-# CcwAnalysis
-# -------------------------------------------------------------------------
-
-#' @title CcwAnalysis class
-#' @description R6 class representing a complete CCW analysis specification.
-#'   Use [createCcwAnalysis()] to construct.
-#' @export
-CcwAnalysis <- R6::R6Class(
-  "CcwAnalysis",
-  inherit = AbstractSerializableSettings,
-  public = list(
-    #' @field analysisId Unique analysis identifier.
-    analysisId                     = NULL,
-    #' @field description Human-readable description.
-    description                    = NULL,
-    #' @field getDbCloneCensorWeightDataArgs Data extraction args.
-    getDbCloneCensorWeightDataArgs = NULL,
-    #' @field createStudyPopulationArgs Study population args.
-    createStudyPopulationArgs      = NULL,
-    #' @field createClonesAndCensorArgs Cloning and censoring args.
-    createClonesAndCensorArgs      = NULL,
-    #' @field createCensoringWeightsArgs IPCW weight args.
-    createCensoringWeightsArgs     = NULL,
-    #' @field fitOutcomeModelArgs Outcome model args.
-    fitOutcomeModelArgs            = NULL,
-
-    #' @description Create a `CcwAnalysis`.
-    #' @param analysisId Unique character identifier.
-    #' @param description Human-readable description.
-    #' @param getDbCloneCensorWeightDataArgs A
-    #'   `GetDbCloneCensorWeightDataArgs` object.
-    #' @param createStudyPopulationArgs A `CreateStudyPopulationArgs` object.
-    #' @param createClonesAndCensorArgs A `CreateClonesAndCensorArgs` object.
-    #' @param createCensoringWeightsArgs A `CreateCensoringWeightsArgs` object.
-    #' @param fitOutcomeModelArgs A `FitOutcomeModelArgs` object.
-    initialize = function(analysisId                     = NULL,
-                          description                    = "",
-                          getDbCloneCensorWeightDataArgs = NULL,
-                          createStudyPopulationArgs      = NULL,
-                          createClonesAndCensorArgs      = NULL,
-                          createCensoringWeightsArgs     = NULL,
-                          fitOutcomeModelArgs            = NULL) {
-      self$analysisId                     <- analysisId
-      self$description                    <- description
-      self$getDbCloneCensorWeightDataArgs <- getDbCloneCensorWeightDataArgs
-      self$createStudyPopulationArgs      <- createStudyPopulationArgs
-      self$createClonesAndCensorArgs      <- createClonesAndCensorArgs
-      self$createCensoringWeightsArgs     <- createCensoringWeightsArgs
-      self$fitOutcomeModelArgs            <- fitOutcomeModelArgs
-      invisible(self)
-    },
-
-    #' @description Convert to list, recursively serializing nested args.
-    #' @return A named list.
-    toList = function() {
-      asList <- function(x) if (is.null(x)) NULL else x$toList()
-      list(
-        analysisId                     = self$analysisId,
-        description                    = self$description,
-        getDbCloneCensorWeightDataArgs = asList(self$getDbCloneCensorWeightDataArgs),
-        createStudyPopulationArgs      = asList(self$createStudyPopulationArgs),
-        createClonesAndCensorArgs      = asList(self$createClonesAndCensorArgs),
-        createCensoringWeightsArgs     = asList(self$createCensoringWeightsArgs),
-        fitOutcomeModelArgs            = asList(self$fitOutcomeModelArgs)
-      )
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
-    validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertCharacter(self$analysisId, len = 1, min.chars = 1,
-                                 any.missing = FALSE, add = errs)
-      checkmate::reportAssertions(errs)
-      for (field in c("getDbCloneCensorWeightDataArgs",
-                      "createStudyPopulationArgs",
-                      "createClonesAndCensorArgs",
-                      "createCensoringWeightsArgs",
-                      "fitOutcomeModelArgs")) {
-        if (!is.null(self[[field]])) self[[field]]$validate()
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertChoice(self$modelType, c("cox", "logistic", "km"), add = errorMessages)
+      checkmate::assertIntegerish(self$horizons, lower = 0, min.len = 1, any.missing = FALSE, add = errorMessages)
+      checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
+      checkmate::assertFlag(self$armByTimeInteraction, add = errorMessages)
+      checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased"), add = errorMessages)
+      checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
+      checkmate::assertFlag(self$useCovariates, add = errorMessages)
+      checkmate::assertFlag(self$stratified, add = errorMessages)
+      checkmate::assertClass(self$prior, "cyclopsPrior", add = errorMessages)
+      checkmate::assertClass(self$control, "cyclopsControl", add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      if (self$useCovariates) {
+        stop("Not yet supported in this version: useCovariates = TRUE")
       }
-      invisible(self)
+      if (self$stratified) {
+        stop("Not yet supported in this version: stratified = TRUE")
+      }
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        self$timeBasis <- TimeBasis$new(untypedList = self$timeBasis)
+        self$bootstrapArgs <- BootstrapArgs$new(untypedList = self$bootstrapArgs)
+        class(self$control) <- "cyclopsControl"
+        class(self$prior) <- "cyclopsPrior"
+      }
     }
   )
 )
 
-#' Create a CCW analysis specification
+# Analysis -----------------------------------------------------------------------------------------
+
+#' Create a clone-censor-weight analysis specification
 #'
-#' Combines all step-level argument objects into a single, serializable
-#' analysis specification that can be passed to [runCcwAnalyses()].
+#' @details
+#' Create a set of analysis choices, to be used with `runCcwAnalyses()`.
 #'
-#' @param analysisId A unique character identifier for this analysis.
-#' @param description A human-readable description.
-#' @param getDbCloneCensorWeightDataArgs A
-#'   [createGetDbCloneCensorWeightDataArgs()] object.
-#' @param createStudyPopulationArgs A [createCreateStudyPopulationArgs()]
-#'   object.
-#' @param createClonesAndCensorArgs A [createCreateClonesAndCensorArgs()]
-#'   object.
-#' @param createCensoringWeightsArgs A [createCreateCensoringWeightsArgs()]
-#'   object.
-#' @param fitOutcomeModelArgs A [createFitOutcomeModelArgs()] object.
+#' @param analysisId                     An integer that will be used later to refer to this specific
+#'                                       set of analysis choices.
+#' @param description                    A short description of the analysis.
+#' @param getDbCloneCensorWeightDataArgs An object of type `GetDbCloneCensorWeightDataArgs` as created
+#'                                       using [createGetDbCloneCensorWeightDataArgs()].
+#' @param createStudyPopulationArgs      An object of type `CreateStudyPopulationArgs` as created using
+#'                                       [CohortMethod::createCreateStudyPopulationArgs()].
+#' @param createClonesArgs               An object of type `CreateClonesArgs` as created using
+#'                                       [createCreateClonesArgs()].
+#' @param fitCensoringModelsArgs         An object of type `FitCensoringModelsArgs` as created using
+#'                                       [createFitCensoringModelsArgs()].
+#' @param computeWeightsArgs             An object of type `ComputeWeightsArgs` as created using
+#'                                       [createComputeWeightsArgs()].
+#' @param computeCovariateBalanceArgs    An object of type `ComputeCovariateBalanceArgs` as created using
+#'                                       [CohortMethod::createComputeCovariateBalanceArgs()], or `NULL`
+#'                                       to skip covariate balance.
+#' @param fitOutcomeModelArgs            An object of type `FitOutcomeModelArgs` as created using
+#'                                       [createFitOutcomeModelArgs()].
 #'
-#' @return A `CcwAnalysis` object.
+#' @return
+#' An object of type `CcwAnalysis`.
 #'
 #' @examples
-#' arm1 <- createArmDefinition("treated",  "initiateWithin", gracePeriod = 90)
-#' arm2 <- createArmDefinition("deferred", "deferBeyond",    gracePeriod = 90)
-#'
 #' analysis <- createCcwAnalysis(
-#'   analysisId                 = "main",
-#'   description                = "Primary analysis, 90-day grace period",
-#'   createClonesAndCensorArgs  = createCreateClonesAndCensorArgs(list(arm1, arm2)),
-#'   createStudyPopulationArgs  = createCreateStudyPopulationArgs(riskWindowEnd = 730,
-#'                                                                endAnchor = "cohort start"),
-#'   createCensoringWeightsArgs = createCreateCensoringWeightsArgs(),
-#'   fitOutcomeModelArgs        = createFitOutcomeModelArgs()
+#'   analysisId = 1,
+#'   description = "Initiate vs do not initiate within 7 days",
+#'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+#'   createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+#'     riskWindowEnd = 365,
+#'     endAnchor = "cohort start"
+#'   ),
+#'   createClonesArgs = createCreateClonesArgs(
+#'     strategies = list(
+#'       createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+#'       createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+#'     )
+#'   ),
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+#'   computeWeightsArgs = createComputeWeightsArgs(),
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs()
 #' )
 #'
 #' @export
 createCcwAnalysis <- function(analysisId,
-                              description                    = "",
-                              getDbCloneCensorWeightDataArgs = NULL,
-                              createStudyPopulationArgs      = NULL,
-                              createClonesAndCensorArgs      = NULL,
-                              createCensoringWeightsArgs     = NULL,
-                              fitOutcomeModelArgs            = NULL) {
-  obj <- CcwAnalysis$new(
-    analysisId                     = analysisId,
-    description                    = description,
-    getDbCloneCensorWeightDataArgs = getDbCloneCensorWeightDataArgs,
-    createStudyPopulationArgs      = createStudyPopulationArgs,
-    createClonesAndCensorArgs      = createClonesAndCensorArgs,
-    createCensoringWeightsArgs     = createCensoringWeightsArgs,
-    fitOutcomeModelArgs            = fitOutcomeModelArgs
-  )
-  obj$validate()
-  obj
+                              description = "",
+                              getDbCloneCensorWeightDataArgs,
+                              createStudyPopulationArgs,
+                              createClonesArgs,
+                              fitCensoringModelsArgs,
+                              computeWeightsArgs,
+                              computeCovariateBalanceArgs = NULL,
+                              fitOutcomeModelArgs) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(CcwAnalysis$new(typedList = args))
 }
 
-#' Save a list of CCW analyses to a JSON file
-#'
-#' @param ccwAnalysisList A list of `CcwAnalysis` objects.
-#' @param file Path to the output JSON file.
-#'
-#' @return Invisibly returns `file`.
-#'
-#' @examples
-#' \dontrun{
-#' saveCcwAnalysisList(analysisList, "analyses.json")
-#' }
-#'
-#' @export
-saveCcwAnalysisList <- function(ccwAnalysisList, file) {
-  checkmate::assertList(ccwAnalysisList, min.len = 1)
-  checkmate::assertCharacter(file, len = 1)
-  json <- jsonlite::toJSON(lapply(ccwAnalysisList, function(a) a$toList()),
-                           auto_unbox = TRUE, null = "null", pretty = TRUE)
-  writeLines(json, file)
-  invisible(file)
-}
-
-#' Load a list of CCW analyses from a JSON file
-#'
-#' @param file Path to a JSON file created by [saveCcwAnalysisList()].
-#'
-#' @return A list of `CcwAnalysis` objects.
-#'
-#' @examples
-#' \dontrun{
-#' analysisList <- loadCcwAnalysisList("analyses.json")
-#' }
-#'
-#' @export
-loadCcwAnalysisList <- function(file) {
-  checkmate::assertFileExists(file)
-  rawList <- jsonlite::fromJSON(file, simplifyVector = FALSE)
-  lapply(rawList, .reconstructCcwAnalysis)
-}
-
-.reconstructCcwAnalysis <- function(x) {
-  arms <- if (!is.null(x$createClonesAndCensorArgs$arms)) {
-    lapply(x$createClonesAndCensorArgs$arms, function(a) {
-      createArmDefinition(armId        = a$armId,
-                          strategyType = a$strategyType,
-                          gracePeriod  = a$gracePeriod %||% 0,
-                          label        = a$label)
-    })
-  } else NULL
-
-  createCcwAnalysis(
-    analysisId = x$analysisId,
-    description = x$description %||% "",
-    getDbCloneCensorWeightDataArgs = if (!is.null(x$getDbCloneCensorWeightDataArgs)) {
-      cs <- x$getDbCloneCensorWeightDataArgs$covariateSettings
-      createGetDbCloneCensorWeightDataArgs(
-        washoutPeriod     = x$getDbCloneCensorWeightDataArgs$washoutPeriod %||% 365,
-        covariateSettings = if (!is.null(cs)) .convertMemberToAttr(cs) else NULL,
-        maxCohortSize     = x$getDbCloneCensorWeightDataArgs$maxCohortSize %||% 0
-      )
-    } else NULL,
-    createStudyPopulationArgs = if (!is.null(x$createStudyPopulationArgs)) {
-      do.call(createCreateStudyPopulationArgs, x$createStudyPopulationArgs)
-    } else NULL,
-    createClonesAndCensorArgs = if (!is.null(x$createClonesAndCensorArgs)) {
-      createCreateClonesAndCensorArgs(
-        arms           = arms,
-        intervalLength = x$createClonesAndCensorArgs$intervalLength %||% 30
-      )
-    } else NULL,
-    createCensoringWeightsArgs = if (!is.null(x$createCensoringWeightsArgs)) {
-      createCreateCensoringWeightsArgs(
-        trim      = unlist(x$createCensoringWeightsArgs$trim) %||% c(0.01, 0.99),
-        maxWeight = x$createCensoringWeightsArgs$maxWeight %||% 10
-      )
-    } else NULL,
-    fitOutcomeModelArgs = if (!is.null(x$fitOutcomeModelArgs)) {
-      do.call(createFitOutcomeModelArgs, x$fitOutcomeModelArgs)
-    } else NULL
-  )
-}
-
-
-# -------------------------------------------------------------------------
-# TargetComparatorOutcome
-# -------------------------------------------------------------------------
-
-#' @title TargetComparatorOutcome class
-#' @description R6 class representing an index population cohort, treatment and
-#'   comparator exposure cohorts, and associated outcomes. Use
-#'   [createTargetComparatorOutcome()] to construct.
-#' @export
-TargetComparatorOutcome <- R6::R6Class(
-  "TargetComparatorOutcome",
+CcwAnalysis <- R6Class(
+  "CcwAnalysis",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field indexCohortId Index (eligible population) cohort definition ID.
-    indexCohortId               = NULL,
-    #' @field targetCohortId Treatment exposure cohort definition ID.
-    targetCohortId           = NULL,
-    #' @field comparatorCohortId Comparator exposure cohort definition ID.
-    comparatorCohortId          = NULL,
-    #' @field outcomeIds Outcome cohort definition IDs.
-    outcomeIds                  = NULL,
-    #' @field excludedCovariateConceptIds Concept IDs to exclude from covariates.
-    excludedCovariateConceptIds = NULL,
-    #' @field includedCovariateConceptIds Concept IDs to include in covariates.
-    includedCovariateConceptIds = NULL,
-
-    #' @description Create a `TargetComparatorOutcome`.
-    #' @param indexCohortId Index (eligible population) cohort definition ID.
-    #' @param targetCohortId Treatment exposure cohort definition ID.
-    #' @param comparatorCohortId Comparator exposure cohort definition ID.
-    #' @param outcomeIds Outcome cohort IDs.
-    #' @param excludedCovariateConceptIds Excluded concept IDs.
-    #' @param includedCovariateConceptIds Included concept IDs.
-    initialize = function(indexCohortId               = NULL,
-                          targetCohortId           = NULL,
-                          comparatorCohortId          = NULL,
-                          outcomeIds                  = NULL,
-                          excludedCovariateConceptIds = integer(0),
-                          includedCovariateConceptIds = integer(0)) {
-      self$indexCohortId               <- indexCohortId
-      self$targetCohortId           <- targetCohortId
-      self$comparatorCohortId          <- comparatorCohortId
-      self$outcomeIds                  <- outcomeIds
-      self$excludedCovariateConceptIds <- excludedCovariateConceptIds %||% integer(0)
-      self$includedCovariateConceptIds <- includedCovariateConceptIds %||% integer(0)
-      invisible(self)
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    analysisId = NULL,
+    description = NULL,
+    getDbCloneCensorWeightDataArgs = NULL,
+    createStudyPopulationArgs = NULL,
+    createClonesArgs = NULL,
+    fitCensoringModelsArgs = NULL,
+    computeWeightsArgs = NULL,
+    computeCovariateBalanceArgs = NULL,
+    fitOutcomeModelArgs = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertNumeric(self$indexCohortId, len = 1, any.missing = FALSE,
-                               add = errs)
-      checkmate::assertNumeric(self$targetCohortId, len = 1, any.missing = FALSE,
-                               add = errs)
-      checkmate::assertNumeric(self$comparatorCohortId, len = 1, any.missing = FALSE,
-                               add = errs)
-      checkmate::assertNumeric(self$outcomeIds, min.len = 1, any.missing = FALSE,
-                               add = errs)
-      checkmate::assertNumeric(self$excludedCovariateConceptIds,
-                               any.missing = FALSE, add = errs)
-      checkmate::assertNumeric(self$includedCovariateConceptIds,
-                               any.missing = FALSE, add = errs)
-      checkmate::reportAssertions(errs)
-      invisible(self)
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertInt(self$analysisId, add = errorMessages)
+      checkmate::assertString(self$description, add = errorMessages)
+      checkmate::assertR6(self$getDbCloneCensorWeightDataArgs, "GetDbCloneCensorWeightDataArgs", add = errorMessages)
+      checkmate::assertR6(self$createStudyPopulationArgs, "CreateStudyPopulationArgs", add = errorMessages)
+      checkmate::assertR6(self$createClonesArgs, "CreateClonesArgs", add = errorMessages)
+      checkmate::assertR6(self$fitCensoringModelsArgs, "FitCensoringModelsArgs", add = errorMessages)
+      checkmate::assertR6(self$computeWeightsArgs, "ComputeWeightsArgs", add = errorMessages)
+      checkmate::assertR6(self$computeCovariateBalanceArgs, "ComputeCovariateBalanceArgs", null.ok = TRUE, add = errorMessages)
+      # CohortMethod has an R6 class with the same name; require members only this package's class has.
+      checkmate::assertR6(self$fitOutcomeModelArgs, "FitOutcomeModelArgs",
+        public = c("horizons", "timeBasis", "varianceEstimator", "bootstrapArgs"), add = errorMessages
+      )
+      checkmate::reportAssertions(collection = errorMessages)
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        self$getDbCloneCensorWeightDataArgs <- GetDbCloneCensorWeightDataArgs$new(untypedList = self$getDbCloneCensorWeightDataArgs)
+        self$createStudyPopulationArgs <- .typeCohortMethodSettings(
+          self$createStudyPopulationArgs,
+          CohortMethod::createCreateStudyPopulationArgs
+        )
+        self$createClonesArgs <- CreateClonesArgs$new(untypedList = self$createClonesArgs)
+        self$fitCensoringModelsArgs <- FitCensoringModelsArgs$new(untypedList = self$fitCensoringModelsArgs)
+        self$computeWeightsArgs <- ComputeWeightsArgs$new(untypedList = self$computeWeightsArgs)
+        if (!is.null(self$computeCovariateBalanceArgs)) {
+          self$computeCovariateBalanceArgs <- .typeCohortMethodSettings(
+            self$computeCovariateBalanceArgs,
+            CohortMethod::createComputeCovariateBalanceArgs
+          )
+        }
+        self$fitOutcomeModelArgs <- FitOutcomeModelArgs$new(untypedList = self$fitOutcomeModelArgs)
+      }
     }
   )
 )
 
-#' Create a target arm outcome specification
+#' Create target-treatment-outcomes combinations
 #'
-#' Defines the cohorts involved in a CCW analysis: the eligible index
-#' population, the treatment and comparator exposure cohorts, and the outcome
-#' cohorts.
+#' @details
+#' Maps the treatment roles used by the strategies (`"treatment"` and `"comparatorTreatment"`) to
+#' cohort IDs, for one eligible (target) cohort and a set of outcomes.
 #'
-#' @param indexCohortId Cohort definition ID for the eligible index population
-#'   (e.g. new JAK inhibitor users). This is the base cohort from which both
-#'   arms are cloned.
-#' @param targetCohortId Cohort definition ID for the treatment exposure
-#'   (e.g. RZV recipients). Used to determine initiation dates for the
-#'   treatment arm.
-#' @param comparatorCohortId Cohort definition ID for the comparator exposure.
-#'   For a `"deferBeyond"` comparator this is typically the same cohort as
-#'   `targetCohortId` — the arm strategy determines how initiation events
-#'   are interpreted.
-#' @param outcomeIds One or more outcome cohort definition IDs. Include both
-#'   the primary outcome and negative control outcomes.
-#' @param excludedCovariateConceptIds Concept IDs to exclude from the covariate
-#'   set (e.g. the treatment drug ingredients).
-#' @param includedCovariateConceptIds Concept IDs to restrict the covariate set
-#'   to. Usually left empty.
+#' @param targetId                    The cohort ID of the eligible (target) cohort. Its start date is
+#'                                    time zero.
+#' @param treatmentId                 The cohort ID of the treatment with role `"treatment"`.
+#' @param comparatorTreatmentId       The cohort ID of the treatment with role `"comparatorTreatment"`,
+#'                                    or `NULL`.
+#' @param outcomes                    A list of objects of type `Outcome` as created using
+#'                                    [CohortMethod::createOutcome()].
+#' @param excludedCovariateConceptIds Concept IDs that cannot be used to construct covariates, specific
+#'                                    to this combination.
+#' @param includedCovariateConceptIds Concept IDs that must be used to construct covariates, specific to
+#'                                    this combination.
 #'
-#' @return A `TargetComparatorOutcome` object.
+#' @return
+#' An object of type `TargetTreatmentOutcomes`.
 #'
 #' @examples
-#' \dontrun{
-#' tao <- createTargetComparatorOutcome(
-#'   indexCohortId      = 101,
-#'   targetCohortId  = 102,
-#'   comparatorCohortId = 102,
-#'   outcomeIds         = c(201, 301:320)
+#' tto <- createTargetTreatmentOutcomes(
+#'   targetId = 1,
+#'   treatmentId = 2,
+#'   outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
 #' )
-#' }
 #'
 #' @export
-createTargetComparatorOutcome <- function(indexCohortId,
-                                   targetCohortId,
-                                   comparatorCohortId,
-                                   outcomeIds,
-                                   excludedCovariateConceptIds = integer(0),
-                                   includedCovariateConceptIds = integer(0)) {
-  obj <- TargetComparatorOutcome$new(
-    indexCohortId               = indexCohortId,
-    targetCohortId           = targetCohortId,
-    comparatorCohortId          = comparatorCohortId,
-    outcomeIds                  = outcomeIds,
-    excludedCovariateConceptIds = excludedCovariateConceptIds,
-    includedCovariateConceptIds = includedCovariateConceptIds
+createTargetTreatmentOutcomes <- function(targetId,
+                                          treatmentId,
+                                          comparatorTreatmentId = NULL,
+                                          outcomes,
+                                          excludedCovariateConceptIds = c(),
+                                          includedCovariateConceptIds = c()) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(TargetTreatmentOutcomes$new(typedList = args))
+}
+
+TargetTreatmentOutcomes <- R6Class(
+  "TargetTreatmentOutcomes",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    targetId = NULL,
+    treatmentId = NULL,
+    comparatorTreatmentId = NULL,
+    outcomes = NULL,
+    excludedCovariateConceptIds = NULL,
+    includedCovariateConceptIds = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      .assertCovariateId(self$targetId, len = 1, add = errorMessages)
+      .assertCovariateId(self$treatmentId, len = 1, add = errorMessages)
+      .assertCovariateId(self$comparatorTreatmentId, len = 1, null.ok = TRUE, add = errorMessages)
+      checkmate::assertList(self$outcomes, min.len = 1, add = errorMessages)
+      for (i in seq_along(self$outcomes)) {
+        checkmate::assertR6(self$outcomes[[i]], "Outcome", add = errorMessages)
+      }
+      checkmate::assertIntegerish(self$excludedCovariateConceptIds, null.ok = TRUE, add = errorMessages)
+      checkmate::assertIntegerish(self$includedCovariateConceptIds, null.ok = TRUE, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      outcomeIds <- sapply(self$outcomes, function(outcome) outcome$outcomeId)
+      duplicatedIds <- outcomeIds[duplicated(outcomeIds)]
+      if (length(duplicatedIds) > 0) {
+        stop(sprintf("Found duplicate outcome IDs: %s", paste(duplicatedIds, collapse = ", ")))
+      }
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        for (i in seq_along(self$outcomes)) {
+          outcome <- self$outcomes[[i]]
+          # As CohortMethod's Outcome$fromList(): NA is serialized as null.
+          if (is.null(outcome$trueEffectSize)) {
+            outcome$trueEffectSize <- NA
+          }
+          self$outcomes[[i]] <- .typeCohortMethodSettings(outcome, CohortMethod::createOutcome)
+        }
+      }
+    }
   )
-  obj$validate()
-  obj
-}
+)
 
-#' Save a list of target arm outcomes to a JSON file
+#' Create clone-censor-weight diagnostics thresholds
 #'
-#' @param targetComparatorOutcomeList A list of `TargetComparatorOutcome` objects.
-#' @param file Path to the output JSON file.
+#' @description
+#' Thresholds used to decide whether an analysis passes its diagnostics.
 #'
-#' @return Invisibly returns `file`.
+#' @param mdrrThreshold        What is the maximum allowed minimum detectable relative risk (MDRR)?
+#' @param easeThreshold        What is the maximum allowed expected absolute systematic error (EASE)?
+#' @param sdmThreshold         What is the maximum allowed standardized difference of mean (SDM) of the
+#'                             weighted compliant clones at the end of the grace period?
+#' @param essFractionThreshold What is the minimum allowed effective sample size of a strategy, as a
+#'                             fraction of its number of clones?
+#' @param maxWeightThreshold   What is the maximum allowed censoring weight?
+#' @param positivityThreshold  What is the minimum allowed probability of following a strategy
+#'                             (for example the fitted probability of initiating by the end of the grace
+#'                             period)?
+#'
+#' @return
+#' An object of type `CcwDiagnosticThresholds`.
 #'
 #' @examples
-#' \dontrun{
-#' saveTargetComparatorOutcomeList(taoList, "targetArmOutcomes.json")
-#' }
+#' thresholds <- createCcwDiagnosticThresholds(maxWeightThreshold = 50)
 #'
 #' @export
-saveTargetComparatorOutcomeList <- function(targetComparatorOutcomeList, file) {
-  checkmate::assertList(targetComparatorOutcomeList, min.len = 1)
-  checkmate::assertCharacter(file, len = 1)
-  json <- jsonlite::toJSON(lapply(targetComparatorOutcomeList, function(t) t$toList()),
-                           auto_unbox = TRUE, null = "null", pretty = TRUE)
-  writeLines(json, file)
-  invisible(file)
+createCcwDiagnosticThresholds <- function(mdrrThreshold = 10,
+                                          easeThreshold = 0.25,
+                                          sdmThreshold = 0.1,
+                                          essFractionThreshold = 0.1,
+                                          maxWeightThreshold = 100,
+                                          positivityThreshold = 0.01) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(CcwDiagnosticThresholds$new(typedList = args))
 }
 
-#' Load a list of target arm outcomes from a JSON file
+CcwDiagnosticThresholds <- R6Class(
+  "CcwDiagnosticThresholds",
+  inherit = AbstractSerializableSettings,
+  public = list(
+    mdrrThreshold = NULL,
+    easeThreshold = NULL,
+    sdmThreshold = NULL,
+    essFractionThreshold = NULL,
+    maxWeightThreshold = NULL,
+    positivityThreshold = NULL,
+    validate = function() {
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertNumber(self$mdrrThreshold, lower = 0, add = errorMessages)
+      checkmate::assertNumber(self$easeThreshold, lower = 0, add = errorMessages)
+      checkmate::assertNumber(self$sdmThreshold, lower = 0, add = errorMessages)
+      checkmate::assertNumber(self$essFractionThreshold, lower = 0, upper = 1, add = errorMessages)
+      checkmate::assertNumber(self$maxWeightThreshold, lower = 0, add = errorMessages)
+      checkmate::assertNumber(self$positivityThreshold, lower = 0, upper = 1, add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+    }
+  )
+)
+
+#' Create full clone-censor-weight analysis specifications
 #'
-#' @param file Path to a JSON file created by [saveTargetComparatorOutcomeList()].
+#' @details
+#' ## Analyses to Exclude
 #'
-#' @return A list of `TargetComparatorOutcome` objects.
+#' Normally, `runCcwAnalyses()` runs all combinations of target-treatment-outcomes and analyses. The
+#' `analysesToExclude` argument removes some of them. It is a data frame with at least one of the
+#' columns `targetId`, `treatmentId`, `comparatorTreatmentId`, `outcomeId`, and `analysisId`. Rows of
+#' the reference table that match a row of `analysesToExclude` are skipped.
+#'
+#' @param ccwAnalysisList                     A list of objects of type `CcwAnalysis` as created using
+#'                                            [createCcwAnalysis()].
+#' @param targetTreatmentOutcomesList         A list of objects of type `TargetTreatmentOutcomes` as
+#'                                            created using [createTargetTreatmentOutcomes()].
+#' @param analysesToExclude                   Analyses to exclude. See the Analyses to Exclude section
+#'                                            for details.
+#' @param refitCensoringModelsForEveryOutcome Should the censoring models be fitted for every outcome
+#'                                            (after removing persons with that outcome from the risk
+#'                                            sets)? If `FALSE`, the models are shared across outcomes.
+#' @param ccwDiagnosticThresholds             An object of type `CcwDiagnosticThresholds` as created
+#'                                            using [createCcwDiagnosticThresholds()].
+#'
+#' @return
+#' An object of type `CcwAnalysesSpecifications`.
 #'
 #' @examples
-#' \dontrun{
-#' taoList <- loadTargetComparatorOutcomeList("targetArmOutcomes.json")
-#' }
+#' analysis <- createCcwAnalysis(
+#'   analysisId = 1,
+#'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+#'   createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+#'   createClonesArgs = createCreateClonesArgs(
+#'     strategies = list(
+#'       createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+#'       createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+#'     )
+#'   ),
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+#'   computeWeightsArgs = createComputeWeightsArgs(),
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs()
+#' )
+#' tto <- createTargetTreatmentOutcomes(
+#'   targetId = 1,
+#'   treatmentId = 2,
+#'   outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
+#' )
+#' specifications <- createCcwAnalysesSpecifications(
+#'   ccwAnalysisList = list(analysis),
+#'   targetTreatmentOutcomesList = list(tto)
+#' )
 #'
 #' @export
-loadTargetComparatorOutcomeList <- function(file) {
-  checkmate::assertFileExists(file)
-  rawList <- jsonlite::fromJSON(file, simplifyVector = FALSE)
-  lapply(rawList, function(x) {
-    createTargetComparatorOutcome(
-      indexCohortId               = x$indexCohortId,
-      targetCohortId           = x$targetCohortId,
-      comparatorCohortId          = x$comparatorCohortId,
-      outcomeIds                  = unlist(x$outcomeIds),
-      excludedCovariateConceptIds = unlist(x$excludedCovariateConceptIds) %||% integer(0),
-      includedCovariateConceptIds = unlist(x$includedCovariateConceptIds) %||% integer(0)
-    )
-  })
+createCcwAnalysesSpecifications <- function(ccwAnalysisList,
+                                            targetTreatmentOutcomesList,
+                                            analysesToExclude = NULL,
+                                            refitCensoringModelsForEveryOutcome = FALSE,
+                                            ccwDiagnosticThresholds = createCcwDiagnosticThresholds()) {
+  args <- list()
+  for (name in names(formals())) {
+    args[[name]] <- get(name)
+  }
+  return(CcwAnalysesSpecifications$new(typedList = args))
 }
 
-
-# -------------------------------------------------------------------------
-# CcwAnalysesSpecifications
-# -------------------------------------------------------------------------
-
-#' @title CcwAnalysesSpecifications class
-#' @description Top-level R6 class combining analyses and target-arm-outcome
-#'   combinations into a single serializable specification. Compatible with
-#'   the Strategus module interface without requiring the Strategus package.
-#'   Use [createCcwAnalysesSpecifications()] to construct.
-#' @export
-CcwAnalysesSpecifications <- R6::R6Class(
+CcwAnalysesSpecifications <- R6Class(
   "CcwAnalysesSpecifications",
   inherit = AbstractSerializableSettings,
   public = list(
-    #' @field ccwAnalysisList List of `CcwAnalysis` objects.
-    ccwAnalysisList      = NULL,
-    #' @field targetComparatorOutcomeList List of `TargetComparatorOutcome` objects.
-    targetComparatorOutcomeList = NULL,
-
-    #' @description Create a `CcwAnalysesSpecifications`.
-    #' @param ccwAnalysisList List of `CcwAnalysis` objects.
-    #' @param targetComparatorOutcomeList List of `TargetComparatorOutcome` objects.
-    initialize = function(ccwAnalysisList = NULL, targetComparatorOutcomeList = NULL) {
-      self$ccwAnalysisList      <- ccwAnalysisList
-      self$targetComparatorOutcomeList <- targetComparatorOutcomeList
-      invisible(self)
-    },
-
-    #' @description Convert to list.
-    #' @return A named list.
-    toList = function() {
-      list(
-        ccwAnalysisList      = lapply(self$ccwAnalysisList, function(a) a$toList()),
-        targetComparatorOutcomeList = lapply(self$targetComparatorOutcomeList, function(t) t$toList())
-      )
-    },
-
-    #' @description Validate.
-    #' @return Invisibly returns `self`.
+    ccwAnalysisList = NULL,
+    targetTreatmentOutcomesList = NULL,
+    analysesToExclude = NULL,
+    refitCensoringModelsForEveryOutcome = NULL,
+    ccwDiagnosticThresholds = NULL,
     validate = function() {
-      errs <- checkmate::makeAssertCollection()
-      checkmate::assertList(self$ccwAnalysisList, min.len = 1, add = errs)
-      checkmate::assertList(self$targetComparatorOutcomeList, min.len = 1, add = errs)
-      checkmate::reportAssertions(errs)
-      analysisIds <- vapply(self$ccwAnalysisList,
-                            function(a) a$analysisId, character(1))
-      if (anyDuplicated(analysisIds)) {
-        stop("All CcwAnalysis objects must have unique analysisId values.",
-             call. = FALSE)
+      errorMessages <- checkmate::makeAssertCollection()
+      checkmate::assertList(self$ccwAnalysisList, min.len = 1, add = errorMessages)
+      for (i in seq_along(self$ccwAnalysisList)) {
+        checkmate::assertR6(self$ccwAnalysisList[[i]], "CcwAnalysis", add = errorMessages)
       }
-      invisible(self)
+      checkmate::assertList(self$targetTreatmentOutcomesList, min.len = 1, add = errorMessages)
+      for (i in seq_along(self$targetTreatmentOutcomesList)) {
+        checkmate::assertR6(self$targetTreatmentOutcomesList[[i]], "TargetTreatmentOutcomes", add = errorMessages)
+      }
+      checkmate::assertDataFrame(self$analysesToExclude, null.ok = TRUE, add = errorMessages)
+      checkmate::assertFlag(self$refitCensoringModelsForEveryOutcome, add = errorMessages)
+      checkmate::assertR6(self$ccwDiagnosticThresholds, "CcwDiagnosticThresholds", add = errorMessages)
+      checkmate::reportAssertions(collection = errorMessages)
+      excludeColumns <- c("targetId", "treatmentId", "comparatorTreatmentId", "outcomeId", "analysisId")
+      if (!is.null(self$analysesToExclude) && !any(excludeColumns %in% colnames(self$analysesToExclude))) {
+        stop(sprintf("analysesToExclude should have at least one of these columns: %s", paste(excludeColumns, collapse = ", ")))
+      }
+      analysisIds <- sapply(self$ccwAnalysisList, function(analysis) analysis$analysisId)
+      if (any(duplicated(analysisIds))) {
+        stop("Duplicate analysis IDs are not allowed")
+      }
+    },
+    fromList = function(list, requireTyping) {
+      super$fromList(list)
+      if (requireTyping) {
+        for (i in seq_along(self$ccwAnalysisList)) {
+          self$ccwAnalysisList[[i]] <- CcwAnalysis$new(untypedList = self$ccwAnalysisList[[i]])
+        }
+        for (i in seq_along(self$targetTreatmentOutcomesList)) {
+          self$targetTreatmentOutcomesList[[i]] <- TargetTreatmentOutcomes$new(untypedList = self$targetTreatmentOutcomesList[[i]])
+        }
+        if (!is.null(self$analysesToExclude)) {
+          self$analysesToExclude <- as.data.frame(self$analysesToExclude)
+        }
+        self$ccwDiagnosticThresholds <- CcwDiagnosticThresholds$new(untypedList = self$ccwDiagnosticThresholds)
+      }
     }
   )
 )
 
-#' Create a CCW analyses specifications object
+# Loading, saving, conversion ----------------------------------------------------------------------
+
+.saveSettingsList <- function(settingsList, className, file) {
+  errorMessages <- checkmate::makeAssertCollection()
+  checkmate::assertList(settingsList, min.len = 1, add = errorMessages)
+  for (i in seq_along(settingsList)) {
+    checkmate::assertR6(settingsList[[i]], className, add = errorMessages)
+  }
+  checkmate::assertCharacter(file, len = 1, add = errorMessages)
+  checkmate::reportAssertions(collection = errorMessages)
+
+  for (i in seq_along(settingsList)) {
+    settingsList[[i]] <- settingsList[[i]]$toList()
+  }
+  json <- jsonlite::toJSON(
+    settingsList,
+    auto_unbox = TRUE,
+    pretty = TRUE,
+    null = "null",
+    digits = NA
+  )
+  file <- normalizePath(file, mustWork = FALSE)
+  write(json, file)
+}
+
+.loadSettingsList <- function(file, generator) {
+  errorMessages <- checkmate::makeAssertCollection()
+  checkmate::assertCharacter(file, len = 1, add = errorMessages)
+  checkmate::reportAssertions(collection = errorMessages)
+
+  file <- normalizePath(file)
+  json <- readChar(file, file.info(file)$size)
+  settingsList <- jsonlite::fromJSON(json, simplifyDataFrame = FALSE)
+  for (i in seq_along(settingsList)) {
+    settingsList[[i]] <- generator$new(untypedList = settingsList[[i]])
+  }
+  return(settingsList)
+}
+
+#' Save a list of CcwAnalysis to file
 #'
-#' Combines a list of [createCcwAnalysis()] objects and a list of
-#' [createTargetComparatorOutcome()] objects into a top-level specification that
-#' can be passed to [runCcwAnalyses()] or serialized for a Strategus module.
+#' @description
+#' Write a list of objects of type `CcwAnalysis` to file. The file is in JSON format.
 #'
-#' @param ccwAnalysisList A list of `CcwAnalysis` objects.
-#' @param targetComparatorOutcomeList A list of `TargetComparatorOutcome` objects.
+#' @param ccwAnalysisList A list of objects of type `CcwAnalysis` as created using the
+#'                        [createCcwAnalysis()] function.
+#' @param file            The name of the file where the results will be written.
 #'
-#' @return A `CcwAnalysesSpecifications` object.
+#' @return
+#' Returns no output.
 #'
 #' @examples
-#' \dontrun{
-#' specs <- createCcwAnalysesSpecifications(
-#'   ccwAnalysisList      = list(analysis1, analysis2),
-#'   targetComparatorOutcomeList = list(tao1)
+#' analysis <- createCcwAnalysis(
+#'   analysisId = 1,
+#'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+#'   createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+#'   createClonesArgs = createCreateClonesArgs(
+#'     strategies = list(
+#'       createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+#'       createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+#'     )
+#'   ),
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+#'   computeWeightsArgs = createComputeWeightsArgs(),
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs()
 #' )
-#' specs$toJson()
-#' }
+#' file <- tempfile(fileext = ".json")
+#' saveCcwAnalysisList(list(analysis), file)
+#' analysisList <- loadCcwAnalysisList(file)
+#' unlink(file)
 #'
 #' @export
-createCcwAnalysesSpecifications <- function(ccwAnalysisList, targetComparatorOutcomeList) {
-  obj <- CcwAnalysesSpecifications$new(
-    ccwAnalysisList      = ccwAnalysisList,
-    targetComparatorOutcomeList = targetComparatorOutcomeList
-  )
-  obj$validate()
-  obj
+saveCcwAnalysisList <- function(ccwAnalysisList, file) {
+  .saveSettingsList(ccwAnalysisList, "CcwAnalysis", file)
+  invisible(NULL)
+}
+
+#' Load a list of CcwAnalysis from file
+#'
+#' @description
+#' Load a list of objects of type `CcwAnalysis` from file. The file is in JSON format.
+#'
+#' @param file The name of the file.
+#'
+#' @return
+#' A list of objects of type `CcwAnalysis`.
+#'
+#' @inherit saveCcwAnalysisList examples
+#'
+#' @export
+loadCcwAnalysisList <- function(file) {
+  return(.loadSettingsList(file, CcwAnalysis))
+}
+
+#' Save a list of TargetTreatmentOutcomes to file
+#'
+#' @description
+#' Write a list of objects of type `TargetTreatmentOutcomes` to file. The file is in JSON format.
+#'
+#' @param targetTreatmentOutcomesList A list of objects of type `TargetTreatmentOutcomes` as created
+#'                                    using the [createTargetTreatmentOutcomes()] function.
+#' @param file                        The name of the file where the results will be written.
+#'
+#' @return
+#' Returns no output.
+#'
+#' @examples
+#' tto <- createTargetTreatmentOutcomes(
+#'   targetId = 1,
+#'   treatmentId = 2,
+#'   outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
+#' )
+#' file <- tempfile(fileext = ".json")
+#' saveTargetTreatmentOutcomesList(list(tto), file)
+#' ttoList <- loadTargetTreatmentOutcomesList(file)
+#' unlink(file)
+#'
+#' @export
+saveTargetTreatmentOutcomesList <- function(targetTreatmentOutcomesList, file) {
+  .saveSettingsList(targetTreatmentOutcomesList, "TargetTreatmentOutcomes", file)
+  invisible(NULL)
+}
+
+#' Load a list of TargetTreatmentOutcomes from file
+#'
+#' @description
+#' Load a list of objects of type `TargetTreatmentOutcomes` from file. The file is in JSON format.
+#'
+#' @param file The name of the file.
+#'
+#' @return
+#' A list of objects of type `TargetTreatmentOutcomes`.
+#'
+#' @inherit saveTargetTreatmentOutcomesList examples
+#'
+#' @export
+loadTargetTreatmentOutcomesList <- function(file) {
+  return(.loadSettingsList(file, TargetTreatmentOutcomes))
+}
+
+#' Convert untyped list to CcwAnalysesSpecifications
+#'
+#' @param untypedList A list of untyped objects. For example, these could be objects from a call
+#'                    to `jsonlite::fromJSON()`. Importantly, `simplifyDataFrame` must be set to
+#'                    `FALSE` when doing so.
+#'
+#' @return
+#' An object of type `CcwAnalysesSpecifications`.
+#'
+#' @examples
+#' analysis <- createCcwAnalysis(
+#'   analysisId = 1,
+#'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+#'   createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+#'   createClonesArgs = createCreateClonesArgs(
+#'     strategies = list(
+#'       createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+#'       createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+#'     )
+#'   ),
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+#'   computeWeightsArgs = createComputeWeightsArgs(),
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs()
+#' )
+#' specifications <- createCcwAnalysesSpecifications(
+#'   ccwAnalysisList = list(analysis),
+#'   targetTreatmentOutcomesList = list(createTargetTreatmentOutcomes(
+#'     targetId = 1,
+#'     treatmentId = 2,
+#'     outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
+#'   ))
+#' )
+#' untypedList <- jsonlite::fromJSON(specifications$toJson(), simplifyDataFrame = FALSE)
+#' specifications2 <- convertUntypedListToCcwAnalysesSpecifications(untypedList)
+#'
+#' @export
+convertUntypedListToCcwAnalysesSpecifications <- function(untypedList) {
+  return(CcwAnalysesSpecifications$new(untypedList = untypedList))
 }

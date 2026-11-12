@@ -2,44 +2,61 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{createFitOutcomeModelArgs}
 \alias{createFitOutcomeModelArgs}
-\title{Create outcome model arguments}
+\title{Create a parameter object for fitting the outcome model}
 \usage{
 createFitOutcomeModelArgs(
   modelType = "cox",
+  horizons = c(365),
+  timeBasis = createTimeBasis(intervalLength = 30),
+  armByTimeInteraction = FALSE,
   varianceEstimator = "robust",
-  nBootstraps = 200,
-  seed = 1
+  bootstrapArgs = createBootstrapArgs(),
+  useCovariates = FALSE,
+  stratified = FALSE,
+  prior = Cyclops::createPrior("none"),
+  control = Cyclops::createControl()
 )
 }
 \arguments{
-\item{modelType}{\code{"cox"} for a weighted Cox proportional hazards model, or
-\code{"logistic"} for a weighted pooled logistic model.}
+\item{modelType}{The outcome model: \code{"cox"}, \code{"logistic"} (pooled logistic), or \code{"km"}
+(weighted Kaplan-Meier, or Aalen-Johansen with competing events).}
 
-\item{varianceEstimator}{Method for computing standard errors that account
-for within-subject clone correlation:
-\itemize{
-\item \code{"robust"}: Lin-Wei-Ying sandwich estimator, clustering on subject.
-Fast and appropriate for most studies.
-\item \code{"bootstrap"}: Subject-level bootstrap. Slower but makes fewer
-distributional assumptions.
-\item \code{"conventional"}: Ignores clustering. Not recommended for publication.
-}}
+\item{horizons}{Days since index at which risks, risk differences and risk ratios are
+reported.}
 
-\item{nBootstraps}{Number of bootstrap replicates. Only used when
-\code{varianceEstimator = "bootstrap"}. Default \code{200}.}
+\item{timeBasis}{An object of type \code{TimeBasis} as created using \code{\link[=createTimeBasis]{createTimeBasis()}}, used
+by the pooled logistic model.}
 
-\item{seed}{Random seed for the bootstrap. Default \code{1}.}
+\item{armByTimeInteraction}{Add strategy-by-time interactions to the pooled logistic model?}
+
+\item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person),
+\code{"bootstrap"}, or \code{"modelBased"}.}
+
+\item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
+\code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used when \code{varianceEstimator = "bootstrap"}.}
+
+\item{useCovariates}{Add the baseline covariates to the outcome model?}
+
+\item{stratified}{Fit a stratified model?}
+
+\item{prior}{The prior used to fit the model. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}.}
+
+\item{control}{The control object used to fit the model. See
+\code{\link[Cyclops:createControl]{Cyclops::createControl()}}.}
 }
 \value{
-A \code{FitOutcomeModelArgs} object.
+An object of type \code{FitOutcomeModelArgs}.
 }
 \description{
-Create outcome model arguments
+Create a parameter object for fitting the outcome model
+}
+\details{
+Create an object defining the parameter values for the weighted (marginal structural) outcome
+model fitted to the clones.
+
+This version requires \code{useCovariates = FALSE} and \code{stratified = FALSE}.
 }
 \examples{
-args <- createFitOutcomeModelArgs(
-  modelType         = "cox",
-  varianceEstimator = "robust"
-)
+args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
 
 }

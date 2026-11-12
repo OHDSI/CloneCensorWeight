@@ -2,18 +2,36 @@
 % Please edit documentation in R/CloneCensorWeightData.R
 \name{saveCloneCensorWeightData}
 \alias{saveCloneCensorWeightData}
-\title{Save clone-censor-weight data}
+\title{Save the clone-censor-weight data to file}
 \usage{
-saveCloneCensorWeightData(cloneCensorWeightData, file)
+saveCloneCensorWeightData(x, file)
 }
 \arguments{
-\item{cloneCensorWeightData}{A \code{CloneCensorWeightData} object.}
+\item{x}{An object of type \link{CloneCensorWeightData}.}
 
-\item{file}{A file path.}
+\item{file}{The name of the file where the data will be written. If the file already exists it will
+be overwritten.}
 }
 \value{
-Invisibly returns \code{file}.
+Returns no output.
 }
 \description{
-Save clone-censor-weight data
+Saves an object of type \link{CloneCensorWeightData} to a file. The object is closed afterwards.
+}
+\examples{
+data <- createCloneCensorWeightData(
+  cohorts = data.frame(
+    rowId = 1L, personSeqId = 1L, personId = "1", cohortStartDate = as.Date("2020-01-01"),
+    daysFromObsStart = 400L, daysToCohortEnd = 0L, daysToObsEnd = 365L, daysToDeath = NA_integer_
+  ),
+  outcomes = NULL,
+  treatments = NULL,
+  metaData = list(targetId = 1, treatmentIds = c(treatment = 2))
+)
+file <- tempfile(fileext = ".zip")
+saveCloneCensorWeightData(data, file)
+data <- loadCloneCensorWeightData(file)
+close(data)
+unlink(file)
+
 }

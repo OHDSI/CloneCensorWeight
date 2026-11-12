@@ -2,38 +2,57 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{createGetDbCloneCensorWeightDataArgs}
 \alias{createGetDbCloneCensorWeightDataArgs}
-\title{Create data extraction arguments}
+\title{Create a parameter object for extracting clone-censor-weight data}
 \usage{
 createGetDbCloneCensorWeightDataArgs(
+  studyStartDate = "",
+  studyEndDate = "",
   washoutPeriod = 365,
-  covariateSettings = NULL,
-  maxCohortSize = 0
-)
-}
-\arguments{
-\item{washoutPeriod}{Required days of prior observation before cohort entry.
-Subjects without this lookback are excluded.}
-
-\item{covariateSettings}{A FeatureExtraction covariate settings object
-(e.g. from \code{\link[FeatureExtraction:createDefaultCovariateSettings]{FeatureExtraction::createDefaultCovariateSettings()}}). Used
-to build the baseline covariate matrix for IPCW models.}
-
-\item{maxCohortSize}{Maximum number of eligible subjects to include. If the
-eligible population exceeds this, a random sample is drawn. \code{0} means no
-limit.}
-}
-\value{
-A \code{GetDbCloneCensorWeightDataArgs} object.
-}
-\description{
-Create data extraction arguments
-}
-\examples{
-\dontrun{
-args <- createGetDbCloneCensorWeightDataArgs(
-  washoutPeriod     = 365,
+  firstOnly = TRUE,
+  priorUseLookback = 365,
+  removeSubjectsWithPriorTreatment = TRUE,
+  maxCohortSize = 0,
   covariateSettings = FeatureExtraction::createDefaultCovariateSettings()
 )
 }
+\arguments{
+\item{studyStartDate}{A calendar date specifying the minimum date that a cohort
+index date can appear. Date format is 'yyyymmdd', or \code{""}
+for no restriction.}
+
+\item{studyEndDate}{A calendar date specifying the maximum date that a cohort
+index date can appear. Date format is 'yyyymmdd', or \code{""}
+for no restriction.}
+
+\item{washoutPeriod}{The minimum required continuous observation time (days)
+prior to index date.}
+
+\item{firstOnly}{Keep only the first index date per person?}
+
+\item{priorUseLookback}{How many days before the index date to look for prior use
+of the treatments.}
+
+\item{removeSubjectsWithPriorTreatment}{Remove persons who used one of the treatments in the
+\code{priorUseLookback} window before index?}
+
+\item{maxCohortSize}{If the eligible cohort is larger than this number it will
+be sampled to this size. \code{0} means no maximum.}
+
+\item{covariateSettings}{An object of type \code{covariateSettings} as created using
+\code{\link[FeatureExtraction:createCovariateSettings]{FeatureExtraction::createCovariateSettings()}}, or a list of
+such objects.}
+}
+\value{
+An object of type \code{GetDbCloneCensorWeightDataArgs}.
+}
+\description{
+Create a parameter object for extracting clone-censor-weight data
+}
+\details{
+Create an object defining the parameter values for extracting a \link{CloneCensorWeightData} object from
+the database.
+}
+\examples{
+args <- createGetDbCloneCensorWeightDataArgs(washoutPeriod = 180)
 
 }

@@ -3,7 +3,38 @@
 \docType{class}
 \name{CloneCensorWeightData-class}
 \alias{CloneCensorWeightData-class}
-\title{Clone-censor-weight data class}
+\alias{CloneCensorWeightData}
+\alias{show,CloneCensorWeightData-method}
+\alias{summary,CloneCensorWeightData-method}
+\title{Clone-censor-weight data}
+\usage{
+\S4method{show}{CloneCensorWeightData}(object)
+
+\S4method{summary}{CloneCensorWeightData}(object)
+}
+\arguments{
+\item{object}{An object of type \code{CloneCensorWeightData}.}
+}
 \description{
-Clone-censor-weight data class
+\code{CloneCensorWeightData} is an S4 class that inherits from
+\link[CohortMethod:CohortMethodData]{CohortMethodData}, so CohortMethod functions such as
+\code{\link[CohortMethod:createStudyPopulation]{CohortMethod::createStudyPopulation()}} accept it as is. It is an \link[Andromeda:Andromeda]{Andromeda}
+object with these tables:
+\itemize{
+\item \code{cohorts}: one row per eligible person-index, with columns \code{rowId}, \code{personSeqId}, \code{personId},
+\code{treatment} (always 1, because CohortMethod requires it), \code{cohortStartDate}, \code{daysFromObsStart},
+\code{daysToCohortEnd}, \code{daysToObsEnd}, and \code{daysToDeath} (\code{NA} if no death is observed).
+\item \code{outcomes}: \code{rowId}, \code{outcomeId}, \code{daysToEvent}.
+\item \code{treatments}: \code{rowId}, \code{treatmentId}, \code{daysToStart}, \code{daysToEnd}; every era of a treatment cohort
+overlapping the prior-use lookback window and follow-up.
+\item \code{covariates}, \code{covariateRef}, \code{analysisRef}: baseline covariates in FeatureExtraction format.
+}
+
+All days are relative to the index date (\code{cohortStartDate}, day 0). The \code{metaData} attribute is a
+list with at least \code{targetId}, \code{treatmentIds} (named by role: \code{treatment} and optionally
+\code{comparatorTreatment}), \code{outcomeIds}, \code{populationSize}, and \code{attrition}.
+
+A \code{CloneCensorWeightData} is created using \code{getDbCloneCensorWeightData()} or
+\code{\link[=createCloneCensorWeightData]{createCloneCensorWeightData()}}, can only be saved using \code{\link[=saveCloneCensorWeightData]{saveCloneCensorWeightData()}}, and loaded
+using \code{\link[=loadCloneCensorWeightData]{loadCloneCensorWeightData()}}.
 }
