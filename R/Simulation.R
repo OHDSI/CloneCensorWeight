@@ -470,6 +470,15 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #' Under DGP `"b"`, the binary-at-G regime moves the start of persons who would not start by G to
 #' earlier days, where the effect has had longer to build up.
 #'
+#' The risks count outcomes from day 0 (the index date), so they are the estimands of analyses with
+#' `riskStart = 0`. An analysis with `riskStart = 1` (with CohortMethod's default removal of persons
+#' with the outcome before `riskStart`, and of persons with no day at risk) estimates the risk on days
+#' 1 to h among persons with no outcome or death on day 0, which is `(risk(h) - risk(0)) / (1 - p0)`,
+#' where `risk(0)` is the risk at horizon 0 and `p0` the probability of the outcome or death on day 0,
+#' the mean over X of `1 - (1 - hY(0 | X)) (1 - hD(0 | X))`, with `hY` and `hD` the untreated daily
+#' outcome and death hazards. This holds for every strategy, because the treatment changes no hazard
+#' on day 0 under any strategy.
+#'
 #' @param settings    The simulation settings: `metaData$simulationSettings` of an object created by
 #'                    [simulateCloneCensorWeightData()].
 #' @param strategies  A list of objects of type `TreatmentStrategy` as created using

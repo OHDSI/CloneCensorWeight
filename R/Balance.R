@@ -29,7 +29,9 @@
 #' weight of its segment that contains day d (time `d - riskStart + 1`), which is the weight the outcome
 #' models use for risk-set membership on day d. For `initiateWithin` and `notInitiateWithin` strategies
 #' W is constant after the grace period, so this is exactly W(τ + 1). For a `neverInitiate` strategy W
-#' keeps changing, and the segment's weight is that of the first event time on or after day d.
+#' keeps changing and segments are cut only at outcome and competing-event days, so the segment's
+#' weight is W on the first such day on or after day d (or on the clone's last day, if none follows),
+#' not W(τ + 1) itself. The two agree when an outcome or competing event falls on day d.
 #'
 #' @param weightedClones              An object of type [CcwClones] with segments and weights, as created
 #'                                    by `computeCensoringWeights()`.

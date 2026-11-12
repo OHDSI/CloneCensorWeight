@@ -43,6 +43,42 @@ test_that("computeCovariateBalance equals a hand computation on compliant clones
   }
 })
 
+test_that("computeCovariateBalance reads the weight of the segment that contains day tau + 1", {
+  data <- simulateCloneCensorWeightData(n = 200, graceEnd = 30, seed = 1)
+  on.exit(close(data))
+  x <- m5CovariateMatrix(data)
+  for (riskStart in 0:1) {
+    # riskWindowEnd = 31 makes every clone still under follow-up on day 31 end on that day.
+    for (riskWindowEnd in c(365, 31)) {
+      reference <- m5ReferenceClones(data, graceEnd = 30, riskStart = riskStart, riskWindowEnd = riskWindowEnd)
+      clones <- reference$clones
+      # tau = 30. Day 31 is time t31 = 31 - riskStart + 1; cut every clone at t31 - 1 and t31, so that
+      # (t31 - 1, t31] is day 31 alone, and give each of the three pieces a different weight:
+      t31 <- 31 - riskStart + 1
+      weights <- cbind(1 + clones$cloneRowId %% 2, 1 + clones$cloneRowId %% 5, 1 + clones$cloneRowId %% 3)
+      weighted <- m5CutSegments(clones, c(t31 - 1, t31), weights)
+      ccwClones <- .createCcwClones(reference$persons, clones, reference$metaData)
+      ccwClones <- .addSegments(ccwClones, weighted$segments, weighted$personWeights, list(stabilized = FALSE, truncation = "none"))
+      balance <- computeCovariateBalance(ccwClones, data)
+      close(ccwClones)
+
+      compliant <- clones$endDay >= 31
+      if (riskWindowEnd == 31) {
+        expect_true(all(clones$endDay[compliant] == 31))
+      }
+      xCompliant <- x[clones$rowId[compliant], , drop = FALSE]
+      treatment <- as.integer(clones$strategyId[compliant] == 1)
+      expectBalanceEqual(balance, m5HandBalance(xCompliant, treatment, weighted = FALSE), "beforeMatching")
+      expectBalanceEqual(balance, m5HandBalance(xCompliant, treatment, weights[compliant, 2]), "afterMatching")
+      # The weights of the neighbouring pieces give a different answer:
+      for (k in c(1, 3)) {
+        other <- m5HandBalance(xCompliant, treatment, weights[compliant, k])
+        expect_false(isTRUE(all.equal(other$stdDiff, m5HandBalance(xCompliant, treatment, weights[compliant, 2])$stdDiff)))
+      }
+    }
+  }
+})
+
 test_that("computeCovariateBalance uses the largest graceEnd of the two strategies", {
   data <- simulateCloneCensorWeightData(n = 200, graceEnd = 30, seed = 2)
   on.exit(close(data))

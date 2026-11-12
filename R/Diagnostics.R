@@ -33,7 +33,9 @@ CohortMethod::drawAttritionDiagram
 #' for clones of the target strategy (strategy 1) and 0 for the comparator (strategy 2),
 #' `outcomeCount` is the clone's outcome count, and `timeAtRisk` its `survivalTime`. The weights are
 #' not used, so the MDRR describes the unweighted clone population, and a person contributes a clone to
-#' both arms.
+#' both arms. An outcome during a grace period, when the person's clones still follow both strategies,
+#' is therefore counted once in each arm, so `totalOutcomes` can exceed the number of persons with the
+#' outcome, and the MDRR is optimistic.
 #'
 #' @param clones     An object of type [CcwClones], as created by `createClones()` or
 #'                   `computeCensoringWeights()`.

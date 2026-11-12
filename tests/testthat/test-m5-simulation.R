@@ -157,6 +157,36 @@ test_that("event rates match the DGP hazards", {
   }
 })
 
+test_that("an outcome on the day of death or of the end of observation is recorded", {
+  n <- 20000
+  hL <- 0.1
+  data <- simulateCloneCensorWeightData(
+    n = n, nCovariates = 2, maxDays = 8, outcomeHazard = 0.1, deathHazard = 0.1, observationEndHazard = hL,
+    treatmentEffect = 0, seed = 1
+  )
+  on.exit(close(data))
+  settings <- attr(data, "metaData")$simulationSettings
+  x <- m5CovariateMatrix(data)
+  hazard <- function(baseline, coefficients) stats::plogis(stats::qlogis(baseline) + as.vector(x %*% coefficients))
+  hY <- hazard(settings$outcomeHazard, settings$outcomeCoefficients)
+  hD <- hazard(settings$deathHazard, settings$deathCoefficients)
+  cohorts <- dplyr::collect(data$cohorts)
+  outcomes <- dplyr::collect(data$outcomes)
+  daysToEvent <- outcomes$daysToEvent[match(cohorts$rowId, outcomes$rowId)]
+
+  # P(no outcome, death or end of observation before day d), for d = 0..8 (persons x days):
+  survival <- sapply(0:8, function(d) ((1 - hY) * (1 - hD) * (1 - hL))^d)
+  # Outcome and death on the same day:
+  expected <- mean(rowSums(survival * hY * hD))
+  observed <- mean(!is.na(daysToEvent) & !is.na(cohorts$daysToDeath) & daysToEvent == cohorts$daysToDeath)
+  expect_lt(abs(observed - expected), 4 * m5MonteCarloSe(expected, n))
+  # Outcome on the day observation ends (by death, loss to follow-up, or reaching maxDays = 8):
+  endsThatDay <- cbind(matrix(1 - (1 - hD) * (1 - hL), nrow = n, ncol = 8), 1)
+  expected <- mean(rowSums(survival * hY * endsThatDay))
+  observed <- mean(!is.na(daysToEvent) & daysToEvent == cohorts$daysToObsEnd)
+  expect_lt(abs(observed - expected), 4 * m5MonteCarloSe(expected, n))
+})
+
 test_that("initiation and the outcome are confounded in the specified direction", {
   confounding <- function(sign) {
     data <- simulateCloneCensorWeightData(
@@ -278,6 +308,39 @@ test_that("computeTrueRisks equals a brute-force calculation for grace regimes w
   binaryAtG <- m5ExactRisks(settings, strategies[[1]], "binaryAtG")
   naturalGrace <- m5ExactRisks(settings, strategies[[1]], "naturalGrace")
   expect_gt(max(abs(binaryAtG - naturalGrace) / m5MonteCarloSe(binaryAtG, nTruth)), 12)
+})
+
+test_that(".drawGraceStartDay draws from P(A = a | A <= G, no outcome on or before day G, X)", {
+  # Inverse-CDF draws on the grid u = (i - 0.5) / m put m * q(a) +- 1 of the m draws on each day a.
+  # Two kinds of persons (different linear predictors) are drawn together, each on its own u grid.
+  m <- 1e5
+  u <- (seq_len(m) - 0.5) / m
+  hA <- c(0.2, 0.5)
+  hY <- c(0.3, 0.1)
+  conditioningMatters <- 0
+  for (dgp in c("a", "b")) {
+    for (treatmentEffect in c(log(0.05), log(20))) {
+      settings <- m5Settings(
+        nCovariates = 0, dgp = dgp, graceEnd = 3, maxDays = 20, initiationHazard = 0.2, outcomeHazard = 0.3,
+        deathHazard = 0.01, observationEndHazard = 0, treatmentEffect = treatmentEffect, effectRampDays = 2
+      )
+      for (g in c(2, 3, 5)) {
+        drawn <- .drawGraceStartDay(rep(u, 2), rep(stats::qlogis(hA), each = m), rep(stats::qlogis(hY), each = m), g, settings)
+        for (k in 1:2) {
+          observed <- tabulate(drawn[(k - 1) * m + seq_len(m)] + 1, nbins = g + 1) / m
+          # q(a) proportional to (1 - hA)^a hA prod_{d <= g} (1 - hY(d; a)), from the DGP definition:
+          unconditional <- (1 - hA[k])^(0:g) * hA[k]
+          q <- unconditional * sapply(0:g, function(a) prod(1 - m5OutcomeHazards(stats::qlogis(hY[k]), a, settings)[1:(g + 1)]))
+          q <- q / sum(q)
+          label <- sprintf("dgp %s, effect %.2f, G = %d, person %d", dgp, exp(treatmentEffect), g, k)
+          expect_lt(max(abs(observed - q)), 1.5 / m, label = label)
+          conditioningMatters <- max(conditioningMatters, abs(q - unconditional / sum(unconditional)))
+        }
+      }
+    }
+  }
+  # The fixtures are ones where conditioning on no outcome by G changes the draw a lot:
+  expect_gt(conditioningMatters, 0.3)
 })
 
 test_that("under DGP (a) the two grace regimes give the same truth", {

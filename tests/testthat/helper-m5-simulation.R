@@ -267,6 +267,39 @@ m5ReferenceSegments <- function(clones, graceEnd, before, after) {
   return(list(segments = segments, personWeights = personWeights))
 }
 
+# Segments cut at the times `cutTimes` (t scale, increasing, the same for every clone), with weight
+# weights[i, k] on the k-th piece of clone i. Outcome and competing event on the last segment.
+m5CutSegments <- function(clones, cutTimes, weights) {
+  breaks <- c(0, cutTimes, Inf)
+  pieces <- lapply(seq_len(length(breaks) - 1), function(k) {
+    idx <- which(clones$survivalTime > breaks[k])
+    stopTime <- pmin(breaks[k + 1], clones$survivalTime[idx])
+    last <- stopTime == clones$survivalTime[idx]
+    data.frame(
+      cloneRowId = clones$cloneRowId[idx],
+      rowId = clones$rowId[idx],
+      personSeqId = clones$personSeqId[idx],
+      strategyId = clones$strategyId[idx],
+      startTime = rep(as.numeric(breaks[k]), length(idx)),
+      stopTime = as.numeric(stopTime),
+      weight = weights[idx, k],
+      outcome = as.integer(last & clones$endReason[idx] == "outcome"),
+      competing = as.integer(last & clones$endReason[idx] == "death")
+    )
+  })
+  segments <- do.call(rbind, pieces)
+  segments <- segments[order(segments$cloneRowId, segments$startTime), ]
+  segments <- cbind(segmentId = seq_len(nrow(segments)), segments)
+  rownames(segments) <- NULL
+  personWeights <- data.frame(
+    cloneRowId = clones$cloneRowId,
+    strategyId = clones$strategyId,
+    maxWeight = as.numeric(tapply(segments$weight, segments$cloneRowId, max)[as.character(clones$cloneRowId)]),
+    weightAtEnd = as.numeric(tapply(segments$weight, segments$cloneRowId, function(w) w[length(w)])[as.character(clones$cloneRowId)])
+  )
+  return(list(segments = segments, personWeights = personWeights))
+}
+
 # Weighted clones for simulated data under initiateWithin(graceEnd) vs notInitiateWithin(graceEnd),
 # with the true DGP weights after the grace period: 1 / P(A <= G | X) for the initiators and
 # 1 / P(A > G | X) for the deferrers. Before the grace period ends, deferrers get the weight
