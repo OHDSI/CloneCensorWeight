@@ -218,6 +218,64 @@ test_that("A single interval (notInitiateWithin(0)) gives an intercept-only time
   close(data)
 })
 
+test_that("Pooled logistic: an interval where everyone at risk initiates has hazard 1", {
+  fixture <- createM3Fixture(150, riskStart = 0L, seed = 33)
+  persons <- fixture$persons
+  # Person 1 is the only one followed to day 60 (the others end by day 40), and initiates on day 60:
+  persons$riskEnd[1] <- 60L
+  persons$nominalRiskEnd <- 60L
+  persons$outcomeDay[1] <- NA
+  persons$deathDay[1] <- NA
+  persons$treatmentDay[1] <- 60L
+  data <- createM3Data(list(persons = persons, covariates = fixture$covariates))
+  clones <- buildM3Clones(persons, m3Strategies("initiateWithin", "neverInitiate", graceEnd = 7), "eventsFirst")
+  rows <- refIntervalRows(persons, 60, "eventsFirst", 1)
+  initiations <- tapply(rows$initiated, rows$k, sum)
+  atRisk <- tapply(rows$initiated, rows$k, length)
+  fitIntervals <- as.numeric(names(initiations))[initiations > 0 & initiations < atRisk]
+  fitRows <- rows[rows$k %in% fitIntervals, ]
+  k <- factor(fitRows$k)
+  x <- m3CovariateMatrix(fixture, fitRows$rowId)
+  for (useCovariates in c(TRUE, FALSE)) {
+    models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic", useCovariates = useCovariates)))
+    model <- models[[2]]
+    expect_equal(model$horizon, 60L)
+    expect_equal(model$diagnostics$status, "OK")
+    expect_equal(model$timeBasis$fullIntervals, 60)
+    expect_equal(model$timeBasis$emptyIntervals, setdiff(0:60, c(fitIntervals, 60)))
+    expect_equal(model$intervals$baseline[61], Inf)
+    expect_equal(model$numerator$intervals$baseline[61], Inf)
+    expect_equal(model$diagnostics$rows, nrow(fitRows))
+    reference <- if (useCovariates) {
+      glm(fitRows$initiated ~ k + x, family = quasibinomial(), control = glmControl)
+    } else {
+      glm(fitRows$initiated ~ k, family = quasibinomial(), control = glmControl)
+    }
+    expect_equal(unname(model$coefficients), unname(coef(reference)), tolerance = 1e-6)
+  }
+  close(clones)
+  close(data)
+})
+
+test_that("A failed pooled logistic numerator fit follows stopOnError", {
+  fixture <- createM3Fixture(100, riskStart = 0L, seed = 13)
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 5), "eventsFirst")
+  args <- m3Args("logistic", useCovariates = FALSE, timeBasis = createTimeBasis("linear"))
+  args$control <- Cyclops::createControl(noiseLevel = "silent", maxIterations = 1)
+  expect_error(suppressMessages(fitCensoringModels(clones, data, args)), "MAX_ITERATIONS")
+  args$stopOnError <- FALSE
+  messages <- capture_messages(models <- fitCensoringModels(clones, data, args))
+  expect_true(any(grepl("Fitting the numerator model failed: MAX_ITERATIONS", messages)))
+  expect_equal(models[[2]]$diagnostics$status, "Fitting the numerator model failed: MAX_ITERATIONS")
+  # The fallback is the intercept-only numerator (and, without covariates, denominator):
+  rows <- refIntervalRows(fixture$persons, 5, "eventsFirst", 1)
+  expect_equal(models[[2]]$numerator$coefficients, c("(Intercept)" = qlogis(mean(rows$initiated))), tolerance = 1e-10)
+  expect_equal(models[[2]]$coefficients, models[[2]]$numerator$coefficients)
+  close(clones)
+  close(data)
+})
+
 test_that("Covariates can be included or excluded, and highly correlated ones are caught", {
   fixture <- createM3Fixture(150, riskStart = 0L, seed = 12)
   data <- createM3Data(fixture)

@@ -30,8 +30,10 @@
 #' - `"neverInitiate"`: `W(d) = 1 / S(d - 1 | X)`.
 #'
 #' With `"deviationFirst"`, `S(d | X)` is used in place of `S(d - 1 | X)`, and the `"initiateWithin"`
-#' weight is `1 / pi(X)` from day `G` on. Stabilized weights multiply by the same quantity from the
-#' numerator model without covariates.
+#' weight is `1 / pi(X)` from day `G` on. A clone that deviates on day `d` then does so before any
+#' outcome on that day, so it is not at risk of the outcome on day `d`: its segments end on day
+#' `d - 1`, and a clone that deviates on its first day of follow-up has no segments. Stabilized
+#' weights multiply by the same quantity from the numerator model without covariates.
 #'
 #' Each clone's follow-up is split, on the survival time scale `t = day - riskStart + 1`, at the end of
 #' day `G` (day `G - 1` with `"deviationFirst"`) for `"initiateWithin"`, and, for the hazard
@@ -46,7 +48,8 @@
 #'
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
-#'                           [fitCensoringModels()] on the same clones.
+#'                           [fitCensoringModels()] on the same clones (same outcome and same-day
+#'                           ordering).
 #' @param computeWeightsArgs An object of type `ComputeWeightsArgs` as created using
 #'                           [createComputeWeightsArgs()].
 #'
@@ -57,7 +60,7 @@
 #'   (exclusive), `stopTime` (inclusive), `weight` (truncated), `outcome` and `competing` (1 only on the
 #'   clone's last segment when it ends with the outcome or death).
 #' - `personWeights`: `cloneRowId`, `strategyId`, `maxWeight` and `weightAtEnd`, the largest and the
-#'   last segment weight of each clone before truncation.
+#'   last segment weight of each clone with segments, before truncation.
 #'
 #' `metaData$weights` holds whether the weights are stabilized, the truncation rule, the cap used per
 #' strategy, and a summary of the untruncated weights. The tables are added in place, but the returned
@@ -87,61 +90,77 @@ computeCensoringWeights <- function(clones,
   start <- Sys.time()
   on.exit(.dropTables(clones, "ccwW"))
   .writeModelTables(clones, censoringModels)
-  offset <- if (metaData$sameDayOrdering == "eventsFirst") 1L else 0L
+  deviationFirst <- metaData$sameDayOrdering == "deviationFirst"
+  offset <- if (deviationFirst) 0L else 1L
+
+  # The follow-up of each clone in the outcome risk set (t scale). With deviationFirst, a clone that
+  # deviates on its last day does so before any outcome that day, so that day is left out:
+  .andromedaExecute(clones, sprintf("
+    CREATE TABLE ccwWClones AS
+    SELECT cloneRowId,
+      rowId,
+      personSeqId,
+      strategyId,
+      riskStart,
+      endReason,
+      survivalTime - CASE WHEN %s AND deviationDay = endDay THEN 1 ELSE 0 END AS survivalTime
+    FROM clones;", if (deviationFirst) "TRUE" else "FALSE"))
 
   # Cut times (t scale) of each clone, including its end:
   .andromedaExecute(clones, "
     CREATE TABLE ccwWEventTimes AS
     SELECT DISTINCT survivalTime AS eventTime
-    FROM clones
+    FROM ccwWClones
     WHERE endReason IN ('outcome', 'death');")
   .andromedaExecute(clones, "
     CREATE TABLE ccwWCuts AS
-    SELECT clones.cloneRowId,
+    SELECT ccwWClones.cloneRowId,
       ccwWEventTimes.eventTime AS cutTime
-    FROM clones
+    FROM ccwWClones
     INNER JOIN ccwWParams
-      ON clones.strategyId = ccwWParams.strategyId
+      ON ccwWClones.strategyId = ccwWParams.strategyId
     INNER JOIN ccwWEventTimes
-      ON ccwWEventTimes.eventTime < clones.survivalTime
-        AND ccwWEventTimes.eventTime + clones.riskStart - 1 <= ccwWParams.windowEnd
+      ON ccwWEventTimes.eventTime < ccwWClones.survivalTime
+        AND ccwWEventTimes.eventTime + ccwWClones.riskStart - 1 <= ccwWParams.windowEnd
     WHERE ccwWParams.kind = 'hazard'
     UNION
-    SELECT clones.cloneRowId,
-      ccwWParams.cutDay - clones.riskStart + 1 AS cutTime
-    FROM clones
+    SELECT ccwWClones.cloneRowId,
+      ccwWParams.cutDay - ccwWClones.riskStart + 1 AS cutTime
+    FROM ccwWClones
     INNER JOIN ccwWParams
-      ON clones.strategyId = ccwWParams.strategyId
+      ON ccwWClones.strategyId = ccwWParams.strategyId
     WHERE ccwWParams.kind = 'binary'
-      AND ccwWParams.cutDay - clones.riskStart + 1 > 0
-      AND ccwWParams.cutDay - clones.riskStart + 1 < clones.survivalTime
+      AND ccwWParams.cutDay - ccwWClones.riskStart + 1 > 0
+      AND ccwWParams.cutDay - ccwWClones.riskStart + 1 < ccwWClones.survivalTime
     UNION
     SELECT cloneRowId,
       survivalTime AS cutTime
-    FROM clones;")
+    FROM ccwWClones
+    WHERE survivalTime > 0;")
 
   # Segments, with the day whose survival gives the weight (binary: 1 after the switch, 0 before):
   .andromedaExecute(clones, sprintf("
     CREATE TABLE ccwWSegments AS
     SELECT ccwWCuts.cloneRowId,
-      clones.rowId,
-      clones.personSeqId,
-      clones.strategyId,
+      ccwWClones.rowId,
+      ccwWClones.personSeqId,
+      ccwWClones.strategyId,
       COALESCE(LAG(ccwWCuts.cutTime) OVER (PARTITION BY ccwWCuts.cloneRowId ORDER BY ccwWCuts.cutTime), 0) AS startTime,
       ccwWCuts.cutTime AS stopTime,
-      CASE WHEN ccwWCuts.cutTime = clones.survivalTime AND clones.endReason = 'outcome' THEN 1 ELSE 0 END AS outcome,
-      CASE WHEN ccwWCuts.cutTime = clones.survivalTime AND clones.endReason = 'death' THEN 1 ELSE 0 END AS competing,
+      CASE WHEN ccwWCuts.cutTime = ccwWClones.survivalTime AND ccwWClones.endReason = 'outcome' THEN 1 ELSE 0 END AS outcome,
+      CASE WHEN ccwWCuts.cutTime = ccwWClones.survivalTime AND ccwWClones.endReason = 'death' THEN 1 ELSE 0 END AS competing,
       CASE
         WHEN ccwWParams.kind = 'binary' THEN
-          CASE WHEN ccwWCuts.cutTime + clones.riskStart - 1 > ccwWParams.cutDay THEN 1 ELSE 0 END
-        ELSE LEAST(ccwWCuts.cutTime + clones.riskStart - 1 - %d, ccwWParams.windowEnd)
+          CASE WHEN ccwWCuts.cutTime + ccwWClones.riskStart - 1 > ccwWParams.cutDay THEN 1 ELSE 0 END
+        ELSE LEAST(ccwWCuts.cutTime + ccwWClones.riskStart - 1 - %d, ccwWParams.windowEnd)
       END AS evalDay
     FROM ccwWCuts
-    INNER JOIN clones
-      ON ccwWCuts.cloneRowId = clones.cloneRowId
+    INNER JOIN ccwWClones
+      ON ccwWCuts.cloneRowId = ccwWClones.cloneRowId
     INNER JOIN ccwWParams
-      ON clones.strategyId = ccwWParams.strategyId;", offset))
+      ON ccwWClones.strategyId = ccwWParams.strategyId;", offset))
 
+  .checkPredictionsExist(clones)
   .computeSurvival(clones)
 
   weightExpression <- if (computeWeightsArgs$stabilized) {
@@ -214,6 +233,10 @@ computeCensoringWeights <- function(clones,
   modelsMetaData <- attr(censoringModels, "metaData")
   if (!identical(modelsMetaData$sameDayOrdering, metaData$sameDayOrdering)) {
     stop("The censoring models were fit with a different sameDayOrdering than the clones use")
+  }
+  # The risk sets depend on the outcome (contract section 5.3), so models are not shared across outcomes:
+  if (!identical(as.numeric(modelsMetaData$outcomeId), as.numeric(metaData$outcomeId))) {
+    stop("The censoring models were fit on the clones of a different outcome")
   }
   strategies <- metaData$strategies
   if (length(censoringModels) != length(strategies)) {
@@ -306,6 +329,27 @@ computeCensoringWeights <- function(clones,
     list(tibble(strategyId = integer(0), k = integer(0), baseline = numeric(0), numeratorBaseline = numeric(0))),
     intervals
   ))
+  invisible(NULL)
+}
+
+# Stops when a segment's weight needs the prediction of a person outside the model's risk set (models
+# fit on other clones). Persons outside the risk set need none: their segments use S(-1) = 1 or, for
+# the binary model, the days up to the switch. So the COALESCE in .computeSurvival never changes a
+# weight.
+.checkPredictionsExist <- function(clones) {
+  missing <- .andromedaSql(clones, "
+    SELECT COUNT(*) AS n
+    FROM ccwWSegments
+    INNER JOIN ccwWParams
+      ON ccwWSegments.strategyId = ccwWParams.strategyId
+    LEFT JOIN ccwWValues
+      ON ccwWSegments.strategyId = ccwWValues.strategyId
+        AND ccwWSegments.rowId = ccwWValues.rowId
+    WHERE ccwWValues.rowId IS NULL
+      AND CASE WHEN ccwWParams.kind = 'binary' THEN ccwWSegments.evalDay = 1 ELSE ccwWSegments.evalDay >= 0 END;")$n
+  if (missing > 0) {
+    stop(sprintf("%d segment(s) need the censoring model's prediction for a person outside its risk set. Were the censoring models fit on these clones?", missing))
+  }
   invisible(NULL)
 }
 

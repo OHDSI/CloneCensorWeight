@@ -82,26 +82,30 @@ test_that("Weights equal hand-computed values on a six-person fixture", {
 
   # deviationFirst. Same binary risk set. Initiation risk set: 3 is at risk on day 1 (t = 2).
   # Breslow: Lambda(1) = 1/6, Lambda(2) = 1/6 + 1/5, Lambda(3) = 11/30 + 1/3; W(d) = 1/S(d).
+  # A clone that deviates on day d does so before any outcome on day d, so day d is not in its
+  # segments: non-starters 5 and 6 end on day 1 (t = 2) in the initiate arm, and in the defer arm
+  # clone 7 (initiates on day 0) has no segments, 8 ends on day 0 and 10 on day 1.
   clones <- buildM3Clones(handPersons(), m3Strategies(graceEnd = 2), "deviationFirst")
   initiate <- handSegments(
-    cloneRowId = c(1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6),
-    startTime = c(0, 2, 0, 2, 0, 0, 2, 0, 2, 0, 2),
-    stopTime = c(2, 11, 2, 6, 2, 2, 7, 2, 3, 2, 3),
-    weight = c(1, 5 / 3, 1, 5 / 3, 1, 1, 5 / 3, 1, 5 / 3, 1, 5 / 3),
-    outcome = c(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0),
+    cloneRowId = c(1, 1, 2, 2, 3, 4, 4, 5, 6),
+    startTime = c(0, 2, 0, 2, 0, 0, 2, 0, 0),
+    stopTime = c(2, 11, 2, 6, 2, 2, 7, 2, 2),
+    weight = c(1, 5 / 3, 1, 5 / 3, 1, 1, 5 / 3, 1, 1),
+    outcome = c(0, 0, 0, 1, 1, 0, 0, 0, 0),
     competing = 0
   )
   defer <- handSegments(
-    cloneRowId = c(7, 8, 9, 10, 10, 11, 11, 12, 12),
-    startTime = c(0, 0, 0, 0, 2, 0, 2, 0, 2),
-    stopTime = c(1, 2, 2, 2, 3, 2, 11, 2, 9),
-    weight = exp(c(1 / 6, 11 / 30, 11 / 30, 11 / 30, 7 / 10, 11 / 30, 7 / 10, 11 / 30, 7 / 10)),
-    outcome = c(0, 0, 1, 0, 0, 0, 0, 0, 0),
-    competing = c(0, 0, 0, 0, 0, 0, 0, 0, 1)
+    cloneRowId = c(8, 9, 10, 11, 11, 12, 12),
+    startTime = c(0, 0, 0, 0, 2, 0, 2),
+    stopTime = c(1, 2, 2, 2, 11, 2, 9),
+    weight = exp(c(1 / 6, 11 / 30, 11 / 30, 11 / 30, 7 / 10, 11 / 30, 7 / 10)),
+    outcome = c(0, 1, 0, 0, 0, 0, 0),
+    competing = c(0, 0, 0, 0, 0, 0, 1)
   )
   models <- suppressMessages(fitCensoringModels(clones, data, m3Args("cox", useCovariates = FALSE)))
   weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
   expect_equal(collectSegments(weighted)[, columns], rbind(initiate, defer), tolerance = 1e-12)
+  expect_equal(sort(dplyr::pull(weighted$personWeights, "cloneRowId")), c(1:6, 8:12))
 
   # Stabilized weights of models without covariates are exactly 1:
   weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation(stabilized = TRUE)))
@@ -110,7 +114,8 @@ test_that("Weights equal hand-computed values on a six-person fixture", {
 })
 
 # Reference W for every segment, from glm (binary) and coxph/survfit (Cox), per contract section 5.4.
-referenceWeights <- function(segments, clones, fixture, sameDayOrdering, graceEnd, stabilized) {
+# Strategy 1 is initiateWithin(graceEnd); strategy 2 a hazard strategy with the given horizon.
+referenceWeights <- function(segments, clones, fixture, sameDayOrdering, graceEnd, stabilized, horizon = graceEnd) {
   persons <- fixture$persons
   offset <- if (sameDayOrdering == "eventsFirst") 1 else 0
   riskStart <- clones$riskStart[match(segments$cloneRowId, clones$cloneRowId)]
@@ -125,15 +130,15 @@ referenceWeights <- function(segments, clones, fixture, sameDayOrdering, graceEn
   after <- stopDay > graceEnd - (1 - offset)
   weight[s1] <- ifelse(after[s1], (if (stabilized) mean(riskSet$y) else 1) / ps[s1], 1)
 
-  rows <- refCoxRows(persons, graceEnd, sameDayOrdering)
+  rows <- refCoxRows(persons, horizon, sameDayOrdering)
   xc <- m3CovariateMatrix(fixture, rows$rowId)
   cox <- survival::coxph(survival::Surv(rows$time, rows$initiated) ~ xc, ties = "breslow", control = m3CoxControl())
-  days <- -1:graceEnd
+  days <- -1:horizon
   survival <- refCoxSurvival(cox, data.frame(xc = I(xc)), days)
   cox0 <- survival::coxph(survival::Surv(rows$time, rows$initiated) ~ 1, ties = "breslow")
   survival0 <- c(1, summary(survival::survfit(cox0, stype = 2, ctype = 1), times = days[-1] + 1, extend = TRUE)$surv)
   s2 <- which(segments$strategyId == 2)
-  u <- pmin(stopDay[s2] - offset, graceEnd)
+  u <- pmin(stopDay[s2] - offset, horizon)
   person <- match(segments$rowId[s2], rows$rowId)
   weight[s2] <- 1 / survival[cbind(person, u + 2)]
   if (stabilized) {
@@ -144,80 +149,150 @@ referenceWeights <- function(segments, clones, fixture, sameDayOrdering, graceEn
 
 test_that("Binary and Cox weights match glm and survfit references, with segments as survSplit", {
   skip_if_not_installed("survival")
-  for (riskStart in 0:1) {
-    for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
-      fixture <- createM3Fixture(150, riskStart = riskStart, seed = 21)
-      data <- createM3Data(fixture)
-      strategies <- m3Strategies(graceEnd = 7)
-      clones <- buildM3Clones(fixture$persons, strategies, sameDayOrdering)
-      cloneTable <- collectClones(clones)
-      models <- suppressMessages(fitCensoringModels(clones, data, m3Args("cox")))
-      for (stabilized in c(FALSE, TRUE)) {
-        weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation(stabilized)))
-        segments <- collectSegments(weighted)
+  configurations <- list(
+    list(riskStart = 0L, sameDayOrdering = "eventsFirst", type = "notInitiateWithin"),
+    list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "notInitiateWithin"),
+    list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "notInitiateWithin"),
+    list(riskStart = 1L, sameDayOrdering = "deviationFirst", type = "notInitiateWithin"),
+    list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "neverInitiate"),
+    list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "neverInitiate")
+  )
+  for (configuration in configurations) {
+    sameDayOrdering <- configuration$sameDayOrdering
+    fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 21)
+    data <- createM3Data(fixture)
+    strategies <- m3Strategies("initiateWithin", configuration$type, graceEnd = 7)
+    horizon <- if (configuration$type == "neverInitiate") max(fixture$persons$riskEnd) else 7L
+    clones <- buildM3Clones(fixture$persons, strategies, sameDayOrdering)
+    cloneTable <- collectClones(clones)
+    followUp <- refOutcomeFollowUp(cloneTable, sameDayOrdering)
+    models <- suppressMessages(fitCensoringModels(clones, data, m3Args("cox")))
+    for (stabilized in c(FALSE, TRUE)) {
+      weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation(stabilized)))
+      segments <- collectSegments(weighted)
 
-        expected <- refSegments(cloneTable, refCuts(cloneTable, strategies, sameDayOrdering, list(7, 7)))
-        expect_equal(segments[, names(expected)], expected)
-        expect_equal(segments$segmentId, seq_len(nrow(segments)))
-        expect_equal(segments$rowId, cloneTable$rowId[segments$cloneRowId])
-        expect_equal(segments$personSeqId, cloneTable$personSeqId[segments$cloneRowId])
-        expect_equal(segments$strategyId, cloneTable$strategyId[segments$cloneRowId])
+      expected <- refSegments(followUp, refCuts(followUp, strategies, sameDayOrdering, list(7, horizon)))
+      expect_equal(segments[, names(expected)], expected)
+      expect_equal(segments$segmentId, seq_len(nrow(segments)))
+      expect_equal(segments$rowId, cloneTable$rowId[segments$cloneRowId])
+      expect_equal(segments$personSeqId, cloneTable$personSeqId[segments$cloneRowId])
+      expect_equal(segments$strategyId, cloneTable$strategyId[segments$cloneRowId])
 
-        expectedWeight <- referenceWeights(segments, cloneTable, fixture, sameDayOrdering, 7, stabilized)
-        expect_equal(segments$weight, expectedWeight, tolerance = 1e-6)
-      }
-      check <- survival::survcheck(survival::Surv(startTime, stopTime, outcome) ~ 1, id = cloneRowId, data = segments)
-      expect_true(all(check$flag == 0))
-      expect_equal(sum(segments$outcome), sum(cloneTable$endReason == "outcome"))
-      expect_equal(sum(segments$competing), sum(cloneTable$endReason == "death"))
-      close(clones)
-      close(data)
+      expectedWeight <- referenceWeights(segments, cloneTable, fixture, sameDayOrdering, 7, stabilized, horizon)
+      expect_equal(segments$weight, expectedWeight, tolerance = 1e-6)
     }
+    check <- survival::survcheck(survival::Surv(startTime, stopTime, outcome) ~ 1, id = cloneRowId, data = segments)
+    expect_true(all(check$flag == 0))
+    expect_equal(sum(segments$outcome), sum(cloneTable$endReason == "outcome"))
+    expect_equal(sum(segments$competing), sum(cloneTable$endReason == "death"))
+    close(clones)
+    close(data)
   }
 })
 
-test_that("Pooled logistic weights for neverInitiate match products of glm hazards", {
+test_that("With deviationFirst, weighted risk sets equal the event-free persons when initiation is unconfounded", {
+  # Saturated daily pooled logistic models without covariates: on day 0 the defer arm's clones at risk
+  # (no initiation on day 0) weigh 1 / (1 - h0), so they add up to everyone at risk on day 0. In the
+  # initiate arm, the starters at risk on day G weigh 1 / pi, so they add up to the binary risk set.
+  # Deviation-ended clones must not be in the risk set on their deviation day.
+  for (riskStart in 0:1) {
+    fixture <- createM3Fixture(200, riskStart = riskStart, seed = 26)
+    persons <- fixture$persons
+    # An outcome on the first day of follow-up, so that W on that day is a segment weight:
+    persons$outcomeDay[1] <- riskStart
+    persons$deathDay[1] <- NA
+    persons$treatmentDay[1] <- NA
+    data <- createM3Data(list(persons = persons, covariates = fixture$covariates))
+    clones <- buildM3Clones(persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 5), "deviationFirst")
+    models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic", useCovariates = FALSE)))
+    segments <- collectSegments(suppressMessages(computeCensoringWeights(clones, models, noTruncation())))
+    weightedAtRisk <- function(strategyId, day) {
+      t <- day - riskStart + 1
+      sum(segments$weight[segments$strategyId == strategyId & segments$startTime < t & t <= segments$stopTime])
+    }
+    riskSet <- refBinaryRiskSet(persons, 5, "deviationFirst")
+    expect_equal(weightedAtRisk(1, 5), nrow(riskSet), tolerance = 1e-10)
+    if (riskStart == 0) {
+      expect_equal(weightedAtRisk(2, 0), nrow(persons), tolerance = 1e-6)
+    }
+    close(clones)
+    close(data)
+  }
+})
+
+# Reference W of the strategy 2 segments from pooled logistic glm fits on hand-built K_g rows (indicator
+# basis): hazard 0 in intervals without initiations and 1 in intervals where everyone at risk
+# initiates; W(d) = 1 / prod of (1 - h) over the intervals ending on or before d - 1 (d with
+# deviationFirst) and on or before the horizon. Stabilized: times the same product from glm(y ~ k).
+referenceLogisticWeights <- function(segments, fixture, sameDayOrdering, horizon, intervalLength, stabilized) {
+  offset <- if (sameDayOrdering == "eventsFirst") 1 else 0
+  rows <- refIntervalRows(fixture$persons, horizon, sameDayOrdering, intervalLength)
+  initiations <- tapply(rows$initiated, rows$k, sum)
+  atRisk <- tapply(rows$initiated, rows$k, length)
+  intervals <- as.numeric(names(initiations))
+  fitIntervals <- intervals[initiations > 0 & initiations < atRisk]
+  fullIntervals <- intervals[initiations > 0 & initiations == atRisk]
+  fitRows <- rows[rows$k %in% fitIntervals, ]
+  x <- m3CovariateMatrix(fixture, fitRows$rowId)
+  k <- factor(fitRows$k)
+  nIntervals <- horizon %/% intervalLength + 1
+  intervalEnd <- pmin((0:(nIntervals - 1) + 1) * intervalLength - 1, horizon)
+  getBaseline <- function(coefs) {
+    baseline <- rep(-Inf, nIntervals)
+    baseline[fitIntervals + 1] <- coefs[1] + c(0, coefs[grepl("^k", names(coefs))])
+    baseline[fullIntervals + 1] <- Inf
+    return(baseline)
+  }
+  reference <- glm(fitRows$initiated ~ k + x, family = quasibinomial(), control = glm.control(epsilon = 1e-12))
+  baseline <- getBaseline(coef(reference))
+  numeratorBaseline <- getBaseline(coef(glm(fitRows$initiated ~ k, family = quasibinomial(), control = glm.control(epsilon = 1e-12))))
+  s2 <- which(segments$strategyId == 2)
+  personX <- m3CovariateMatrix(fixture, segments$rowId[s2])
+  linearPredictor <- as.vector(personX %*% coef(reference)[c("xx1", "xx2", "xx3")])
+  riskStart <- fixture$persons$riskStart[match(segments$rowId[s2], fixture$persons$rowId)]
+  u <- pmin(segments$stopTime[s2] + riskStart - 1 - offset, horizon)
+  return(vapply(seq_along(s2), function(i) {
+    complete <- intervalEnd <= u[i]
+    weight <- 1 / prod(1 - plogis(baseline[complete] + linearPredictor[i]))
+    if (stabilized) {
+      weight <- weight * prod(1 - plogis(numeratorBaseline[complete]))
+    }
+    weight
+  }, numeric(1)))
+}
+
+test_that("Pooled logistic weights match products of glm hazards", {
   skip_if_not_installed("survival")
   intervalLength <- 3
-  for (riskStart in 0:1) {
-    sameDayOrdering <- if (riskStart == 0) "eventsFirst" else "deviationFirst"
-    offset <- if (sameDayOrdering == "eventsFirst") 1 else 0
-    fixture <- createM3Fixture(150, riskStart = riskStart, seed = 22)
+  # notInitiateWithin(7) with 3-day intervals has a partial last interval (days 6-7), and its weight
+  # after G uses all of it.
+  configurations <- list(
+    list(riskStart = 0L, sameDayOrdering = "eventsFirst", type = "neverInitiate"),
+    list(riskStart = 1L, sameDayOrdering = "deviationFirst", type = "neverInitiate"),
+    list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "notInitiateWithin"),
+    list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "notInitiateWithin")
+  )
+  for (configuration in configurations) {
+    sameDayOrdering <- configuration$sameDayOrdering
+    fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 22)
     data <- createM3Data(fixture)
-    strategies <- m3Strategies("initiateWithin", "neverInitiate", graceEnd = 5)
+    strategies <- m3Strategies("initiateWithin", configuration$type, graceEnd = 7)
+    horizon <- if (configuration$type == "neverInitiate") max(fixture$persons$riskEnd) else 7L
     clones <- buildM3Clones(fixture$persons, strategies, sameDayOrdering)
-    cloneTable <- collectClones(clones)
+    followUp <- refOutcomeFollowUp(collectClones(clones), sameDayOrdering)
     models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic", timeBasis = createTimeBasis(intervalLength = intervalLength))))
-    horizon <- max(fixture$persons$riskEnd)
-    weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
-    segments <- collectSegments(weighted)
-    expected <- refSegments(cloneTable, refCuts(cloneTable, strategies, sameDayOrdering, list(5, horizon)))
-    expect_equal(segments[, names(expected)], expected)
-
-    # Hazards of every person and interval from glm on the hand-built rows (0 in intervals without
-    # initiations), then W(d) = 1 / prod of (1 - h) over the intervals ending on or before d - 1.
-    rows <- refIntervalRows(fixture$persons, horizon, sameDayOrdering, intervalLength)
-    eventIntervals <- sort(unique(rows$k[rows$initiated == 1]))
-    fitRows <- rows[rows$k %in% eventIntervals, ]
-    x <- m3CovariateMatrix(fixture, fitRows$rowId)
-    k <- factor(fitRows$k)
-    reference <- glm(fitRows$initiated ~ k + x, family = quasibinomial(), control = glm.control(epsilon = 1e-12))
-    nIntervals <- horizon %/% intervalLength + 1
-    intervalEnd <- pmin((0:(nIntervals - 1) + 1) * intervalLength - 1, horizon)
-    coefs <- coef(reference)
-    gamma <- c(0, coefs[grepl("^k", names(coefs))])
-    baseline <- rep(-Inf, nIntervals)
-    baseline[eventIntervals + 1] <- coefs[1] + gamma
-    s2 <- which(segments$strategyId == 2)
-    personX <- m3CovariateMatrix(fixture, segments$rowId[s2])
-    linearPredictor <- as.vector(personX %*% coefs[c("xx1", "xx2", "xx3")])
-    stopDay <- segments$stopTime[s2] + riskStart - 1
-    u <- pmin(stopDay - offset, horizon)
-    expectedWeight <- vapply(seq_along(s2), function(i) {
-      complete <- intervalEnd <= u[i]
-      1 / prod(1 - plogis(baseline[complete] + linearPredictor[i]))
-    }, numeric(1))
-    expect_equal(segments$weight[s2], expectedWeight, tolerance = 1e-6)
+    for (stabilized in c(FALSE, TRUE)) {
+      weighted <- suppressMessages(computeCensoringWeights(clones, models, noTruncation(stabilized)))
+      segments <- collectSegments(weighted)
+      expected <- refSegments(followUp, refCuts(followUp, strategies, sameDayOrdering, list(7, horizon)))
+      expect_equal(segments[, names(expected)], expected)
+      expectedWeight <- referenceLogisticWeights(segments, fixture, sameDayOrdering, horizon, intervalLength, stabilized)
+      expect_equal(segments$weight[segments$strategyId == 2], expectedWeight, tolerance = 1e-6)
+    }
+    if (configuration$type == "notInitiateWithin") {
+      # Some clones are followed after G, with the weight of the full partial interval:
+      expect_true(any(segments$strategyId == 2 & segments$stopTime + configuration$riskStart - 1 > 7))
+    }
     close(clones)
     close(data)
   }
@@ -279,6 +354,101 @@ test_that("Weights are 1 when stabilized models have no covariates, and inputs a
   close(otherClones2)
   close(clones)
   close(data)
+})
+
+test_that("Censoring models fit on other clones are rejected", {
+  fixture <- createM3Fixture(100, riskStart = 0L, seed = 28)
+  personsA <- fixture$persons
+  # With outcome A, persons 1-5 have the outcome on day 0, so they are outside the eventsFirst
+  # initiation risk set. Outcome B (same outcome ID here) leaves them under follow-up.
+  personsA$outcomeDay[1:5] <- 0L
+  personsA$deathDay[1:5] <- NA
+  personsA$treatmentDay[1:5] <- NA
+  personsB <- personsA
+  personsB$outcomeDay[1:5] <- NA
+  data <- createM3Data(list(persons = personsA, covariates = fixture$covariates))
+  strategies <- m3Strategies("initiateWithin", "neverInitiate", graceEnd = 7)
+  clonesA <- buildM3Clones(personsA, strategies, "eventsFirst")
+  clonesB <- buildM3Clones(personsB, strategies, "eventsFirst")
+  for (hazardModelType in c("cox", "logistic")) {
+    models <- suppressMessages(fitCensoringModels(clonesA, data, m3Args(hazardModelType)))
+    expect_false(any(1:5 %in% models[[2]]$predictions$rowId))
+    expect_error(suppressMessages(computeCensoringWeights(clonesB, models)), "outside its risk set")
+  }
+  attr(clonesB, "metaData")$outcomeId <- 4
+  expect_error(computeCensoringWeights(clonesB, models), "different outcome")
+  close(clonesA)
+  close(clonesB)
+  close(data)
+})
+
+test_that("Edge cases: nobody starts by G, everyone starts on day 0, an interval where everyone initiates", {
+  fixture <- createM3Fixture(150, riskStart = 0L, seed = 27)
+  # Fits the models, and returns them with the segments (unstabilized and stabilized weights).
+  computeSegments <- function(persons, strategies, sameDayOrdering, hazardModelType) {
+    data <- createM3Data(list(persons = persons, covariates = fixture$covariates))
+    on.exit(close(data))
+    clones <- buildM3Clones(persons, strategies, sameDayOrdering)
+    on.exit(close(clones), add = TRUE)
+    models <- suppressMessages(fitCensoringModels(clones, data, m3Args(hazardModelType)))
+    segments <- lapply(c(FALSE, TRUE), function(stabilized) {
+      collectSegments(suppressMessages(computeCensoringWeights(clones, models, noTruncation(stabilized))))
+    })
+    return(list(models = models, segments = segments[[1]], stabilizedSegments = segments[[2]], followUp = refOutcomeFollowUp(collectClones(clones), sameDayOrdering)))
+  }
+  strategies <- m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 7)
+
+  # Nobody starts by G (some start later): no clone is followed after G in the initiate arm, and
+  # nobody initiates in the defer arm's risk set, so every weight is 1.
+  persons <- fixture$persons
+  persons$treatmentDay[!is.na(persons$treatmentDay) & persons$treatmentDay <= 7] <- NA
+  for (configuration in list(c("eventsFirst", "cox"), c("deviationFirst", "logistic"))) {
+    result <- computeSegments(persons, strategies, configuration[1], configuration[2])
+    expect_equal(result$models[[1]]$numerator$propensityScore, 0)
+    expect_equal(result$models[[2]]$diagnostics$events, 0)
+    expect_equal(result$segments$weight, rep(1, nrow(result$segments)))
+    lastDay <- if (configuration[1] == "eventsFirst") 7 else 6
+    expect_true(all(result$segments$stopTime[result$segments$strategyId == 1] - 1 <= lastDay))
+    expect_setequal(unique(result$segments$cloneRowId), result$followUp$cloneRowId)
+  }
+
+  # Everyone starts on day 0: pi = 1, and the hazard of day 0 is 1. Defer clones end on day 0
+  # (eventsFirst, W = 1) or have no segments (deviationFirst).
+  persons <- fixture$persons
+  persons$treatmentDay <- 0L
+  for (configuration in list(c("eventsFirst", "logistic"), c("deviationFirst", "logistic"), c("deviationFirst", "cox"))) {
+    result <- computeSegments(persons, strategies, configuration[1], configuration[2])
+    expect_equal(result$models[[1]]$numerator$propensityScore, 1)
+    if (configuration[2] == "logistic") {
+      expect_equal(result$models[[2]]$timeBasis$fullIntervals, 0)
+      expect_equal(result$models[[2]]$intervals$baseline, c(Inf, rep(-Inf, 7)))
+    }
+    expect_equal(result$segments$weight, rep(1, nrow(result$segments)))
+    defer <- result$segments[result$segments$strategyId == 2, ]
+    if (configuration[1] == "eventsFirst") {
+      expect_equal(defer$stopTime, rep(1, nrow(defer)))
+    } else {
+      expect_equal(nrow(defer), 0)
+    }
+  }
+
+  # An interval where everyone at risk initiates (person 1, alone at risk on day 60, initiates then):
+  persons <- fixture$persons
+  persons$riskEnd[1] <- 60L
+  persons$nominalRiskEnd <- 60L
+  persons$outcomeDay[1] <- NA
+  persons$deathDay[1] <- NA
+  persons$treatmentDay[1] <- 60L
+  neverStrategies <- m3Strategies("initiateWithin", "neverInitiate", graceEnd = 7)
+  for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
+    result <- computeSegments(persons, neverStrategies, sameDayOrdering, "logistic")
+    expect_equal(result$models[[2]]$timeBasis$fullIntervals, 60)
+    for (stabilized in c(FALSE, TRUE)) {
+      segments <- if (stabilized) result$stabilizedSegments else result$segments
+      expectedWeight <- referenceLogisticWeights(segments, list(persons = persons, x = fixture$x), sameDayOrdering, 60, 1, stabilized)
+      expect_equal(segments$weight[segments$strategyId == 2], expectedWeight, tolerance = 1e-6)
+    }
+  }
 })
 
 test_that("computeWeightDistribution summarizes the weights of clones under follow-up", {

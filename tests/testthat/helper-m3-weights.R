@@ -266,6 +266,17 @@ m3CovariateMatrix <- function(fixture, rowIds) {
   return(x)
 }
 
+# The clones' follow-up in the outcome risk set: with deviationFirst, a clone that deviates on its last
+# day does so before any outcome that day, so that day is left out (and a clone left with no follow-up
+# has no segments).
+refOutcomeFollowUp <- function(clones, sameDayOrdering) {
+  if (sameDayOrdering == "deviationFirst") {
+    dropLastDay <- !is.na(clones$deviationDay) & clones$deviationDay == clones$endDay
+    clones$survivalTime[dropLastDay] <- clones$survivalTime[dropLastDay] - 1L
+  }
+  return(clones[clones$survivalTime > 0, ])
+}
+
 # Segments by survSplit: each clone split at its own t-scale cuts.
 refSegments <- function(clones, cutsByClone) {
   # survSplit needs the bare name Surv in its formula:

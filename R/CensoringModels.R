@@ -37,15 +37,23 @@
 #'   `timeBasis$intervalLength` days (intervals counted from day 0, the last one ending at `H`), fit by
 #'   pooled logistic regression with an intercept, the time basis (never penalized) and the
 #'   covariates; `S(d | X)` is the product of `1 - h` over the intervals ending on or before day `d`.
-#'   With the indicator basis, an interval without initiations gets a hazard of 0 (the limit of the
-#'   maximum likelihood fit), its rows are left out of the fit, and the first interval with initiations
-#'   is the reference.
+#'   With the indicator basis, an interval without initiations gets a hazard of 0, and an interval in
+#'   which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
+#'   of these intervals are left out of the fit, and the first remaining interval is the reference.
 #'
 #' Hazard models are fit per strategy horizon, and a fit is shared only between strategies with the
 #' same type, treatment and horizon. Each model also has a numerator model without covariates, fit on
 #' the same rows, used to stabilize the weights: the marginal probability of starting by `G` (binary),
 #' the Breslow cumulative hazard of a model without covariates (Cox), or the pooled logistic model
-#' with the time basis only.
+#' with the time basis only. If the pooled logistic numerator model fails and `stopOnError = FALSE`,
+#' an intercept-only numerator is used and the error is recorded in the diagnostics.
+#'
+#' The Cox model treats initiation days as continuous times with Breslow ties, so
+#' `exp(-Lambda0(d + 1) exp(X beta))` is not the probability of no initiation on days `0..d` when
+#' the daily probability of initiating is large (for example `exp(-0.3) = 0.74` against `1 - 0.3 =
+#' 0.7` for one day). The resulting weights do not reproduce the population, and weighted risks can
+#' be biased when initiation is confounded. Prefer `hazardModelType = "logistic"` for short grace
+#' periods with many initiations per day.
 #'
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
@@ -72,8 +80,9 @@
 #'   covariate part of the linear predictor, hazard models) for every person in the risk set.
 #' - For Cox: `baselineHazard`, a tibble `time, cumHazard` (Breslow, at the initiation times, on the
 #'   scale time = day + 1). For logistic: `timeBasis` (the settings, interval length, number of
-#'   intervals and the basis matrix) and `intervals`, a tibble `k, startDay, endDay, baseline` with the
-#'   intercept plus time-basis part of the linear predictor of each interval.
+#'   intervals, the basis matrix, and the intervals with a hazard of 0 or 1) and `intervals`, a tibble
+#'   `k, startDay, endDay, baseline` with the intercept plus time-basis part of the linear predictor of
+#'   each interval (`-Inf` or `Inf` for a hazard of 0 or 1).
 #' - `numerator`: the model without covariates (`propensityScore`; `baselineHazard`; or
 #'   `coefficients` and `intervals`).
 #' - `diagnostics`: risk-set size, number of rows, events (initiations or starts by `G`), the AUC
@@ -376,9 +385,9 @@ fitCensoringModels <- function(clones,
     }
   }
   if (length(unique(riskSet$y)) == 2) {
+    # computePsAuc is O(starters x non-starters); keep its default down-sampling to 100,000 rows.
     auc <- as.numeric(CohortMethod::computePsAuc(
-      tibble(treatment = riskSet$y, propensityScore = propensityScore),
-      maxRows = nrow(riskSet)
+      tibble(treatment = riskSet$y, propensityScore = propensityScore)
     ))
   }
   return(list(
@@ -402,17 +411,16 @@ fitCensoringModels <- function(clones,
 # Breslow cumulative baseline hazard at the event times, with row weights:
 # Lambda0(t) = sum over event times s <= t of (weighted events at s) / (sum over time >= s of w exp(lp)).
 .computeBreslowHazard <- function(time, y, linearPredictor = rep(0, length(time)), weights = rep(1, length(time))) {
-  eventTimes <- sort(unique(time[y == 1 & weights > 0]))
-  if (length(eventTimes) == 0) {
+  if (!any(y == 1 & weights > 0)) {
     return(tibble(time = numeric(0), cumHazard = numeric(0)))
   }
-  events <- vapply(eventTimes, function(s) sum(weights[time == s & y == 1]), numeric(1))
-  riskWeight <- weights * exp(linearPredictor)
-  order <- order(time, decreasing = TRUE)
-  cumulativeRisk <- cumsum(riskWeight[order])
-  # Sum of riskWeight over rows with time >= s: the cumulative sum up to the last row with time >= s.
-  atRisk <- vapply(eventTimes, function(s) cumulativeRisk[sum(time >= s)], numeric(1))
-  return(tibble(time = as.numeric(eventTimes), cumHazard = cumsum(events / atRisk)))
+  times <- sort(unique(time))
+  group <- match(time, times)
+  # Weighted events and risk weights per distinct time; the risk set at s sums the times >= s.
+  events <- as.vector(rowsum(weights * (y == 1), group))
+  atRisk <- rev(cumsum(rev(as.vector(rowsum(weights * exp(linearPredictor), group)))))
+  isEventTime <- events > 0
+  return(tibble(time = as.numeric(times[isEventTime]), cumHazard = cumsum(events[isEventTime] / atRisk[isEventTime])))
 }
 
 .fitCoxCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior) {
@@ -505,9 +513,10 @@ fitCensoringModels <- function(clones,
   return(basis)
 }
 
-# Intercept-only logistic MLE.
-.fitInterceptOnly <- function(y) {
-  return(c("(Intercept)" = stats::qlogis(mean(y))))
+# Intercept-only logistic MLE on the hazard rows.
+.fitInterceptOnly <- function(covariateData) {
+  meanY <- .andromedaSql(covariateData, "SELECT AVG(y) AS meanY FROM hazardOutcomes;")$meanY
+  return(c("(Intercept)" = stats::qlogis(meanY)))
 }
 
 .fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior) {
@@ -520,15 +529,20 @@ fitCensoringModels <- function(clones,
     endDay = pmin((k + 1L) * intervalLength - 1L, horizon)
   )
   riskSet$lastInterval <- riskSet$lastDay %/% intervalLength
-  # With the indicator basis, the hazard of an interval without initiations is 0 (its coefficient is
-  # -Inf at the maximum likelihood), and the rows of that interval carry no information on the other
-  # coefficients. So they are left out of the fit, and the first interval with initiations is the
-  # reference. This is the exact limit of the fit, which would otherwise not converge.
+  # With the indicator basis, the hazard of an interval without initiations is 0, and that of an
+  # interval in which everyone at risk initiates is 1 (its coefficient is -Inf or Inf at the maximum
+  # likelihood). The rows of these intervals carry no information on the other coefficients. So they
+  # are left out of the fit, and the first remaining interval is the reference. This is the exact
+  # limit of the fit, which would otherwise not converge.
   fitIntervals <- k
+  fullIntervals <- integer(0)
   if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(riskSet$y) > 0) {
-    fitIntervals <- sort(unique(riskSet$lastInterval[riskSet$y == 1]))
+    initiations <- tabulate(riskSet$lastInterval[riskSet$y == 1] + 1L, nbins = nIntervals)
+    atRisk <- rev(cumsum(rev(tabulate(riskSet$lastInterval + 1L, nbins = nIntervals))))
+    fullIntervals <- k[initiations > 0 & initiations == atRisk]
+    fitIntervals <- k[initiations > 0 & initiations < atRisk]
   }
-  emptyIntervals <- setdiff(k, fitIntervals)
+  emptyIntervals <- setdiff(k, c(fitIntervals, fullIntervals))
   basis <- .createTimeBasisMatrix(fitCensoringModelsArgs$timeBasis, nIntervals, fitIntervals)
   basisIds <- -seq_len(ncol(basis))
 
@@ -594,18 +608,24 @@ fitCensoringModels <- function(clones,
     cyclopsData <- Cyclops::convertToCyclopsData(covariateData$hazardOutcomes, covariates, modelType = "lr", quiet = TRUE)
     return(.fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError))
   }
-  y <- covariateData$hazardOutcomes |>
-    pull(.data$y)
 
   # Numerator: intercept and time basis.
-  if (length(presentBasisIds) == 0 || events == 0) {
-    numeratorCoefficients <- .fitInterceptOnly(y)
+  numeratorError <- NULL
+  if (nRows == 0) {
+    # Every interval has a hazard of 0 or 1, so there is nothing to fit. The intercept is the first
+    # interval's log-odds.
+    numeratorCoefficients <- c("(Intercept)" = if (0L %in% fullIntervals) Inf else -Inf)
+  } else if (length(presentBasisIds) == 0 || events == 0) {
+    numeratorCoefficients <- .fitInterceptOnly(covariateData)
   } else {
     numeratorFit <- fitLr(covariateData$hazardBasis, Cyclops::createPrior("none"))
     if (is.character(numeratorFit)) {
-      stop("Fitting the numerator model failed: ", numeratorFit)
+      numeratorError <- paste("Fitting the numerator model failed:", numeratorFit)
+      message(numeratorError, ". Using an intercept-only numerator model")
+      numeratorCoefficients <- .fitInterceptOnly(covariateData)
+    } else {
+      numeratorCoefficients <- stats::coef(numeratorFit)
     }
-    numeratorCoefficients <- stats::coef(numeratorFit)
   }
 
   # Denominator: intercept, time basis and covariates.
@@ -613,7 +633,7 @@ fitCensoringModels <- function(clones,
   priorVariance <- NA_real_
   error <- "OK"
   linearPredictor <- rep(0, nrow(riskSet))
-  if (length(covariateIds) > 0 && events > 0) {
+  if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
     error <- .checkHighCorrelation(covariateData, riskSet, fitCensoringModelsArgs)
     if (is.null(error)) {
       error <- "OK"
@@ -642,26 +662,27 @@ fitCensoringModels <- function(clones,
       intervalLength = intervalLength,
       nIntervals = nIntervals,
       basis = basis,
-      emptyIntervals = emptyIntervals
+      emptyIntervals = emptyIntervals,
+      fullIntervals = fullIntervals
     ),
-    intervals = dplyr::mutate(intervals, baseline = .computeBaseline(coefficients, basis, basisIds, emptyIntervals)),
+    intervals = dplyr::mutate(intervals, baseline = .computeBaseline(coefficients, basis, basisIds, emptyIntervals, fullIntervals)),
     numerator = list(
       coefficients = .renameBasisCoefficients(numeratorCoefficients, basisIds, colnames(basis)),
-      intervals = dplyr::mutate(intervals, baseline = .computeBaseline(numeratorCoefficients, basis, basisIds, emptyIntervals))
+      intervals = dplyr::mutate(intervals, baseline = .computeBaseline(numeratorCoefficients, basis, basisIds, emptyIntervals, fullIntervals))
     ),
     diagnostics = list(
       riskSetSize = nrow(riskSet),
       rows = as.integer(nRows),
       events = events,
       auc = NA_real_,
-      status = error
+      status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; ")
     )
   ))
 }
 
-# The intercept plus time-basis part of the linear predictor for each interval (-Inf, a hazard of 0,
-# for intervals left out of an indicator fit).
-.computeBaseline <- function(coefficients, basis, basisIds, emptyIntervals) {
+# The intercept plus time-basis part of the linear predictor for each interval (-Inf or Inf, a hazard
+# of 0 or 1, for intervals left out of an indicator fit).
+.computeBaseline <- function(coefficients, basis, basisIds, emptyIntervals, fullIntervals) {
   baseline <- rep(coefficients[["(Intercept)"]], nrow(basis))
   if (ncol(basis) > 0) {
     gamma <- coefficients[as.character(basisIds)]
@@ -669,6 +690,7 @@ fitCensoringModels <- function(clones,
     baseline <- baseline + as.vector(basis %*% gamma)
   }
   baseline[emptyIntervals + 1] <- -Inf
+  baseline[fullIntervals + 1] <- Inf
   return(baseline)
 }
 
