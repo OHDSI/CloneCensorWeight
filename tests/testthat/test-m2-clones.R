@@ -34,161 +34,271 @@ expectedM2Persons <- list(
   )
 )
 
-# Expected clones per strategy, with sameDayOrdering = "eventsFirst" and competingEvents = "death".
-# `deviationFirst` lists the rows that differ under sameDayOrdering = "deviationFirst".
+# Expected clones per strategy, ordering, and riskStart, with competingEvents = "death". With
+# "deviationFirst", a clone that ends because of a deviation on day d is last under follow-up on day
+# d - 1, and is dropped when d - 1 < riskStart.
 expectedM2Clones <- list(
   initiateWithin7 = list(
-    riskStart0 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      NA,            30,      "riskEnd",
-      2,      NA,            25,      "outcome",
-      3,      7,             7,       "deviation",
-      4,      7,             7,       "outcome",
-      5,      NA,            3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      NA,            4,       "outcome",
-      9,      7,             7,       "deviation",
-      11,     7,             0,       "outcome",
-      12,     NA,            3,       "death"
+    eventsFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd",
+        2,      NA,            25,      "outcome",
+        3,      7,             7,       "deviation",
+        4,      7,             7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      7,             7,       "deviation",
+        11,     7,             0,       "outcome",
+        12,     NA,            3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd",
+        2,      NA,            25,      "outcome",
+        3,      7,             7,       "deviation",
+        4,      7,             7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      7,             7,       "deviation",
+        12,     NA,            3,       "death"
+      )
     ),
-    riskStart1 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      NA,            30,      "riskEnd",
-      2,      NA,            25,      "outcome",
-      3,      7,             7,       "deviation",
-      4,      7,             7,       "outcome",
-      5,      NA,            3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      NA,            4,       "outcome",
-      9,      7,             7,       "deviation",
-      12,     NA,            3,       "death"
-    ),
-    deviationFirst = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      4,      7,             7,       "deviation"
+    deviationFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd",
+        2,      NA,            25,      "outcome",
+        3,      7,             6,       "deviation",
+        4,      7,             6,       "deviation",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      7,             6,       "deviation",
+        11,     7,             0,       "outcome",
+        12,     NA,            3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd",
+        2,      NA,            25,      "outcome",
+        3,      7,             6,       "deviation",
+        4,      7,             6,       "deviation",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      7,             6,       "deviation",
+        12,     NA,            3,       "death"
+      )
     )
   ),
   notInitiateWithin7 = list(
-    riskStart0 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      0,             0,       "deviation",
-      2,      7,             7,       "deviation",
-      3,      NA,            30,      "riskEnd",
-      4,      NA,            7,       "outcome",
-      5,      5,             3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      4,             4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      11,     NA,            0,       "outcome",
-      12,     3,             3,       "death"
+    eventsFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      0,             0,       "deviation",
+        2,      7,             7,       "deviation",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     3,             3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             7,       "deviation",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        12,     3,             3,       "death"
+      )
     ),
-    riskStart1 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      2,      7,             7,       "deviation",
-      3,      NA,            30,      "riskEnd",
-      4,      NA,            7,       "outcome",
-      5,      5,             3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      4,             4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      12,     3,             3,       "death"
-    ),
-    deviationFirst = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      8,      4,             4,       "deviation",
-      12,     3,             3,       "deviation"
+    deviationFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             6,       "deviation",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             3,       "deviation",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     3,             2,       "deviation"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             6,       "deviation",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             3,       "deviation",
+        9,      NA,            7,       "observationEnd",
+        12,     3,             2,       "deviation"
+      )
     )
   ),
   neverInitiate = list(
-    riskStart0 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      0,             0,       "deviation",
-      2,      7,             7,       "deviation",
-      3,      12,            12,      "deviation",
-      4,      NA,            7,       "outcome",
-      5,      5,             3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      4,             4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      11,     NA,            0,       "outcome",
-      12,     3,             3,       "death"
+    eventsFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      0,             0,       "deviation",
+        2,      7,             7,       "deviation",
+        3,      12,            12,      "deviation",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     3,             3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             7,       "deviation",
+        3,      12,            12,      "deviation",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        12,     3,             3,       "death"
+      )
     ),
-    riskStart1 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      2,      7,             7,       "deviation",
-      3,      12,            12,      "deviation",
-      4,      NA,            7,       "outcome",
-      5,      5,             3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      4,             4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      12,     3,             3,       "death"
-    ),
-    deviationFirst = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      8,      4,             4,       "deviation",
-      12,     3,             3,       "deviation"
+    deviationFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             6,       "deviation",
+        3,      12,            11,      "deviation",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             3,       "deviation",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     3,             2,       "deviation"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      7,             6,       "deviation",
+        3,      12,            11,      "deviation",
+        4,      NA,            7,       "outcome",
+        5,      5,             3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      4,             3,       "deviation",
+        9,      NA,            7,       "observationEnd",
+        12,     3,             2,       "deviation"
+      )
     )
   ),
   initiateWithin0 = list(
-    riskStart0 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      NA,            30,      "riskEnd",
-      2,      0,             0,       "deviation",
-      3,      0,             0,       "deviation",
-      4,      0,             0,       "deviation",
-      5,      0,             0,       "deviation",
-      6,      0,             0,       "deviation",
-      7,      0,             0,       "deviation",
-      8,      0,             0,       "deviation",
-      9,      0,             0,       "deviation",
-      11,     0,             0,       "outcome",
-      12,     0,             0,       "deviation"
+    eventsFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd",
+        2,      0,             0,       "deviation",
+        3,      0,             0,       "deviation",
+        4,      0,             0,       "deviation",
+        5,      0,             0,       "deviation",
+        6,      0,             0,       "deviation",
+        7,      0,             0,       "deviation",
+        8,      0,             0,       "deviation",
+        9,      0,             0,       "deviation",
+        11,     0,             0,       "outcome",
+        12,     0,             0,       "deviation"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd"
+      )
     ),
-    riskStart1 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      NA,            30,      "riskEnd"
-    ),
-    deviationFirst = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      11,     0,             0,       "deviation"
+    deviationFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      NA,            30,      "riskEnd"
+      )
     )
   ),
   notInitiateWithin0 = list(
-    riskStart0 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      1,      0,             0,       "deviation",
-      2,      NA,            25,      "outcome",
-      3,      NA,            30,      "riskEnd",
-      4,      NA,            7,       "outcome",
-      5,      NA,            3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      NA,            4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      11,     NA,            0,       "outcome",
-      12,     NA,            3,       "death"
+    eventsFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        1,      0,             0,       "deviation",
+        2,      NA,            25,      "outcome",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     NA,            3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      NA,            25,      "outcome",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        12,     NA,            3,       "death"
+      )
     ),
-    riskStart1 = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason,
-      2,      NA,            25,      "outcome",
-      3,      NA,            30,      "riskEnd",
-      4,      NA,            7,       "outcome",
-      5,      NA,            3,       "outcome",
-      6,      NA,            4,       "death",
-      7,      NA,            5,       "observationEnd",
-      8,      NA,            4,       "outcome",
-      9,      NA,            7,       "observationEnd",
-      12,     NA,            3,       "death"
-    ),
-    deviationFirst = dplyr::tribble(
-      ~rowId, ~deviationDay, ~endDay, ~endReason
+    deviationFirst = list(
+      riskStart0 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      NA,            25,      "outcome",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        11,     NA,            0,       "outcome",
+        12,     NA,            3,       "death"
+      ),
+      riskStart1 = dplyr::tribble(
+        ~rowId, ~deviationDay, ~endDay, ~endReason,
+        2,      NA,            25,      "outcome",
+        3,      NA,            30,      "riskEnd",
+        4,      NA,            7,       "outcome",
+        5,      NA,            3,       "outcome",
+        6,      NA,            4,       "death",
+        7,      NA,            5,       "observationEnd",
+        8,      NA,            4,       "outcome",
+        9,      NA,            7,       "observationEnd",
+        12,     NA,            3,       "death"
+      )
     )
   )
 )
@@ -202,12 +312,7 @@ m2Strategies <- list(
 )
 
 expectedM2Strategy <- function(name, strategyId, riskStart, sameDayOrdering) {
-  expected <- expectedM2Clones[[name]][[paste0("riskStart", riskStart)]]
-  if (sameDayOrdering == "deviationFirst") {
-    replacements <- expectedM2Clones[[name]]$deviationFirst
-    replacements <- replacements[replacements$rowId %in% expected$rowId, ]
-    expected <- replaceM2Rows(expected, replacements)
-  }
+  expected <- expectedM2Clones[[name]][[sameDayOrdering]][[paste0("riskStart", riskStart)]]
   expected$strategyId <- rep(strategyId, nrow(expected))
   return(expected)
 }
@@ -311,15 +416,257 @@ test_that("Fixture clones with competingEvents = 'none'", {
       )
     )
     expected <- dplyr::bind_rows(
-      replaceM2Rows(expectedM2Clones$initiateWithin7[[paste0("riskStart", riskStart)]], noneReplacements[[1]]) |>
+      replaceM2Rows(
+        expectedM2Clones$initiateWithin7$eventsFirst[[paste0("riskStart", riskStart)]],
+        noneReplacements[[1]]
+      ) |>
         dplyr::mutate(strategyId = 1),
-      replaceM2Rows(expectedM2Clones$notInitiateWithin7[[paste0("riskStart", riskStart)]], noneReplacements[[2]]) |>
+      replaceM2Rows(
+        expectedM2Clones$notInitiateWithin7$eventsFirst[[paste0("riskStart", riskStart)]],
+        noneReplacements[[2]]
+      ) |>
         dplyr::mutate(strategyId = 2)
     )
     expect_equal(result$clones, completeM2ExpectedClones(expected, riskStart))
     expectedPersons <- expectedM2Persons[[paste0("riskStart", riskStart)]]
     expectedPersons$deathDay <- NA
     expect_equal(result$persons, toM2Persons(expectedPersons, riskStart))
+  }
+})
+
+test_that("Follow-up ends at death when observation continues, with and without competing death", {
+  # Observation (daysToObsEnd) continues after death for persons 1 to 5:
+  # 1: death on day 5, starts on day 2
+  # 2: death on day 12, after G = 7; never starts
+  # 3: death on day 0 (before riskStart when riskStart = 1); never starts
+  # 4: death on day 6; an outcome on day 9, after death, is ignored; never starts
+  # 5: death on day 3, the day of the start
+  # 6: no death; starts on day 10; observation and the risk window end on day 30
+  data <- createCloneCensorWeightData(
+    cohorts = data.frame(
+      rowId = 1:6,
+      personSeqId = 101:106,
+      personId = as.character(1001:1006),
+      cohortStartDate = as.Date("2021-01-01"),
+      daysFromObsStart = 500L,
+      daysToCohortEnd = 0L,
+      daysToObsEnd = c(30L, 40L, 30L, 30L, 20L, 30L),
+      daysToDeath = c(5L, 12L, 0L, 6L, 3L, NA)
+    ),
+    outcomes = data.frame(rowId = 4L, outcomeId = 3, daysToEvent = 9L),
+    treatments = data.frame(
+      rowId = c(1L, 5L, 6L),
+      treatmentId = 21,
+      daysToStart = c(2L, 3L, 10L),
+      daysToEnd = c(12L, 13L, 20L)
+    ),
+    metaData = list(targetId = 1, treatmentIds = c(treatment = 21))
+  )
+  on.exit(close(data))
+  expectedClones <- list(
+    # Death is not an event: it ends follow-up as the end of observation.
+    none = dplyr::tribble(
+      ~rowId, ~strategyId, ~deviationDay, ~endDay, ~endReason,
+      1,      1,           NA,            5,       "observationEnd",
+      1,      2,           2,             2,       "deviation",
+      2,      1,           7,             7,       "deviation",
+      2,      2,           NA,            12,      "observationEnd",
+      3,      1,           NA,            0,       "observationEnd",
+      3,      2,           NA,            0,       "observationEnd",
+      4,      1,           NA,            6,       "observationEnd",
+      4,      2,           NA,            6,       "observationEnd",
+      5,      1,           NA,            3,       "observationEnd",
+      5,      2,           3,             3,       "deviation",
+      6,      1,           7,             7,       "deviation",
+      6,      2,           NA,            30,      "riskEnd"
+    ),
+    death = dplyr::tribble(
+      ~rowId, ~strategyId, ~deviationDay, ~endDay, ~endReason,
+      1,      1,           NA,            5,       "death",
+      1,      2,           2,             2,       "deviation",
+      2,      1,           7,             7,       "deviation",
+      2,      2,           NA,            12,      "death",
+      3,      1,           NA,            0,       "death",
+      3,      2,           NA,            0,       "death",
+      4,      1,           NA,            6,       "death",
+      4,      2,           NA,            6,       "death",
+      5,      1,           NA,            3,       "death",
+      5,      2,           3,             3,       "death",
+      6,      1,           7,             7,       "deviation",
+      6,      2,           NA,            30,      "riskEnd"
+    )
+  )
+  for (riskStart in 0:1) {
+    population <- suppressMessages(createStudyPopulation(
+      cloneCensorWeightData = data,
+      outcomeId = 3,
+      createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+        riskWindowStart = riskStart,
+        riskWindowEnd = 30,
+        endAnchor = "cohort start"
+      )
+    ))
+    for (competingEvents in c("none", "death")) {
+      result <- runM2Clones(
+        population = population,
+        data = data,
+        strategies = list(m2Strategy(1, "initiateWithin", 7), m2Strategy(2, "notInitiateWithin", 7)),
+        competingEvents = competingEvents
+      )
+      deathDay <- if (competingEvents == "death") c(5, 12, 0, 6, 3, NA) else rep(NA, 6)
+      if (riskStart == 1) {
+        deathDay[3] <- NA
+      }
+      expectedPersons <- data.frame(
+        rowId = 1:6,
+        riskEnd = c(5, 12, 0, 6, 3, 30),
+        nominalRiskEnd = 30,
+        outcomeDay = NA,
+        deathDay = deathDay,
+        treatmentDay = c(2, NA, NA, NA, 3, 10),
+        comparatorTreatmentDay = NA
+      )
+      expect_equal(result$persons, toM2Persons(expectedPersons, riskStart), info = competingEvents)
+      # Person 3 has no follow-up when riskStart = 1.
+      expected <- expectedClones[[competingEvents]]
+      expected <- expected[expected$rowId != 3 | riskStart == 0, ]
+      expect_equal(result$clones, completeM2ExpectedClones(expected, riskStart), info = competingEvents)
+    }
+  }
+})
+
+test_that("A risk window shortened at the next risk window ends with 'riskEnd', not 'observationEnd'", {
+  # Rows 1 and 2 are two index dates of one person, 10 days apart, so censorAtNewRiskWindow ends the
+  # risk window of row 1 on day 9 while observation continues. Observation ends on day 12 for row 3.
+  data <- createCloneCensorWeightData(
+    cohorts = data.frame(
+      rowId = 1:3,
+      personSeqId = c(101L, 101L, 102L),
+      personId = c("1001", "1001", "1002"),
+      cohortStartDate = as.Date("2021-01-01") + c(0, 10, 0),
+      daysFromObsStart = 500L,
+      daysToCohortEnd = 0L,
+      daysToObsEnd = c(100L, 90L, 12L),
+      daysToDeath = NA_integer_
+    ),
+    outcomes = data.frame(rowId = integer(0), outcomeId = numeric(0), daysToEvent = integer(0)),
+    treatments = data.frame(
+      rowId = integer(0),
+      treatmentId = numeric(0),
+      daysToStart = integer(0),
+      daysToEnd = integer(0)
+    ),
+    metaData = list(targetId = 1, treatmentIds = c(treatment = 21))
+  )
+  on.exit(close(data))
+  population <- suppressMessages(createStudyPopulation(
+    cloneCensorWeightData = data,
+    outcomeId = 3,
+    createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+      riskWindowEnd = 30,
+      endAnchor = "cohort start",
+      censorAtNewRiskWindow = TRUE
+    )
+  ))
+  result <- runM2Clones(
+    population = population,
+    data = data,
+    strategies = list(m2Strategy(1, "notInitiateWithin", 7), m2Strategy(2, "neverInitiate"))
+  )
+  expect_equal(result$persons$riskEnd, c(9L, 30L, 12L))
+  expect_equal(result$persons$nominalRiskEnd, c(30L, 30L, 30L))
+  expect_equal(result$clones[, c("rowId", "strategyId", "endDay", "endReason")], data.frame(
+    rowId = rep(1:3, each = 2),
+    strategyId = rep(1:2, 3),
+    endDay = rep(c(9L, 30L, 12L), each = 2),
+    endReason = rep(c("riskEnd", "riskEnd", "observationEnd"), each = 2)
+  ))
+})
+
+test_that("Clones and the contract weights give the true risk with no confounding and no effect", {
+  # The initiation day A and the outcome day Y are exactly independent: each pair (A, Y) appears
+  # aCount * yCount times (108 persons), and Y does not depend on A. The risk of every strategy is then
+  # P(riskStart <= Y <= h | Y >= riskStart). The censoring weights W(d) of contract section 5.4,
+  # computed from the true P(A > d), are the same for all clones of a strategy on a day, so the
+  # weighted Kaplan-Meier over the clones table equals that risk exactly under both orderings only if a
+  # clone is in the risk set of a day exactly when its weight says so. With "deviationFirst", a clone
+  # that deviates on day d must not be in the risk set of day d.
+  aDays <- c(0L, 1L, 2L, 3L, NA)
+  aCount <- c(2, 1, 2, 1, 3)
+  yDays <- c(0L, 1L, 2L, 3L, 4L, 5L, NA)
+  yCount <- c(1, 2, 1, 1, 2, 1, 4)
+  pairs <- expand.grid(a = seq_along(aDays), y = seq_along(yDays))
+  pairs <- pairs[rep(seq_len(nrow(pairs)), aCount[pairs$a] * yCount[pairs$y]), ]
+  a <- aDays[pairs$a]
+  y <- yDays[pairs$y]
+  n <- length(a)
+  expect_equal(n, 108)
+  data <- createCloneCensorWeightData(
+    cohorts = data.frame(
+      rowId = seq_len(n),
+      personSeqId = seq_len(n),
+      personId = as.character(seq_len(n)),
+      cohortStartDate = as.Date("2020-01-01"),
+      daysFromObsStart = 400L,
+      daysToCohortEnd = 0L,
+      daysToObsEnd = 10L,
+      daysToDeath = NA_integer_
+    ),
+    outcomes = data.frame(rowId = which(!is.na(y)), outcomeId = 3, daysToEvent = y[!is.na(y)]),
+    treatments = data.frame(
+      rowId = which(!is.na(a)),
+      treatmentId = 21,
+      daysToStart = a[!is.na(a)],
+      daysToEnd = a[!is.na(a)] + 5L
+    ),
+    metaData = list(targetId = 1, treatmentIds = c(treatment = 21))
+  )
+  on.exit(close(data))
+  graceEnd <- 2
+  # S(d) = P(A > d), no initiation on days 0..d (S(-1) = 1).
+  survivalA <- function(d) sum(aCount[is.na(aDays) | aDays > d]) / sum(aCount)
+  # Contract section 5.4: S(d - 1) with "eventsFirst", S(d) with "deviationFirst"; for initiateWithin,
+  # 1/pi from day G + 1 ("eventsFirst") or day G ("deviationFirst"), with pi = P(A <= G).
+  weight <- function(type, d, sameDayOrdering) {
+    lag <- if (sameDayOrdering == "eventsFirst") 1 else 0
+    switch(type,
+      initiateWithin = if (d < graceEnd + lag) 1 else 1 / (1 - survivalA(graceEnd)),
+      notInitiateWithin = 1 / survivalA(min(d - lag, graceEnd)),
+      neverInitiate = 1 / survivalA(d - lag)
+    )
+  }
+  for (riskStart in 0:1) {
+    # Persons with the outcome before riskStart are removed as prior outcomes.
+    population <- suppressMessages(createStudyPopulation(
+      cloneCensorWeightData = data,
+      outcomeId = 3,
+      createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+        riskWindowStart = riskStart,
+        riskWindowEnd = 10,
+        endAnchor = "cohort start"
+      )
+    ))
+    atRiskY <- is.na(yDays) | yDays >= riskStart
+    trueRisk <- function(h) sum(yCount[!is.na(yDays) & yDays >= riskStart & yDays <= h]) / sum(yCount[atRiskY])
+    for (pair in list(c("initiateWithin", "notInitiateWithin"), c("initiateWithin", "neverInitiate"))) {
+      strategies <- lapply(1:2, function(i) m2Strategy(i, pair[i], if (pair[i] == "neverInitiate") NULL else graceEnd))
+      for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
+        result <- runM2Clones(population, data, strategies, sameDayOrdering = sameDayOrdering)
+        for (strategyId in 1:2) {
+          clones <- result$clones[result$clones$strategyId == strategyId, ]
+          survival <- 1
+          for (d in riskStart:6) {
+            w <- weight(pair[strategyId], d, sameDayOrdering)
+            atRisk <- w * sum(clones$endDay >= d)
+            events <- w * sum(clones$endDay == d & clones$endReason == "outcome")
+            survival <- survival * (1 - events / atRisk)
+            expect_equal(1 - survival, trueRisk(d), tolerance = 1e-12, info = sprintf(
+              "%s, %s, riskStart = %d, day %d", pair[strategyId], sameDayOrdering, riskStart, d
+            ))
+          }
+        }
+      }
+    }
   }
 })
 
@@ -460,11 +807,16 @@ test_that("createClones equals the slow reference on 1,000 random persons", {
          sameDayOrdering = "eventsFirst", competingEvents = "death"),
     list(riskWindowStart = 1, riskWindowEnd = 5, endAnchor = "cohort end", maxDaysAtRisk = 12, minDaysAtRisk = 0, removeSubjectsWithPriorOutcome = TRUE,
          strategies = list(m2Strategy(1, "notInitiateWithin", 10, treatment = "comparatorTreatment"), m2Strategy(2, "neverInitiate")),
+         sameDayOrdering = "deviationFirst", competingEvents = "none"),
+    list(riskWindowStart = 0, riskWindowEnd = 30, endAnchor = "cohort start", maxDaysAtRisk = 99999, minDaysAtRisk = 1, removeSubjectsWithPriorOutcome = TRUE,
+         censorAtNewRiskWindow = TRUE, strategies = list(m2Strategy(1, "initiateWithin", 7), m2Strategy(2, "neverInitiate")),
          sameDayOrdering = "deviationFirst", competingEvents = "none")
   )
   endReasons <- character(0)
   droppedClones <- 0
-  tiedClones <- 0
+  tiedClones <- c(eventsFirst = 0, deviationFirst = 0)
+  shortenedRiskWindows <- 0
+  deathsEndingObservation <- 0
   for (setting in settings) {
     studyPopulationArgs <- CohortMethod::createCreateStudyPopulationArgs(
       removeSubjectsWithPriorOutcome = setting$removeSubjectsWithPriorOutcome,
@@ -472,7 +824,8 @@ test_that("createClones equals the slow reference on 1,000 random persons", {
       maxDaysAtRisk = setting$maxDaysAtRisk,
       riskWindowStart = setting$riskWindowStart,
       riskWindowEnd = setting$riskWindowEnd,
-      endAnchor = setting$endAnchor
+      endAnchor = setting$endAnchor,
+      censorAtNewRiskWindow = isTRUE(setting$censorAtNewRiskWindow)
     )
     population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = studyPopulationArgs))
     clonesArgs <- createCreateClonesArgs(
@@ -493,13 +846,32 @@ test_that("createClones equals the slow reference on 1,000 random persons", {
 
     endReasons <- c(endReasons, result$clones$endReason)
     droppedClones <- droppedClones + 2 * nrow(result$persons) - nrow(result$clones)
-    person <- match(result$clones$rowId, result$persons$rowId)
-    tied <- result$clones$deviationDay == result$clones$endDay &
-      (result$persons$outcomeDay[person] == result$clones$endDay | result$persons$deathDay[person] == result$clones$endDay)
-    tiedClones <- tiedClones + sum(tied, na.rm = TRUE)
+    clones <- result$clones
+    person <- match(clones$rowId, result$persons$rowId)
+    eventOnDeviationDay <- clones$deviationDay == result$persons$outcomeDay[person] |
+      clones$deviationDay == result$persons$deathDay[person]
+    if (setting$sameDayOrdering == "eventsFirst") {
+      tied <- eventOnDeviationDay & clones$endDay == clones$deviationDay & clones$endReason != "deviation"
+    } else {
+      tied <- eventOnDeviationDay & clones$endDay == clones$deviationDay - 1 & clones$endReason == "deviation"
+    }
+    tiedClones[setting$sameDayOrdering] <- tiedClones[setting$sameDayOrdering] + sum(tied, na.rm = TRUE)
+    shortenedRiskWindows <- shortenedRiskWindows +
+      sum(clones$endReason == "riskEnd" & clones$endDay < result$persons$nominalRiskEnd[person])
+    cohort <- tables$cohorts[match(clones$rowId, tables$cohorts$rowId), ]
+    deathsEndingObservation <- deathsEndingObservation + sum(
+      setting$competingEvents == "none" & clones$endReason == "observationEnd" &
+        clones$endDay == cohort$daysToDeath & cohort$daysToDeath < cohort$daysToObsEnd,
+      na.rm = TRUE
+    )
   }
-  # The random data exercise every end reason, dropped clones, and deviations on an event day.
+  # The random data exercise every end reason, dropped clones, deviations on an event day under both
+  # orderings, risk windows shortened at the next risk window, and deaths before the end of
+  # observation with competingEvents = "none".
   expect_setequal(unique(endReasons), .endReasons)
   expect_gt(droppedClones, 0)
-  expect_gt(tiedClones, 0)
+  expect_gt(tiedClones[["eventsFirst"]], 0)
+  expect_gt(tiedClones[["deviationFirst"]], 0)
+  expect_gt(shortenedRiskWindows, 0)
+  expect_gt(deathsEndingObservation, 0)
 })

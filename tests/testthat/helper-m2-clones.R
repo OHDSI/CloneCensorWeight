@@ -170,6 +170,13 @@ simulateM2Tables <- function(n = 1000, seed = 1) {
     daysToStart = sample(-10:30, sum(nTreatments) + sum(nComparators), replace = TRUE)
   )
   treatments$daysToEnd <- treatments$daysToStart + sample(0:20, nrow(treatments), replace = TRUE)
+
+  # About 20% of the rows are a later index date (0 to 20 days later) of the person in the row before,
+  # so that censorAtNewRiskWindow shortens risk windows.
+  repeated <- c(FALSE, runif(n - 1) < 0.2)
+  cohorts$personSeqId <- cumsum(!repeated) + 5000L
+  cohorts$cohortStartDate <- cohorts$cohortStartDate +
+    stats::ave(ifelse(repeated, sample(0:20, n, replace = TRUE), 0L), cohorts$personSeqId, FUN = cumsum)
   return(list(
     cohorts = cohorts,
     outcomes = outcomes,
@@ -182,16 +189,20 @@ simulateM2Tables <- function(n = 1000, seed = 1) {
 
 # Builds the persons and clones tables from the raw data frames (`tables`, as from
 # simulateM2Tables()), the study population (only its rows and risk windows are used), and the
-# study-population and clone arguments. Each clone is followed by walking its days one at a time
-# from the index day: on each day, the events of that day are checked in the same-day order, and the
-# first that occurs ends follow-up. A clone that deviates before riskStart has no follow-up.
+# study-population and clone arguments. Observation ends at death, so the risk window is capped at
+# death. Each clone is followed by walking its days one at a time from the index day: on each day,
+# the events of that day are checked in the same-day order, and the first that occurs ends follow-up.
+# With "deviationFirst", a clone that deviates on a day leaves before that day's events, so its last
+# day of follow-up is the day before. A clone that deviates before riskStart has no follow-up.
 referenceM2Clones <- function(tables, population, createStudyPopulationArgs, createClonesArgs, outcomeId = 3) {
   treatmentIds <- tables$metaData$treatmentIds
   strategies <- createClonesArgs$strategies
   if (createClonesArgs$sameDayOrdering == "eventsFirst") {
     order <- c("outcome", "death", "deviation")
+    deviationOffset <- 0L
   } else {
     order <- c("deviation", "outcome", "death")
+    deviationOffset <- 1L
   }
   population <- population[order(population$rowId), ]
   persons <- vector("list", nrow(population))
@@ -200,7 +211,8 @@ referenceM2Clones <- function(tables, population, createStudyPopulationArgs, cre
     rowId <- population$rowId[i]
     cohort <- tables$cohorts[tables$cohorts$rowId == rowId, ]
     riskStart <- as.integer(population$riskStart[i])
-    riskEnd <- as.integer(population$riskEnd[i])
+    riskEnd <- as.integer(min(population$riskEnd[i], cohort$daysToDeath, na.rm = TRUE))
+    observationEnd <- min(cohort$daysToObsEnd, cohort$daysToDeath, na.rm = TRUE)
 
     nominalRiskEnd <- createStudyPopulationArgs$riskWindowEnd
     if (createStudyPopulationArgs$endAnchor == "cohort end") {
@@ -269,7 +281,7 @@ referenceM2Clones <- function(tables, population, createStudyPopulationArgs, cre
         }
         if (day < riskStart) {
           if (violated) {
-            endDay <- day
+            endDay <- day - deviationOffset
             endReason <- "deviation"
           }
           next
@@ -281,14 +293,14 @@ referenceM2Clones <- function(tables, population, createStudyPopulationArgs, cre
         )
         for (event in order) {
           if (happens[[event]]) {
-            endDay <- day
+            endDay <- if (event == "deviation") day - deviationOffset else day
             endReason <- event
             break
           }
         }
         if (is.na(endDay) && day == riskEnd) {
           endDay <- day
-          endReason <- if (riskEnd < nominalRiskEnd) "observationEnd" else "riskEnd"
+          endReason <- if (riskEnd == observationEnd && riskEnd < nominalRiskEnd) "observationEnd" else "riskEnd"
         }
       }
       if (is.na(endDay)) {

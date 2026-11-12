@@ -29,16 +29,27 @@
 #' - `"notInitiateWithin"`: day `A` if `A <= G`.
 #' - `"neverInitiate"`: day `A`.
 #'
-#' A violation after the end of the risk window (`riskEnd`) is not recorded (`deviationDay` is `NA`).
-#' A clone ends on `endDay`, the first of `deviationDay`, the first outcome, death, and `riskEnd`.
-#' When several of these fall on the same day, `sameDayOrdering` decides the end reason (see
-#' [createCreateClonesArgs()]). A clone that ends at `riskEnd` ends because of the end of observation
-#' (`"observationEnd"`) if `riskEnd` is before the nominal end of the risk window (`nominalRiskEnd`), and
-#' because of the end of the risk window (`"riskEnd"`) otherwise. Clones that end before `riskStart`
-#' (for example a start on day 0 in a `"neverInitiate"` strategy when `riskStart = 1`) have no
-#' follow-up and are dropped. The attrition gains two rows, `"Clones created"` and
-#' `"Clones with follow-up"`, with the target strategy counted in the target columns and the
-#' comparator strategy in the comparator columns.
+#' Observation ends at death: `riskEnd` is the end of the risk window of the study population, capped
+#' at the day of death. A violation after `riskEnd` is not recorded (`deviationDay` is `NA`).
+#' Follow-up ends at the first of `deviationDay`, the first outcome, death (when
+#' `competingEvents = "death"`), and `riskEnd`. When several of these fall on the same day,
+#' `sameDayOrdering` decides the end reason (see [createCreateClonesArgs()]). With
+#' `"eventsFirst"`, the clone is still under follow-up on the day it deviates, so `endDay` is that
+#' day. With `"deviationFirst"`, the deviation comes before everything else on that day, so a clone
+#' that ends because of a deviation is last under follow-up on the day before (`endDay =
+#' deviationDay - 1`) and is not in the risk set of that day's outcomes.
+#'
+#' A clone that ends at `riskEnd` ends because of the end of observation (`"observationEnd"`) if
+#' `riskEnd` is the end of observation (the earlier of `daysToObsEnd` and `daysToDeath`) and is before
+#' the nominal end of the risk window (`nominalRiskEnd`). Otherwise it ends because of the end of the
+#' risk window (`"riskEnd"`), which includes a risk window shortened at the start of the next risk
+#' window of the same person (`censorAtNewRiskWindow`). With `competingEvents = "none"`, death is not
+#' an event: it ends follow-up as the end of observation.
+#'
+#' Clones that end before `riskStart` (for example a start on day 0 in a `"neverInitiate"` strategy
+#' when `riskStart = 1`) have no follow-up and are dropped. The attrition gains two rows,
+#' `"Clones created"` and `"Clones with follow-up"`, with the target strategy counted in the target
+#' columns and the comparator strategy in the comparator columns.
 #'
 #' This version supports strategies with `graceStart = 0` and without `prohibitedTreatments`.
 #'
@@ -52,9 +63,10 @@
 #' An object of type [CcwClones] with the tables
 #'
 #' - `persons`: one row per row of the population, with `rowId`, `personSeqId`, `riskStart`,
-#'   `riskEnd`, `nominalRiskEnd`, `outcomeDay` (first outcome in the risk window), `deathDay` (death
-#'   in the risk window, `NA` when `competingEvents = "none"` or when it falls on the outcome day),
-#'   `treatmentDay`, and `comparatorTreatmentDay` (first start on or after day 0 of each role).
+#'   `riskEnd` (capped at death), `nominalRiskEnd`, `outcomeDay` (first outcome in the risk window),
+#'   `deathDay` (death in the risk window, `NA` when `competingEvents = "none"` or when it falls on the
+#'   outcome day), `treatmentDay`, and `comparatorTreatmentDay` (first start on or after day 0 of each
+#'   role).
 #' - `clones`: one row per person and strategy with follow-up, with `cloneRowId`, `rowId`,
 #'   `personSeqId`, `strategyId` (1 = target, 2 = comparator), `riskStart`, `deviationDay`, `endDay`,
 #'   `survivalTime` (`endDay - riskStart + 1`), `endReason` (`"outcome"`, `"death"`, `"deviation"`,
@@ -133,7 +145,7 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
   message(sprintf("Creating clones of %d persons for 2 strategies", nrow(population)))
   work <- Andromeda::andromeda(
     population = as.data.frame(population)[, c(
-      "rowId", "personSeqId", "riskStart", "riskEnd", "daysToCohortEnd", "daysToDeath", "daysToEvent"
+      "rowId", "personSeqId", "riskStart", "riskEnd", "daysToCohortEnd", "daysToObsEnd", "daysToDeath", "daysToEvent"
     )],
     strategies = data.frame(
       strategyId = 1:2,
@@ -154,6 +166,19 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
 
   .andromedaExecute(work, .createPersonsSql(populationMetaData$nominalRiskEnd, createClonesArgs$competingEvents))
   .andromedaExecute(work, .createClonesSql(createClonesArgs$sameDayOrdering))
+  .andromedaExecute(work, "
+    CREATE TABLE persons AS
+    SELECT rowId,
+      personSeqId,
+      riskStart,
+      riskEnd,
+      nominalRiskEnd,
+      outcomeDay,
+      deathDay,
+      treatmentDay,
+      comparatorTreatmentDay
+    FROM workPersons
+    ORDER BY rowId;")
 
   metaData <- list(
     strategies = lapply(strategies, function(strategy) strategy$toList()),
@@ -167,7 +192,9 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
   return(.createCcwClones(work$persons, work$clones, metaData))
 }
 
-# SQL creating the `persons` table from the `population`, `roles`, and `firstStarts` tables.
+# SQL creating the `workPersons` table from the `population`, `roles`, and `firstStarts` tables: the
+# columns of the `persons` table plus `observationEnd`, the earlier of the end of observation and death.
+# Observation ends at death, so `riskEnd` is capped at death and outcomes after death are ignored.
 .createPersonsSql <- function(nominalRiskEnd, competingEvents) {
   nominalRiskEndSql <- sprintf("%d", as.integer(nominalRiskEnd$riskWindowEnd))
   if (grepl("end$", nominalRiskEnd$endAnchor, ignore.case = TRUE)) {
@@ -179,16 +206,33 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
     )
   }
   sql <- "
-    CREATE TABLE persons AS
-    WITH pop AS (
+    CREATE TABLE workPersons AS
+    WITH typed AS (
       SELECT CAST(rowId AS INTEGER) AS rowId,
         CAST(personSeqId AS INTEGER) AS personSeqId,
         CAST(riskStart AS INTEGER) AS riskStart,
         CAST(riskEnd AS INTEGER) AS riskEnd,
         CAST(daysToCohortEnd AS INTEGER) AS daysToCohortEnd,
+        CAST(daysToObsEnd AS INTEGER) AS daysToObsEnd,
         CAST(daysToDeath AS INTEGER) AS daysToDeath,
         CAST(daysToEvent AS INTEGER) AS daysToEvent
       FROM population
+    ),
+    capped AS (
+      SELECT rowId,
+        personSeqId,
+        riskStart,
+        LEAST(riskEnd, daysToDeath) AS riskEnd,
+        LEAST(daysToObsEnd, daysToDeath) AS observationEnd,
+        daysToCohortEnd,
+        daysToDeath,
+        daysToEvent
+      FROM typed
+    ),
+    pop AS (
+      SELECT *,
+        CASE WHEN daysToEvent <= riskEnd THEN daysToEvent END AS outcomeDay
+      FROM capped
     ),
     roleStarts AS (
       SELECT firstStarts.rowId,
@@ -205,16 +249,17 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
       pop.riskStart,
       pop.riskEnd,
       CAST(%s AS INTEGER) AS nominalRiskEnd,
-      pop.daysToEvent AS outcomeDay,
+      pop.outcomeDay,
       CASE
         WHEN %s
           AND pop.daysToDeath >= pop.riskStart
           AND pop.daysToDeath <= pop.riskEnd
-          AND (pop.daysToEvent IS NULL OR pop.daysToDeath <> pop.daysToEvent)
+          AND (pop.outcomeDay IS NULL OR pop.daysToDeath <> pop.outcomeDay)
         THEN pop.daysToDeath
       END AS deathDay,
       treatmentStarts.startDay AS treatmentDay,
-      comparatorStarts.startDay AS comparatorTreatmentDay
+      comparatorStarts.startDay AS comparatorTreatmentDay,
+      pop.observationEnd
     FROM pop
     LEFT JOIN roleStarts treatmentStarts
       ON pop.rowId = treatmentStarts.rowId
@@ -226,36 +271,41 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
   return(sprintf(sql, nominalRiskEndSql, if (competingEvents == "death") "TRUE" else "FALSE"))
 }
 
-# SQL creating the `clones` table from the `persons` and `strategies` tables.
+# SQL creating the `clones` table from the `workPersons` and `strategies` tables. `exitDay` is the day
+# follow-up stops. With "deviationFirst", a clone that stops because of a deviation leaves before that
+# day's events, so its last day of follow-up (`endDay`) is the day before.
 .createClonesSql <- function(sameDayOrdering) {
   eventOrder <- list(
-    outcome = "WHEN outcomeDay = endDay THEN 'outcome'",
-    death = "WHEN deathDay = endDay THEN 'death'",
-    deviation = "WHEN deviationDay = endDay THEN 'deviation'"
+    outcome = "WHEN outcomeDay = exitDay THEN 'outcome'",
+    death = "WHEN deathDay = exitDay THEN 'death'",
+    deviation = "WHEN deviationDay = exitDay THEN 'deviation'"
   )
   if (sameDayOrdering == "eventsFirst") {
     eventOrder <- eventOrder[c("outcome", "death", "deviation")]
+    deviationOffset <- 0L
   } else {
     eventOrder <- eventOrder[c("deviation", "outcome", "death")]
+    deviationOffset <- 1L
   }
   sql <- "
     CREATE TABLE clones AS
     WITH cloned AS (
-      SELECT persons.rowId,
-        persons.personSeqId,
-        persons.riskStart,
-        persons.riskEnd,
-        persons.nominalRiskEnd,
-        persons.outcomeDay,
-        persons.deathDay,
+      SELECT workPersons.rowId,
+        workPersons.personSeqId,
+        workPersons.riskStart,
+        workPersons.riskEnd,
+        workPersons.nominalRiskEnd,
+        workPersons.observationEnd,
+        workPersons.outcomeDay,
+        workPersons.deathDay,
         strategies.strategyId,
         strategies.strategyType,
         strategies.graceEnd,
         CASE
-          WHEN strategies.role = 'treatment' THEN persons.treatmentDay
-          ELSE persons.comparatorTreatmentDay
+          WHEN strategies.role = 'treatment' THEN workPersons.treatmentDay
+          ELSE workPersons.comparatorTreatmentDay
         END AS startDay
-      FROM persons
+      FROM workPersons
       CROSS JOIN strategies
     ),
     violations AS (
@@ -274,17 +324,22 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
     ),
     followUp AS (
       SELECT *,
-        LEAST(deviationDay, outcomeDay, deathDay, riskEnd) AS endDay
+        LEAST(deviationDay, outcomeDay, deathDay, riskEnd) AS exitDay
       FROM deviations
     ),
     endReasons AS (
       SELECT *,
         CASE
           %s
-          WHEN riskEnd < nominalRiskEnd THEN 'observationEnd'
+          WHEN riskEnd = observationEnd AND riskEnd < nominalRiskEnd THEN 'observationEnd'
           ELSE 'riskEnd'
         END AS endReason
       FROM followUp
+    ),
+    endDays AS (
+      SELECT *,
+        CASE WHEN endReason = 'deviation' THEN exitDay - %d ELSE exitDay END AS endDay
+      FROM endReasons
     )
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY rowId, strategyId) AS INTEGER) AS cloneRowId,
       rowId,
@@ -296,11 +351,11 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
       CAST(endDay - riskStart + 1 AS INTEGER) AS survivalTime,
       endReason,
       CAST(CASE WHEN endReason = 'outcome' THEN 1 ELSE 0 END AS INTEGER) AS outcomeCount
-    FROM endReasons
+    FROM endDays
     WHERE endDay >= riskStart
     ORDER BY rowId,
       strategyId;"
-  return(sprintf(sql, paste(unlist(eventOrder), collapse = "\n          ")))
+  return(sprintf(sql, paste(unlist(eventOrder), collapse = "\n          "), deviationOffset))
 }
 
 # Attrition rows for the clones: clones created, and clones with follow-up (endDay >= riskStart). The
