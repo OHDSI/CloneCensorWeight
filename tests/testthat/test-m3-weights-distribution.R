@@ -23,7 +23,9 @@ distributionAnalysis <- function(comparatorType = "notInitiateWithin", postGrace
   )
   clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering)))
   models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(
-    hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel
+    hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel,
+    # refDayWeights() has no covariate-by-time interactions:
+    covariateTimeInteraction = "none"
   )))
   return(list(data = data, clones = clones, models = models))
 }

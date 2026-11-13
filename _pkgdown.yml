@@ -65,6 +65,11 @@ reference:
       - computeMdrr
       - computeWeightDistribution
       - computeCensoringModelCalibration
+      - computeGracePeriodSelection
+      - computePositivity
+      - computeWeightSummary
+      - computeCcwSensitivity
+      - computeCcwDiagnostics
       - getAttritionTable
       - plotLovePlot
       - plotCovariateBalance
@@ -72,6 +77,10 @@ reference:
       - plotMdrr
       - plotWeightDistribution
       - plotCensoringModelCalibration
+      - plotGracePeriodSelection
+      - plotPositivity
+      - plotWeightSummary
+      - plotCcwSensitivity
       - plotCalibration
 
   - title: "Multi-Analysis Runner"

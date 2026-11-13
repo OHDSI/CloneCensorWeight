@@ -38,8 +38,12 @@ prefixed with \code{"death:"};
 \item \code{counts}: per strategy, the number of clones, persons, outcomes and competing events, the
 person-days, and the weighted person-days, outcomes and competing events (weighted with the
 segments' \code{weight} from \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, not with the weights of \code{msmWeights});
-\item \code{metaData}: the strategies, outcome ID, target ID, competing events, risk start, and the
-arguments.
+\item \code{metaData}: the strategies, outcome ID, target ID, competing events, risk start, the arguments,
+and, for \code{"cox"} and \code{"logistic"}, \code{msmWeightSummary}: per strategy, the \code{scale} of the weights the
+model used (\code{msmWeights}), their \code{cap} on that scale (\code{NA} when they were not truncated on their own
+scale, see \code{truncateMsmWeights} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}), \code{maxWeight}, the largest weight
+used (the effective maximum), and \code{truncatedShare}, the share of the strategy's clones whose weight
+was truncated.
 }
 }
 \description{
@@ -90,8 +94,8 @@ strategy.
 
 The Cox and pooled logistic models, and their robust and model-based variances, use the weights
 chosen by \code{fitOutcomeModelArgs$msmWeights} (unstabilized by default; see
-\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} for why), formed from the segments' \code{weight} and
-\code{stabilizationNumerator} (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}). The Kaplan-Meier and Aalen-Johansen
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} for why): the segments' \code{weight} when it is on that scale, and their
+\code{otherScaleWeight} otherwise (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}). The Kaplan-Meier and Aalen-Johansen
 estimates (of \code{"km"}, and the rows at the horizons of \code{"cox"}) use \code{weight}; they are the same with
 either weight.
 

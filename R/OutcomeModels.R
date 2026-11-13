@@ -63,8 +63,8 @@
 #'
 #' The Cox and pooled logistic models, and their robust and model-based variances, use the weights
 #' chosen by `fitOutcomeModelArgs$msmWeights` (unstabilized by default; see
-#' [createFitOutcomeModelArgs()] for why), formed from the segments' `weight` and
-#' `stabilizationNumerator` (see [computeCensoringWeights()]). The Kaplan-Meier and Aalen-Johansen
+#' [createFitOutcomeModelArgs()] for why): the segments' `weight` when it is on that scale, and their
+#' `otherScaleWeight` otherwise (see [computeCensoringWeights()]). The Kaplan-Meier and Aalen-Johansen
 #' estimates (of `"km"`, and the rows at the horizons of `"cox"`) use `weight`; they are the same with
 #' either weight.
 #'
@@ -128,8 +128,12 @@
 #' - `counts`: per strategy, the number of clones, persons, outcomes and competing events, the
 #'   person-days, and the weighted person-days, outcomes and competing events (weighted with the
 #'   segments' `weight` from [computeCensoringWeights()], not with the weights of `msmWeights`);
-#' - `metaData`: the strategies, outcome ID, target ID, competing events, risk start, and the
-#'   arguments.
+#' - `metaData`: the strategies, outcome ID, target ID, competing events, risk start, the arguments,
+#'   and, for `"cox"` and `"logistic"`, `msmWeightSummary`: per strategy, the `scale` of the weights the
+#'   model used (`msmWeights`), their `cap` on that scale (`NA` when they were not truncated on their own
+#'   scale, see `truncateMsmWeights` in [createComputeWeightsArgs()]), `maxWeight`, the largest weight
+#'   used (the effective maximum), and `truncatedShare`, the share of the strategy's clones whose weight
+#'   was truncated.
 #'
 #' @references
 #' Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.
@@ -197,6 +201,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       args = fitOutcomeModelArgs$toList()
     )
   )
+  if (fitOutcomeModelArgs$modelType != "km") {
+    result$metaData$msmWeightSummary <- .summarizeMsmWeights(data, fitOutcomeModelArgs$msmWeights)
+  }
   class(result) <- "CcwOutcomeModel"
   delta <- Sys.time() - start
   message(paste("Fitting outcome model took", signif(delta, 3), attr(delta, "units")))
@@ -254,8 +261,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (!"stabilizationNumerator" %in% colnames(weightedClones$segments)) {
     stop("The weighted clones have no stabilizationNumerator: they were created by an earlier version of computeCensoringWeights(). Rerun computeCensoringWeights()")
   }
+  # otherScaleWeight is written by computeCensoringWeights() (Phase1Contracts section 12.2); segments
+  # made otherwise have only the numerator:
+  columns <- c("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "otherScaleWeight", "outcome", "competing")
   segments <- weightedClones$segments |>
-    select("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "outcome", "competing") |>
+    select(dplyr::any_of(columns)) |>
     collect()
   segments <- as.data.frame(segments[order(segments$cloneRowId, segments$startTime), ])
   segments$count <- rep(1, nrow(segments))
@@ -270,23 +280,53 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     strategies = metaData$strategies,
     sameDayOrdering = metaData$sameDayOrdering,
     cutIntervalLength = metaData$weights$cutIntervalLength,
-    stabilized = metaData$weights$stabilized
+    stabilized = metaData$weights$stabilized,
+    weightsMetaData = metaData$weights
   ))
 }
 
 # The data with the segment weights of the Cox and pooled logistic MSMs (`msmWeights`, Phase1Contracts
-# section 11.1): the weights of computeCensoringWeights() when they are already of that kind, and
-# otherwise those weights divided (to unstabilize) or multiplied (to stabilize) by the segments'
-# stabilization numerators, so the same segments are truncated under both weights.
+# sections 11.1 and 12.2): the weights of computeCensoringWeights() when they are already of that kind,
+# and otherwise the segments' otherScaleWeight (truncated on its own scale, or formed from the truncated
+# weights, as computeWeightsArgs$truncateMsmWeights set). Segments without otherScaleWeight (not made by
+# computeCensoringWeights()) get the weights divided (to unstabilize) or multiplied (to stabilize) by
+# their stabilization numerators.
 .withMsmWeights <- function(data, msmWeights) {
   stabilize <- msmWeights == "stabilized"
   if (stabilize == data$stabilized) {
     return(data)
   }
-  numerator <- data$segments$stabilizationNumerator
-  data$segments$weight <- if (stabilize) data$segments$weight * numerator else data$segments$weight / numerator
+  if (!is.null(data$segments$otherScaleWeight)) {
+    data$segments$weight <- data$segments$otherScaleWeight * data$segments$count
+  } else {
+    numerator <- data$segments$stabilizationNumerator
+    data$segments$weight <- if (stabilize) data$segments$weight * numerator else data$segments$weight / numerator
+  }
   data$stabilized <- stabilize
   return(data)
+}
+
+# The weights of the Cox or pooled logistic model (msmWeights) per strategy: their scale, the cap on that
+# scale (NA when they are not truncated on their own scale), the largest weight used, and the share of
+# the strategy's clones whose weight was truncated (Phase1Contracts section 12.2).
+.summarizeMsmWeights <- function(data, msmWeights) {
+  msmData <- .withMsmWeights(data, msmWeights)
+  caps <- data$weightsMetaData$caps
+  strategyIds <- sort(unique(data$segments$strategyId))
+  sameScale <- (msmWeights == "stabilized") == isTRUE(data$stabilized)
+  pick <- function(column) {
+    if (is.null(caps[[column]])) {
+      return(rep(NA_real_, length(strategyIds)))
+    }
+    return(as.numeric(caps[[column]][match(strategyIds, caps$strategyId)]))
+  }
+  return(tibble(
+    strategyId = as.integer(strategyIds),
+    scale = msmWeights,
+    cap = if (sameScale) pick("cap") else pick("otherScaleCap"),
+    maxWeight = as.numeric(tapply(msmData$segments$weight, factor(msmData$segments$strategyId, levels = strategyIds), max)),
+    truncatedShare = if (sameScale) pick("truncatedShare") else pick("otherScaleTruncatedShare")
+  ))
 }
 
 # Frequency weights: multiplies each segment's weight by its person's count (data frame personSeqId,

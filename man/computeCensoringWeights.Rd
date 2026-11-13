@@ -33,17 +33,22 @@ weighted several times (for example with and without stabilization).
 \item \code{segments}: \code{segmentId}, \code{cloneRowId}, \code{rowId}, \code{personSeqId}, \code{strategyId}, \code{startTime}
 (exclusive), \code{stopTime} (inclusive), \code{weight} (truncated; stabilized when
 \code{computeWeightsArgs$stabilized}), \code{stabilizationNumerator} (the stabilized weight is the
-unstabilized one times it, see above), \code{outcome} and \code{competing} (1 only on the clone's last
-segment when it ends with the outcome or death).
+unstabilized one times it, see above), \code{otherScaleWeight} (the weight on the other scale, see
+above), \code{outcome} and \code{competing} (1 only on the clone's last segment when it ends with the
+outcome or death).
 \item \code{personWeights}: \code{cloneRowId}, \code{strategyId}, \code{maxWeight} and \code{weightAtEnd}, the largest and the
-last segment weight of each clone with segments, before truncation.
+last segment weight of each clone with segments, before truncation, and \code{maxOtherScaleWeight}, the
+largest untruncated weight on the other scale.
 }
 
-\code{metaData$weights} holds whether the weights are stabilized, the truncation rule, \code{caps} (a tibble
-with, per strategy, the \code{cap} used, \code{NA} without truncation, and \code{truncatedShare}, the share of the
-strategy's clones (with segments) whose weight was truncated on at least one segment, that is whose
-\code{maxWeight} exceeds the cap; unlike a share of segments, it does not depend on the extra cuts of
-\code{outcomeTimeBasis}), a summary of the untruncated weights,
+\code{metaData$weights} holds whether the weights are stabilized, the truncation rule,
+\code{truncateMsmWeights}, \code{caps} (a tibble with, per strategy, the \code{cap} used, \code{NA} without truncation,
+and \code{truncatedShare}, the share of the strategy's clones (with segments) whose weight was truncated on
+at least one segment, that is whose \code{maxWeight} exceeds the cap; unlike a share of segments, it does
+not depend on the extra cuts of \code{outcomeTimeBasis}; and the same for the other scale,
+\code{otherScaleCap}, \code{NA} when that scale is not truncated on its own scale, and
+\code{otherScaleTruncatedShare}, which equals \code{truncatedShare} without \code{truncateMsmWeights}), a summary of
+the untruncated weights,
 \code{cutIntervalLength}, the interval length of the \code{outcomeTimeBasis} grid the clones are split on
 (\code{NA} without one), and \code{censoringModels}, from which \code{\link[=computeWeightDistribution]{computeWeightDistribution()}} evaluates the
 weight of any day.
@@ -59,9 +64,9 @@ Let \code{W(d)} be the weight on day \code{d} (days since index). With \code{sam
 \code{d > G}, where \code{pi(X)} is the probability of starting by \code{G} from the binary model.
 \item \code{"notInitiateWithin"}: \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= G} (with \code{S(-1) = 1}), where
 \code{S(d | X)} is the probability of not initiating on days \verb{0..d} from the initiation hazard model.
-For \code{d > G}, \code{W(d) = 1 / (1 - pi(X))}, with \code{pi(X)} from the binary model at \code{G}, when the models
-were fit with \code{postGraceModel = "binary"} (the default), and \code{1 / S(G | X)} with
-\code{postGraceModel = "hazard"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} for the assumption that makes
+For \code{d > G}, \code{W(d) = 1 / S(G | X)} when the models were fit with \code{postGraceModel = "hazard"} (the
+default), and \code{1 / (1 - pi(X))}, with \code{pi(X)} from the binary model at \code{G}, with
+\code{postGraceModel = "binary"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} for the assumption that makes
 the two agree).
 \item \code{"neverInitiate"}: \code{W(d) = 1 / S(d - 1 | X)}.
 }
@@ -98,14 +103,15 @@ varies, with \code{basis = "varying"}, or over all clones of the strategy with \
 \code{\link[=createWeightTruncation]{createWeightTruncation()}}).
 
 Every segment also stores its stabilization numerator (the quantity from the numerator model that
-stabilizes its weight), whether or not the weights are stabilized, so that the outcome models can
-use either weight (see \code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}): the other weight is \code{weight / stabilizationNumerator} (stabilized weights) or \code{weight * stabilizationNumerator} (unstabilized
-weights). Truncation applies to \code{weight}, and the other weight is formed from the truncated
-\code{weight}, so the same segments are truncated under both weights: the other weight's cap on a
-segment is the cap divided (or multiplied) by the segment's numerator, so the cap does not bound
-the other weight (see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}). Within a strategy, the
-clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
-Aalen-Johansen estimates are the same with either weight.
+stabilizes its weight) and its weight on the other scale, \code{otherScaleWeight} (unstabilized when
+\code{weight} is stabilized, and stabilized otherwise), so that the outcome models can use either weight
+(see \code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}). With \code{computeWeightsArgs$truncateMsmWeights}
+(the default), \code{otherScaleWeight} is truncated on its own scale with the same rule, at a cap computed
+from the untruncated weights on that scale. Otherwise it is formed from the truncated \code{weight}
+(\code{weight / stabilizationNumerator} or \code{weight * stabilizationNumerator}), so the same segments are
+truncated on both scales, but the cap does not bound it (see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}). Within a
+strategy, the clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
+Aalen-Johansen estimates are the same with either untruncated weight.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

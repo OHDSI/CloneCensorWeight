@@ -85,10 +85,11 @@ covariates; \code{S(d | X)} is the product of \code{1 - h} over the intervals en
 With the indicator basis, an interval without initiations gets a hazard of 0, and an interval in
 which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 of these intervals are left out of the fit, and the first remaining interval is the reference.
-With \code{covariateTimeInteraction = "day0"} or \code{"interval"}, the pooled logistic model also has the
-products of the covariates with an indicator of day 0 (daily intervals), or with each time-basis
-column, penalized like the covariates (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
-\item \code{"notInitiateWithin"} with \code{postGraceModel = "binary"} (the default): also the binary model at \code{G}
+With \code{covariateTimeInteraction = "day0"} (the default) or \code{"interval"}, the pooled logistic model
+also has the products of the covariates with an indicator of day 0 (of the first interval with
+longer intervals), or with each time-basis column, penalized like the covariates (see
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\item \code{"notInitiateWithin"} with \code{postGraceModel = "binary"} (not the default, \code{"hazard"}): also the binary model at \code{G}
 of an \code{"initiateWithin(G)"} strategy of the same treatment (shared with such a strategy when the
 analysis has one), which gives the weights after \code{G} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 }

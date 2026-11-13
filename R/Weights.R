@@ -27,9 +27,9 @@
 #'   `d > G`, where `pi(X)` is the probability of starting by `G` from the binary model.
 #' - `"notInitiateWithin"`: `W(d) = 1 / S(d - 1 | X)` for `d <= G` (with `S(-1) = 1`), where
 #'   `S(d | X)` is the probability of not initiating on days `0..d` from the initiation hazard model.
-#'   For `d > G`, `W(d) = 1 / (1 - pi(X))`, with `pi(X)` from the binary model at `G`, when the models
-#'   were fit with `postGraceModel = "binary"` (the default), and `1 / S(G | X)` with
-#'   `postGraceModel = "hazard"` (see [createFitCensoringModelsArgs()] for the assumption that makes
+#'   For `d > G`, `W(d) = 1 / S(G | X)` when the models were fit with `postGraceModel = "hazard"` (the
+#'   default), and `1 / (1 - pi(X))`, with `pi(X)` from the binary model at `G`, with
+#'   `postGraceModel = "binary"` (see [createFitCensoringModelsArgs()] for the assumption that makes
 #'   the two agree).
 #' - `"neverInitiate"`: `W(d) = 1 / S(d - 1 | X)`.
 #'
@@ -65,15 +65,15 @@
 #' [createWeightTruncation()]).
 #'
 #' Every segment also stores its stabilization numerator (the quantity from the numerator model that
-#' stabilizes its weight), whether or not the weights are stabilized, so that the outcome models can
-#' use either weight (see `msmWeights` in [createFitOutcomeModelArgs()]): the other weight is `weight /
-#' stabilizationNumerator` (stabilized weights) or `weight * stabilizationNumerator` (unstabilized
-#' weights). Truncation applies to `weight`, and the other weight is formed from the truncated
-#' `weight`, so the same segments are truncated under both weights: the other weight's cap on a
-#' segment is the cap divided (or multiplied) by the segment's numerator, so the cap does not bound
-#' the other weight (see [createComputeWeightsArgs()]). Within a strategy, the
-#' clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
-#' Aalen-Johansen estimates are the same with either weight.
+#' stabilizes its weight) and its weight on the other scale, `otherScaleWeight` (unstabilized when
+#' `weight` is stabilized, and stabilized otherwise), so that the outcome models can use either weight
+#' (see `msmWeights` in [createFitOutcomeModelArgs()]). With `computeWeightsArgs$truncateMsmWeights`
+#' (the default), `otherScaleWeight` is truncated on its own scale with the same rule, at a cap computed
+#' from the untruncated weights on that scale. Otherwise it is formed from the truncated `weight`
+#' (`weight / stabilizationNumerator` or `weight * stabilizationNumerator`), so the same segments are
+#' truncated on both scales, but the cap does not bound it (see [createComputeWeightsArgs()]). Within a
+#' strategy, the clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
+#' Aalen-Johansen estimates are the same with either untruncated weight.
 #'
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
@@ -93,16 +93,21 @@
 #' - `segments`: `segmentId`, `cloneRowId`, `rowId`, `personSeqId`, `strategyId`, `startTime`
 #'   (exclusive), `stopTime` (inclusive), `weight` (truncated; stabilized when
 #'   `computeWeightsArgs$stabilized`), `stabilizationNumerator` (the stabilized weight is the
-#'   unstabilized one times it, see above), `outcome` and `competing` (1 only on the clone's last
-#'   segment when it ends with the outcome or death).
+#'   unstabilized one times it, see above), `otherScaleWeight` (the weight on the other scale, see
+#'   above), `outcome` and `competing` (1 only on the clone's last segment when it ends with the
+#'   outcome or death).
 #' - `personWeights`: `cloneRowId`, `strategyId`, `maxWeight` and `weightAtEnd`, the largest and the
-#'   last segment weight of each clone with segments, before truncation.
+#'   last segment weight of each clone with segments, before truncation, and `maxOtherScaleWeight`, the
+#'   largest untruncated weight on the other scale.
 #'
-#' `metaData$weights` holds whether the weights are stabilized, the truncation rule, `caps` (a tibble
-#' with, per strategy, the `cap` used, `NA` without truncation, and `truncatedShare`, the share of the
-#' strategy's clones (with segments) whose weight was truncated on at least one segment, that is whose
-#' `maxWeight` exceeds the cap; unlike a share of segments, it does not depend on the extra cuts of
-#' `outcomeTimeBasis`), a summary of the untruncated weights,
+#' `metaData$weights` holds whether the weights are stabilized, the truncation rule,
+#' `truncateMsmWeights`, `caps` (a tibble with, per strategy, the `cap` used, `NA` without truncation,
+#' and `truncatedShare`, the share of the strategy's clones (with segments) whose weight was truncated on
+#' at least one segment, that is whose `maxWeight` exceeds the cap; unlike a share of segments, it does
+#' not depend on the extra cuts of `outcomeTimeBasis`; and the same for the other scale,
+#' `otherScaleCap`, `NA` when that scale is not truncated on its own scale, and
+#' `otherScaleTruncatedShare`, which equals `truncatedShare` without `truncateMsmWeights`), a summary of
+#' the untruncated weights,
 #' `cutIntervalLength`, the interval length of the `outcomeTimeBasis` grid the clones are split on
 #' (`NA` without one), and `censoringModels`, from which [computeWeightDistribution()] evaluates the
 #' weight of any day.
@@ -243,18 +248,19 @@ computeCensoringWeights <- function(clones,
   .checkPredictionsExist(weightedClones, "ccwWSegments")
   .computeSurvival(weightedClones, "ccwWSegments")
 
-  # The numerator is stored whether or not the weights are stabilized, so the outcome models can use
-  # either weight (Phase1Contracts section 11.1):
+  # The numerator and the weight on the other scale are stored whether or not the weights are
+  # stabilized, so the outcome models can use either weight (Phase1Contracts sections 11.1 and 12.2):
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWWeighted AS
     SELECT ccwWSegments.*,
       %s AS weight,
-      ccwWSurvival.numeratorSurvival AS stabilizationNumerator
+      ccwWSurvival.numeratorSurvival AS stabilizationNumerator,
+      %s AS otherScaleWeight
     FROM ccwWSegments
     INNER JOIN ccwWSurvival
       ON ccwWSegments.strategyId = ccwWSurvival.strategyId
         AND ccwWSegments.rowId = ccwWSurvival.rowId
-        AND ccwWSegments.evalDay = ccwWSurvival.evalDay;", .weightSql(computeWeightsArgs$stabilized)))
+        AND ccwWSegments.evalDay = ccwWSurvival.evalDay;", .weightSql(computeWeightsArgs$stabilized), .weightSql(!computeWeightsArgs$stabilized)))
   badWeights <- .andromedaSql(weightedClones, "
     SELECT COUNT(*) AS n
     FROM ccwWWeighted
@@ -268,7 +274,8 @@ computeCensoringWeights <- function(clones,
     SELECT cloneRowId,
       strategyId,
       MAX(weight) AS maxWeight,
-      arg_max(weight, stopTime) AS weightAtEnd
+      arg_max(weight, stopTime) AS weightAtEnd,
+      MAX(otherScaleWeight) AS maxOtherScaleWeight
     FROM ccwWWeighted
     GROUP BY cloneRowId,
       strategyId;")
@@ -276,16 +283,22 @@ computeCensoringWeights <- function(clones,
   caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay)
   weightedClones$ccwWCaps <- caps |>
     filter(!is.na(.data$cap))
-  # The share of clones with a truncated weight, which (unlike a share of segments) does not depend on
-  # how the clones are cut:
-  truncated <- .andromedaSql(weightedClones, "
-    SELECT ccwWPersonWeights.strategyId,
-      AVG(CASE WHEN ccwWCaps.cap IS NOT NULL AND ccwWPersonWeights.maxWeight > ccwWCaps.cap THEN 1.0 ELSE 0.0 END) AS truncatedShare
-    FROM ccwWPersonWeights
-    LEFT JOIN ccwWCaps
-      ON ccwWPersonWeights.strategyId = ccwWCaps.strategyId
-    GROUP BY ccwWPersonWeights.strategyId;")
-  caps$truncatedShare <- as.numeric(truncated$truncatedShare[match(caps$strategyId, truncated$strategyId)])
+  caps$truncatedShare <- .computeTruncatedShares(weightedClones, caps$strategyId, "ccwWCaps", "maxWeight")
+  # The weights on the other scale: truncated on their own scale (Phase1Contracts section 12.2), or
+  # formed from the truncated weights (section 11.1):
+  if (computeWeightsArgs$truncateMsmWeights) {
+    otherCaps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay, "maxOtherScaleWeight")
+    caps$otherScaleCap <- otherCaps$cap[match(caps$strategyId, otherCaps$strategyId)]
+    weightedClones$ccwWOtherCaps <- otherCaps |>
+      filter(!is.na(.data$cap))
+    caps$otherScaleTruncatedShare <- .computeTruncatedShares(weightedClones, caps$strategyId, "ccwWOtherCaps", "maxOtherScaleWeight")
+    otherScaleWeight <- .truncatedWeightSql("ccwWWeighted.otherScaleWeight", "ccwWOtherCaps")
+  } else {
+    caps$otherScaleCap <- NA_real_
+    caps$otherScaleTruncatedShare <- caps$truncatedShare
+    weightedClones$ccwWOtherCaps <- tibble(strategyId = integer(0), cap = numeric(0))
+    otherScaleWeight <- sprintf("%s %s ccwWWeighted.stabilizationNumerator", .truncatedWeightSql("ccwWWeighted.weight"), if (computeWeightsArgs$stabilized) "/" else "*")
+  }
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWFinalSegments AS
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY ccwWWeighted.cloneRowId, ccwWWeighted.startTime) AS INTEGER) AS segmentId,
@@ -297,15 +310,19 @@ computeCensoringWeights <- function(clones,
       CAST(ccwWWeighted.stopTime AS DOUBLE) AS stopTime,
       %s AS weight,
       ccwWWeighted.stabilizationNumerator,
+      %s AS otherScaleWeight,
       CAST(ccwWWeighted.outcome AS INTEGER) AS outcome,
       CAST(ccwWWeighted.competing AS INTEGER) AS competing
     FROM ccwWWeighted
     LEFT JOIN ccwWCaps
-      ON ccwWWeighted.strategyId = ccwWCaps.strategyId;", .truncatedWeightSql("ccwWWeighted.weight")))
+      ON ccwWWeighted.strategyId = ccwWCaps.strategyId
+    LEFT JOIN ccwWOtherCaps
+      ON ccwWWeighted.strategyId = ccwWOtherCaps.strategyId;", .truncatedWeightSql("ccwWWeighted.weight"), otherScaleWeight))
 
   weightsMetaData <- list(
     stabilized = computeWeightsArgs$stabilized,
     truncation = computeWeightsArgs$truncation$toList(),
+    truncateMsmWeights = computeWeightsArgs$truncateMsmWeights,
     caps = caps,
     untruncatedSummary = .summarizePersonWeights(weightedClones),
     cutIntervalLength = cutIntervalLength,
@@ -485,9 +502,10 @@ computeCensoringWeights <- function(clones,
   return("1.0 / ccwWSurvival.survival")
 }
 
-# The weight `weight` (an SQL expression) truncated at the strategy's cap in ccwWCaps (no row: no cap).
-.truncatedWeightSql <- function(weight) {
-  return(sprintf("CASE WHEN ccwWCaps.cap IS NOT NULL AND %1$s > ccwWCaps.cap THEN ccwWCaps.cap ELSE %1$s END", weight))
+# The weight `weight` (an SQL expression) truncated at the strategy's cap in `capsTable` (no row: no
+# cap).
+.truncatedWeightSql <- function(weight, capsTable = "ccwWCaps") {
+  return(sprintf("CASE WHEN %2$s.cap IS NOT NULL AND %1$s > %2$s.cap THEN %2$s.cap ELSE %1$s END", weight, capsTable))
 }
 
 # Stops when a weight needs the prediction of a person outside the model's risk set (models fit on
@@ -663,11 +681,12 @@ computeCensoringWeights <- function(clones,
   invisible(NULL)
 }
 
-# The truncation cap per strategy (NA: no truncation). A percentile with basis = "varying" is taken
+# The truncation cap per strategy (NA: no truncation). The percentile is of the clones' `column` in ccwWPersonWeights
+# (maxWeight, or maxOtherScaleWeight for the other scale). A percentile with basis = "varying" is taken
 # over the clones under follow-up on day `balanceDay` (or riskStart, if later), falling back to all
 # clones without a grace period (balanceDay NA) or for a strategy with no such clone; with
 # basis = "allClones", over all clones.
-.computeCaps <- function(clones, truncation, balanceDay) {
+.computeCaps <- function(clones, truncation, balanceDay, column = "maxWeight") {
   strategyIds <- .andromedaSql(clones, "SELECT DISTINCT strategyId FROM ccwWPersonWeights ORDER BY strategyId;")$strategyId
   if (truncation$type == "none") {
     return(tibble(strategyId = as.integer(strategyIds), cap = NA_real_))
@@ -677,24 +696,38 @@ computeCensoringWeights <- function(clones,
   }
   caps <- .andromedaSql(clones, sprintf("
     SELECT strategyId,
-      quantile_cont(maxWeight, %.17g) AS cap
+      quantile_cont(%s, %.17g) AS cap
     FROM ccwWPersonWeights
     GROUP BY strategyId
-    ORDER BY strategyId;", truncation$upper))
+    ORDER BY strategyId;", column, truncation$upper))
   caps <- tibble(strategyId = as.integer(caps$strategyId), cap = as.numeric(caps$cap))
   if (truncation$basis == "varying" && !is.na(balanceDay)) {
     varyingCaps <- .andromedaSql(clones, sprintf("
       SELECT ccwWPersonWeights.strategyId,
-        quantile_cont(ccwWPersonWeights.maxWeight, %.17g) AS cap
+        quantile_cont(ccwWPersonWeights.%s, %.17g) AS cap
       FROM ccwWPersonWeights
       INNER JOIN ccwWClones
         ON ccwWPersonWeights.cloneRowId = ccwWClones.cloneRowId
       WHERE GREATEST(%d, ccwWClones.riskStart) - ccwWClones.riskStart + 1 <= ccwWClones.survivalTime
-      GROUP BY ccwWPersonWeights.strategyId;", truncation$upper, balanceDay))
+      GROUP BY ccwWPersonWeights.strategyId;", column, truncation$upper, balanceDay))
     idx <- match(caps$strategyId, varyingCaps$strategyId)
     caps$cap[!is.na(idx)] <- as.numeric(varyingCaps$cap[idx[!is.na(idx)]])
   }
   return(caps)
+}
+
+# Per strategy (in the order of `strategyIds`), the share of clones whose `column` in ccwWPersonWeights
+# exceeds their strategy's cap in `capsTable` (no row: no cap), which, unlike a share of segments, does
+# not depend on how the clones are cut.
+.computeTruncatedShares <- function(clones, strategyIds, capsTable, column) {
+  truncated <- .andromedaSql(clones, sprintf("
+    SELECT ccwWPersonWeights.strategyId,
+      AVG(CASE WHEN %1$s.cap IS NOT NULL AND ccwWPersonWeights.%2$s > %1$s.cap THEN 1.0 ELSE 0.0 END) AS truncatedShare
+    FROM ccwWPersonWeights
+    LEFT JOIN %1$s
+      ON ccwWPersonWeights.strategyId = %1$s.strategyId
+    GROUP BY ccwWPersonWeights.strategyId;", capsTable, column))
+  return(as.numeric(truncated$truncatedShare[match(strategyIds, truncated$strategyId)]))
 }
 
 .summarizePersonWeights <- function(clones) {
@@ -757,48 +790,11 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   checkmate::assertIntegerish(days, any.missing = FALSE, null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(weightedClones, "metaData")
-  censoringModels <- metaData$weights$censoringModels
-  if (is.null(censoringModels)) {
-    stop("The weighted clones do not hold the censoring models of their weights: use the weighted clones returned by computeCensoringWeights()")
-  }
-
   on.exit({
     .dropTables(weightedClones, "ccwD")
     .dropTables(weightedClones, "ccwW")
   })
-  if (is.null(days)) {
-    .andromedaExecute(weightedClones, "
-      CREATE TABLE ccwDDays AS
-      SELECT DISTINCT CAST(segments.stopTime + clones.riskStart - 1 AS INTEGER) AS day
-      FROM segments
-      INNER JOIN clones
-        ON segments.cloneRowId = clones.cloneRowId;")
-  } else {
-    weightedClones$ccwDDays <- tibble(day = as.integer(unique(days)))
-  }
-  # The clones under follow-up on each day, with the day whose survival gives their weight, evaluated
-  # as in computeCensoringWeights():
-  .writeModelTables(weightedClones, censoringModels)
-  offset <- if (metaData$sameDayOrdering == "deviationFirst") 0L else 1L
-  .andromedaExecute(weightedClones, sprintf("
-    CREATE TABLE ccwDCloneDays AS
-    SELECT segments.strategyId,
-      segments.rowId,
-      ccwDDays.day,
-      %s AS evalDay
-    FROM segments
-    INNER JOIN clones
-      ON segments.cloneRowId = clones.cloneRowId
-    INNER JOIN ccwDDays
-      ON segments.startTime < ccwDDays.day - clones.riskStart + 1
-        AND ccwDDays.day - clones.riskStart + 1 <= segments.stopTime
-    INNER JOIN ccwWParams
-      ON segments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
-  .checkPredictionsExist(weightedClones, "ccwDCloneDays")
-  .computeSurvival(weightedClones, "ccwDCloneDays")
-  weightedClones$ccwWCaps <- metaData$weights$caps |>
-    filter(!is.na(.data$cap)) |>
-    select("strategyId", "cap")
+  .createCloneDayTables(weightedClones, days)
   distribution <- .andromedaSql(weightedClones, sprintf("
     SELECT strategyId,
       day,
@@ -833,6 +829,57 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   strategies <- metaData$strategies
   attr(distribution, "strategyLabels") <- vapply(strategies, function(strategy) as.character(strategy$label), character(1))
   return(distribution)
+}
+
+# Creates, in `weightedClones`, ccwDCloneDays (strategyId, rowId, day, evalDay: the clones under
+# follow-up on each of `days`, NULL: the last days of all segments, with the day whose survival gives
+# their weight), ccwWSurvival (survival and numeratorSurvival per strategyId, rowId and evalDay, as in
+# computeCensoringWeights()), and the caps of both scales, ccwWCaps and ccwWOtherCaps (strategyId, cap).
+# The caller drops the ccwD and ccwW tables.
+.createCloneDayTables <- function(weightedClones, days) {
+  metaData <- attr(weightedClones, "metaData")
+  censoringModels <- metaData$weights$censoringModels
+  if (is.null(censoringModels)) {
+    stop("The weighted clones do not hold the censoring models of their weights: use the weighted clones returned by computeCensoringWeights()")
+  }
+  if (is.null(days)) {
+    .andromedaExecute(weightedClones, "
+      CREATE TABLE ccwDDays AS
+      SELECT DISTINCT CAST(segments.stopTime + clones.riskStart - 1 AS INTEGER) AS day
+      FROM segments
+      INNER JOIN clones
+        ON segments.cloneRowId = clones.cloneRowId;")
+  } else {
+    weightedClones$ccwDDays <- tibble(day = as.integer(unique(days)))
+  }
+  # The clones under follow-up on each day, with the day whose survival gives their weight, evaluated
+  # as in computeCensoringWeights():
+  .writeModelTables(weightedClones, censoringModels)
+  offset <- if (metaData$sameDayOrdering == "deviationFirst") 0L else 1L
+  .andromedaExecute(weightedClones, sprintf("
+    CREATE TABLE ccwDCloneDays AS
+    SELECT segments.strategyId,
+      segments.rowId,
+      ccwDDays.day,
+      %s AS evalDay
+    FROM segments
+    INNER JOIN clones
+      ON segments.cloneRowId = clones.cloneRowId
+    INNER JOIN ccwDDays
+      ON segments.startTime < ccwDDays.day - clones.riskStart + 1
+        AND ccwDDays.day - clones.riskStart + 1 <= segments.stopTime
+    INNER JOIN ccwWParams
+      ON segments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
+  .checkPredictionsExist(weightedClones, "ccwDCloneDays")
+  .computeSurvival(weightedClones, "ccwDCloneDays")
+  caps <- metaData$weights$caps
+  weightedClones$ccwWCaps <- caps |>
+    filter(!is.na(.data$cap)) |>
+    select("strategyId", "cap")
+  otherCaps <- if (is.null(caps$otherScaleCap)) caps[0, c("strategyId", "cap")] else tibble(strategyId = caps$strategyId, cap = caps$otherScaleCap)
+  weightedClones$ccwWOtherCaps <- otherCaps |>
+    filter(!is.na(.data$cap))
+  invisible(NULL)
 }
 
 #' Plot the distribution of the censoring weights over time

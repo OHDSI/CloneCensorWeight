@@ -173,10 +173,14 @@ test_that("FitCensoringModelsArgs round trip and validation", {
   expect_error(createFitCensoringModelsArgs(control = list()), "cyclopsControl")
 })
 
-test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (contract section 11.2-11.3)", {
+test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (contract sections 11.2-11.3 and 12.1)", {
   defaults <- createFitCensoringModelsArgs()
-  expect_equal(defaults$postGraceModel, "binary")
-  expect_equal(defaults$covariateTimeInteraction, "none")
+  expect_equal(defaults$postGraceModel, "hazard")
+  expect_equal(defaults$covariateTimeInteraction, "day0")
+  # The Cox model has no interactions, so its default is "none":
+  expect_equal(createFitCensoringModelsArgs(hazardModelType = "cox")$covariateTimeInteraction, "none")
+  # With longer intervals "day0" is the first interval (contract section 12.1):
+  expect_equal(createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = 7))$covariateTimeInteraction, "day0")
   for (covariateTimeInteraction in c("none", "day0", "interval")) {
     for (postGraceModel in c("binary", "hazard")) {
       expectRoundTrip(
@@ -194,13 +198,17 @@ test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (c
       "covariateTimeInteraction must be \"none\""
     )
   }
-  # Settings saved before these fields existed load with the defaults:
-  untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(postGraceModel = "hazard")$toJson(), simplifyDataFrame = FALSE)
-  untypedList$postGraceModel <- NULL
-  untypedList$covariateTimeInteraction <- NULL
-  old <- FitCensoringModelsArgs$new(untypedList = untypedList)
-  expect_equal(old$postGraceModel, "binary")
-  expect_equal(old$covariateTimeInteraction, "none")
+  # Settings saved before these fields existed load with the defaults ("none" for the Cox model):
+  for (hazardModelType in c("logistic", "cox")) {
+    untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(hazardModelType = hazardModelType, postGraceModel = "binary")$toJson(), simplifyDataFrame = FALSE)
+    untypedList$postGraceModel <- NULL
+    untypedList$covariateTimeInteraction <- NULL
+    old <- FitCensoringModelsArgs$new(untypedList = untypedList)
+    expect_equal(old$postGraceModel, "hazard")
+    expect_equal(old$covariateTimeInteraction, if (hazardModelType == "cox") "none" else "day0")
+    old <- FitCensoringModelsArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))
+    expect_equal(old$covariateTimeInteraction, if (hazardModelType == "cox") "none" else "day0")
+  }
 })
 
 test_that("WeightTruncation basis (contract section 11.5)", {
@@ -230,6 +238,14 @@ test_that("WeightTruncation and ComputeWeightsArgs round trip and validation", {
   expect_error(createWeightTruncation(type = "trim"), "type")
   expect_error(createComputeWeightsArgs(stabilized = NA), "stabilized")
   expect_error(createComputeWeightsArgs(truncation = 0.99), "truncation")
+  # truncateMsmWeights (contract section 12.2): TRUE by default, FALSE available, and settings saved
+  # before it existed load with TRUE:
+  expect_true(createComputeWeightsArgs()$truncateMsmWeights)
+  expectRoundTrip(createComputeWeightsArgs(truncateMsmWeights = FALSE), ComputeWeightsArgs)
+  expect_error(createComputeWeightsArgs(truncateMsmWeights = NA), "truncateMsmWeights")
+  untypedList <- jsonlite::fromJSON(createComputeWeightsArgs(truncateMsmWeights = FALSE)$toJson(), simplifyDataFrame = FALSE)
+  untypedList$truncateMsmWeights <- NULL
+  expect_true(ComputeWeightsArgs$new(untypedList = untypedList)$truncateMsmWeights)
 })
 
 test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {

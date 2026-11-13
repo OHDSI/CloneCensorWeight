@@ -24,8 +24,8 @@
 #' @details
 #' The persons compared are those of the binary model's risk set at `G`: no outcome or death on or
 #' before day `G` (before day `G` with `sameDayOrdering = "deviationFirst"`) and `riskEnd >= G`. The
-#' observed value is the share of them who started the treatment on or before day `G`. The
-#' predictions are:
+#' observed value is the share of them who started the treatment on or before day `G` (a strategy
+#' with nobody under follow-up at `G` has no rows). The predictions are:
 #'
 #' - `model = "binary"`: `pi(X)`, the probability of starting by `G` from the binary model at `G`
 #'   (the model of an `"initiateWithin"` strategy, and of the weights after `G` of a
@@ -58,41 +58,85 @@
 #'   [createFitCensoringModelsArgs()]).
 #'
 #' So good calibration of the binary model does not show that `postGraceModel = "binary"` is
-#' appropriate, and a gap for the hazard model does not show that it is not.
+#' appropriate, and a gap for the hazard model does not show that it is not. To tell the causes apart,
+#' the result also holds the grace-period selection check of [computeGracePeriodSelection()] (the
+#' outcome and death rates during the grace period after and without initiation), and the hazard
+#' models with and without covariate-by-time interactions can be compared by calling this function on
+#' each fit (as [computeCcwDiagnostics()] does).
 #'
-#' @param clones          An object of type [CcwClones] as created by `createClones()` (or the
-#'                        weighted clones returned by [computeCensoringWeights()]).
-#' @param censoringModels An object of class `CcwCensoringModels` as created by [fitCensoringModels()]
-#'                        on the same clones.
-#' @param numberOfGroups  The number of groups (quantiles) of the prediction.
+#' Besides the groups of the prediction, the result has the calibration in the large (all persons in
+#' one group) and, with `strataCovariateIds`, the persons with and without each of these covariates.
+#'
+#' @param clones             An object of type [CcwClones] as created by `createClones()` (or the
+#'                           weighted clones returned by [computeCensoringWeights()]).
+#' @param censoringModels    An object of class `CcwCensoringModels` as created by
+#'                           [fitCensoringModels()] on the same clones.
+#' @param numberOfGroups     The number of groups (quantiles) of the prediction.
+#' @param cloneCensorWeightData The object of type [CloneCensorWeightData] the clones were created
+#'                           from. Needed only with `strataCovariateIds`.
+#' @param strataCovariateIds IDs of covariates by which the calibration is also reported: per
+#'                           covariate, group 1 holds the persons with a non-zero value and group 0 the
+#'                           others.
 #'
 #' @return
-#' A tibble with columns `strategyId`, `model` (`"binary"` or `"hazard"`), `group` (1 for the lowest
-#' predictions), `persons`, `predicted` (the mean prediction in the group) and `observed` (the share
-#' who started by `G`). The attribute `strategyLabels` holds the strategy labels, and `graceEnds` the
-#' `G` of each strategy (`NA` without a grace period).
+#' A tibble of class `CcwCensoringModelCalibration` with columns `strategyId`, `model` (`"binary"` or
+#' `"hazard"`), `covariateTimeInteraction` (the setting of the hazard model, `NA` for the binary
+#' model), `grouping` (`"prediction"`: groups of the prediction, `group` 1 holding the lowest
+#' predictions; `"overall"`: all persons, the calibration in the large; `"covariate"`: by
+#' `covariateId`), `covariateId`, `group`, `persons`, `predicted` (the mean prediction in the group)
+#' and `observed` (the share who started by `G`). The attribute `strategyLabels` holds the strategy
+#' labels, `graceEnds` the `G` of each strategy (`NA` without a grace period), and
+#' `gracePeriodSelection` the result of [computeGracePeriodSelection()].
 #'
 #' @example inst/examples/clones.R
 #' @examples
 #' censoringModels <- fitCensoringModels(
 #'   clones = clones,
 #'   cloneCensorWeightData = data,
-#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(
+#'     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
+#'   )
 #' )
-#' calibration <- computeCensoringModelCalibration(clones, censoringModels)
+#' calibration <- computeCensoringModelCalibration(
+#'   clones = clones,
+#'   censoringModels = censoringModels,
+#'   cloneCensorWeightData = data,
+#'   strataCovariateIds = 1001
+#' )
 #' calibration
 #' close(clones)
 #' close(data)
 #'
 #' @export
-computeCensoringModelCalibration <- function(clones, censoringModels, numberOfGroups = 10) {
+computeCensoringModelCalibration <- function(clones,
+                                             censoringModels,
+                                             numberOfGroups = 10,
+                                             cloneCensorWeightData = NULL,
+                                             strataCovariateIds = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   checkmate::assertClass(censoringModels, "CcwCensoringModels", add = errorMessages)
   checkmate::assertInt(numberOfGroups, lower = 1, add = errorMessages)
+  .assertCovariateId(strataCovariateIds, null.ok = TRUE, add = errorMessages)
+  if (length(strataCovariateIds) > 0) {
+    .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
+  }
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(clones, "metaData")
   .checkModelsMatchClones(censoringModels, metaData)
+  modelArgs <- attr(censoringModels, "metaData")$fitCensoringModelsArgs
+  interaction <- if (identical(modelArgs$hazardModelType, "cox")) "none" else modelArgs$covariateTimeInteraction
+  if (is.null(interaction)) {
+    interaction <- "none"
+  }
+  strata <- NULL
+  if (length(strataCovariateIds) > 0) {
+    strataCovariateIds <- as.numeric(strataCovariateIds)
+    strata <- cloneCensorWeightData$covariates |>
+      filter(.data$covariateId %in% strataCovariateIds, .data$covariateValue != 0) |>
+      select("rowId", "covariateId") |>
+      collect()
+  }
 
   strategies <- metaData$strategies
   persons <- clones$persons |>
@@ -106,6 +150,9 @@ computeCensoringModelCalibration <- function(clones, censoringModels, numberOfGr
     graceEnd <- as.integer(strategy$graceEnd)
     treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
     riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, metaData$sameDayOrdering)
+    if (nrow(riskSet) == 0) {
+      next
+    }
     model <- censoringModels[[strategyId]]
     predictions <- list()
     if (model$kind == "binary") {
@@ -121,24 +168,79 @@ computeCensoringModelCalibration <- function(clones, censoringModels, numberOfGr
       if (anyNA(predicted)) {
         stop(sprintf("The censoring model of strategy %d has no prediction for some persons under follow-up at day %d. Were the censoring models fit on these clones?", strategyId, graceEnd))
       }
-      groups <- .groupByRank(predicted, numberOfGroups)
-      results[[length(results) + 1]] <- tibble(
-        strategyId = as.integer(strategyId),
-        model = modelName,
-        group = seq_len(max(groups)),
-        persons = tabulate(groups),
-        predicted = as.vector(tapply(predicted, groups, mean)),
-        observed = as.vector(tapply(riskSet$y, groups, mean))
+      rows <- list(
+        .calibrationRows(predicted, riskSet$y, .groupByRank(predicted, numberOfGroups), "prediction"),
+        .calibrationRows(predicted, riskSet$y, rep(1L, length(predicted)), "overall")
       )
+      for (covariateId in strataCovariateIds) {
+        hasCovariate <- as.integer(riskSet$rowId %in% strata$rowId[strata$covariateId == covariateId])
+        rows[[length(rows) + 1]] <- .calibrationRows(predicted, riskSet$y, hasCovariate, "covariate", covariateId)
+      }
+      results[[length(results) + 1]] <- dplyr::bind_rows(rows) |>
+        dplyr::mutate(
+          strategyId = as.integer(strategyId),
+          model = modelName,
+          covariateTimeInteraction = if (modelName == "hazard") interaction else NA_character_,
+          .before = 1
+        )
     }
   }
   calibration <- dplyr::bind_rows(c(
-    list(tibble(strategyId = integer(0), model = character(0), group = integer(0), persons = integer(0), predicted = numeric(0), observed = numeric(0))),
+    list(tibble(
+      strategyId = integer(0), model = character(0), covariateTimeInteraction = character(0), grouping = character(0),
+      covariateId = numeric(0), group = integer(0), persons = integer(0), predicted = numeric(0), observed = numeric(0)
+    )),
     results
   ))
   attr(calibration, "strategyLabels") <- vapply(strategies, function(strategy) as.character(strategy$label), character(1))
   attr(calibration, "graceEnds") <- vapply(strategies, function(strategy) if (is.null(strategy$graceEnd)) NA_integer_ else as.integer(strategy$graceEnd), integer(1))
+  attr(calibration, "gracePeriodSelection") <- computeGracePeriodSelection(clones, censoringModels, numberOfGroups = numberOfGroups)
+  class(calibration) <- c("CcwCensoringModelCalibration", class(calibration))
   return(calibration)
+}
+
+# The calibration of `predicted` against `y` in each group of `groups` (sorted).
+.calibrationRows <- function(predicted, y, groups, grouping, covariateId = NA_real_) {
+  levels <- sort(unique(groups))
+  index <- match(groups, levels)
+  return(tibble(
+    grouping = grouping,
+    covariateId = as.numeric(covariateId),
+    group = as.integer(levels),
+    persons = tabulate(index, nbins = length(levels)),
+    predicted = as.vector(tapply(predicted, index, mean)),
+    observed = as.vector(tapply(y, index, mean))
+  ))
+}
+
+#' @export
+print.CcwCensoringModelCalibration <- function(x, ...) {
+  writeLines("Calibration of the censoring models at the end of the grace period")
+  data <- as.data.frame(x)
+  overall <- data[data$grouping == "overall", ]
+  if (nrow(overall) > 0) {
+    groups <- data[data$grouping == "prediction", ]
+    key <- function(d) paste(d$strategyId, d$model, d$covariateTimeInteraction)
+    gaps <- tapply(abs(groups$observed - groups$predicted), key(groups), max)
+    summary <- data.frame(
+      strategyId = overall$strategyId,
+      model = overall$model,
+      interaction = overall$covariateTimeInteraction,
+      persons = overall$persons,
+      observed = round(overall$observed, 4),
+      predicted = round(overall$predicted, 4),
+      largestGroupGap = round(as.vector(gaps[key(overall)]), 4)
+    )
+    writeLines("Calibration in the large, and the largest |observed - predicted| over the groups of the prediction:")
+    print(summary, row.names = FALSE)
+  }
+  selection <- attr(x, "gracePeriodSelection")
+  if (!is.null(selection)) {
+    .printSelectionFlags(selection)
+  }
+  writeLines("")
+  NextMethod()
+  invisible(x)
 }
 
 # Groups 1, 2, ... of `x` of about equal size, in increasing order of `x`; tied values share the group
@@ -153,8 +255,9 @@ computeCensoringModelCalibration <- function(clones, censoringModels, numberOfGr
 #' @description
 #' Plots, per strategy with a grace period, the observed share of persons who started the treatment
 #' by the end of the grace period against the mean predicted probability, per group of the
-#' prediction, for each censoring model. Points on the dashed diagonal are well calibrated. Requires
-#' the `ggplot2` package.
+#' prediction, for each censoring model (each hazard model fit, for example with and without
+#' covariate-by-time interactions, gets its own line). Points on the dashed diagonal are well
+#' calibrated. Requires the `ggplot2` package.
 #'
 #' @param calibration A tibble as created by [computeCensoringModelCalibration()].
 #' @param labels      The labels of strategies 1 (target) and 2 (comparator). If `NULL`, the
@@ -199,10 +302,20 @@ plotCensoringModelCalibration <- function(calibration,
   }
 
   data <- as.data.frame(calibration)
+  if (!is.null(data$grouping)) {
+    data <- data[data$grouping == "prediction", ]
+  }
   data$strategy <- factor(labels[data$strategyId], levels = labels)
-  modelLabels <- c(binary = "Binary model at the end of the grace period", hazard = "1 - S(G | X) from the initiation hazard model")
-  data$modelLabel <- factor(modelLabels[data$model], levels = modelLabels)
-  colors <- c("#2a78d6", "#eb6834")
+  # The hazard models of several fits (with and without interactions) get one label each:
+  interaction <- if (is.null(data$covariateTimeInteraction)) rep(NA_character_, nrow(data)) else data$covariateTimeInteraction
+  data$modelLabel <- ifelse(
+    data$model == "binary",
+    "Binary model at the end of the grace period",
+    ifelse(is.na(interaction), "1 - S(G | X) from the initiation hazard model", sprintf("1 - S(G | X) from the initiation hazard model (interaction: %s)", interaction))
+  )
+  modelLabels <- unique(data$modelLabel[order(data$model != "binary", interaction)])
+  data$modelLabel <- factor(data$modelLabel, levels = modelLabels)
+  colors <- rep(c("#2a78d6", "#eb6834", "#1f9e6e", "#8a5cc2", "#c9a227"), length.out = length(modelLabels))
   names(colors) <- modelLabels
   plot <- ggplot2::ggplot(data, ggplot2::aes(x = .data$predicted, y = .data$observed, color = .data$modelLabel)) +
     ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "#888888") +

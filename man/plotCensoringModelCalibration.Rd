@@ -21,8 +21,9 @@ A ggplot object. Use the \code{\link[ggplot2:ggsave]{ggplot2::ggsave()}} functio
 \description{
 Plots, per strategy with a grace period, the observed share of persons who started the treatment
 by the end of the grace period against the mean predicted probability, per group of the
-prediction, for each censoring model. Points on the dashed diagonal are well calibrated. Requires
-the \code{ggplot2} package.
+prediction, for each censoring model (each hazard model fit, for example with and without
+covariate-by-time interactions, gets its own line). Points on the dashed diagonal are well
+calibrated. Requires the \code{ggplot2} package.
 }
 \examples{
 calibration <- data.frame(

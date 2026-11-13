@@ -4,22 +4,39 @@
 \alias{computeCensoringModelCalibration}
 \title{Compute the calibration of the censoring models at the end of the grace period}
 \usage{
-computeCensoringModelCalibration(clones, censoringModels, numberOfGroups = 10)
+computeCensoringModelCalibration(
+  clones,
+  censoringModels,
+  numberOfGroups = 10,
+  cloneCensorWeightData = NULL,
+  strataCovariateIds = NULL
+)
 }
 \arguments{
 \item{clones}{An object of type \link{CcwClones} as created by \code{createClones()} (or the
 weighted clones returned by \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}).}
 
-\item{censoringModels}{An object of class \code{CcwCensoringModels} as created by \code{\link[=fitCensoringModels]{fitCensoringModels()}}
-on the same clones.}
+\item{censoringModels}{An object of class \code{CcwCensoringModels} as created by
+\code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones.}
 
 \item{numberOfGroups}{The number of groups (quantiles) of the prediction.}
+
+\item{cloneCensorWeightData}{The object of type \link{CloneCensorWeightData} the clones were created
+from. Needed only with \code{strataCovariateIds}.}
+
+\item{strataCovariateIds}{IDs of covariates by which the calibration is also reported: per
+covariate, group 1 holds the persons with a non-zero value and group 0 the
+others.}
 }
 \value{
-A tibble with columns \code{strategyId}, \code{model} (\code{"binary"} or \code{"hazard"}), \code{group} (1 for the lowest
-predictions), \code{persons}, \code{predicted} (the mean prediction in the group) and \code{observed} (the share
-who started by \code{G}). The attribute \code{strategyLabels} holds the strategy labels, and \code{graceEnds} the
-\code{G} of each strategy (\code{NA} without a grace period).
+A tibble of class \code{CcwCensoringModelCalibration} with columns \code{strategyId}, \code{model} (\code{"binary"} or
+\code{"hazard"}), \code{covariateTimeInteraction} (the setting of the hazard model, \code{NA} for the binary
+model), \code{grouping} (\code{"prediction"}: groups of the prediction, \code{group} 1 holding the lowest
+predictions; \code{"overall"}: all persons, the calibration in the large; \code{"covariate"}: by
+\code{covariateId}), \code{covariateId}, \code{group}, \code{persons}, \code{predicted} (the mean prediction in the group)
+and \code{observed} (the share who started by \code{G}). The attribute \code{strategyLabels} holds the strategy
+labels, \code{graceEnds} the \code{G} of each strategy (\code{NA} without a grace period), and
+\code{gracePeriodSelection} the result of \code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}}.
 }
 \description{
 Compares, for each strategy with a grace period (\code{"initiateWithin"} and \code{"notInitiateWithin"}), the
@@ -29,8 +46,8 @@ period, by group (decile) of the prediction.
 \details{
 The persons compared are those of the binary model's risk set at \code{G}: no outcome or death on or
 before day \code{G} (before day \code{G} with \code{sameDayOrdering = "deviationFirst"}) and \code{riskEnd >= G}. The
-observed value is the share of them who started the treatment on or before day \code{G}. The
-predictions are:
+observed value is the share of them who started the treatment on or before day \code{G} (a strategy
+with nobody under follow-up at \code{G} has no rows). The predictions are:
 \itemize{
 \item \code{model = "binary"}: \code{pi(X)}, the probability of starting by \code{G} from the binary model at \code{G}
 (the model of an \code{"initiateWithin"} strategy, and of the weights after \code{G} of a
@@ -65,7 +82,14 @@ construction, whose weights after \code{G} are biased (see \code{postGraceModel}
 }
 
 So good calibration of the binary model does not show that \code{postGraceModel = "binary"} is
-appropriate, and a gap for the hazard model does not show that it is not.
+appropriate, and a gap for the hazard model does not show that it is not. To tell the causes apart,
+the result also holds the grace-period selection check of \code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}} (the
+outcome and death rates during the grace period after and without initiation), and the hazard
+models with and without covariate-by-time interactions can be compared by calling this function on
+each fit (as \code{\link[=computeCcwDiagnostics]{computeCcwDiagnostics()}} does).
+
+Besides the groups of the prediction, the result has the calibration in the large (all persons in
+one group) and, with \code{strataCovariateIds}, the persons with and without each of these covariates.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:
@@ -91,9 +115,16 @@ clones <- createClones(
 censoringModels <- fitCensoringModels(
   clones = clones,
   cloneCensorWeightData = data,
-  fitCensoringModelsArgs = createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(
+    prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
+  )
 )
-calibration <- computeCensoringModelCalibration(clones, censoringModels)
+calibration <- computeCensoringModelCalibration(
+  clones = clones,
+  censoringModels = censoringModels,
+  cloneCensorWeightData = data,
+  strataCovariateIds = 1001
+)
 calibration
 close(clones)
 close(data)

@@ -147,14 +147,14 @@ test_that("Interaction columns are penalized and time-basis columns are not", {
   expect_true(all(model$coefficients[startsWith(names(model$coefficients), "timeBasis")] != 0))
 })
 
-test_that("covariateTimeInteraction = 'day0' needs daily intervals", {
-  # Review of contract 11.3: with longer intervals the first interval is not day 0.
+test_that("covariateTimeInteraction = 'day0' with longer intervals multiplies the first interval", {
+  # Contract 12.1 (superseding the review of 11.3, which stopped here): "day0" is the default, so it is
+  # accepted with longer intervals, where it is the indicator of the first interval (days 0..L - 1).
   for (intervalLength in c(2, 7)) {
-    error <- tryCatch(
-      createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = intervalLength), covariateTimeInteraction = "day0"),
-      error = function(e) conditionMessage(e)
-    )
-    expect_match(gsub("\\s*\\n\\s*\\*\\s*", " ", error), "covariateTimeInteraction = \"day0\" needs daily intervals", fixed = TRUE)
+    args <- createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = intervalLength), covariateTimeInteraction = "day0")
+    expect_equal(args$covariateTimeInteraction, "day0")
+    basis <- .createInteractionBasis("day0", matrix(0, nrow = 4, ncol = 3), 0:3, rowIntervals = 0:3)
+    expect_equal(unname(basis[, "day0"]), c(1, 0, 0, 0))
   }
   expect_equal(createFitCensoringModelsArgs(covariateTimeInteraction = "day0")$covariateTimeInteraction, "day0")
   expect_equal(createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = 7), covariateTimeInteraction = "interval")$covariateTimeInteraction, "interval")
@@ -215,7 +215,7 @@ test_that("With day-0 initiation effects, the 'day0' model's 1 - S(G | X) is cal
     z[[covariateTimeInteraction]] <- (observed - predicted(models[[2]])) / se
     # The diagnostic reports the same predictions and observed shares (its groups are the X strata):
     calibration <- computeCensoringModelCalibration(clones, models)
-    hazard <- calibration[calibration$model == "hazard", ]
+    hazard <- calibration[calibration$model == "hazard" & calibration$grouping == "prediction", ]
     expect_equal(hazard$observed, as.vector(observed), tolerance = 1e-12)
     expect_equal(hazard$predicted, predicted(models[[2]]), tolerance = 1e-10)
   }

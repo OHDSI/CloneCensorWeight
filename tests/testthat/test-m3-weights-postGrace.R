@@ -234,8 +234,18 @@ test_that("With postGraceModel = 'binary', the weighted comparator at tau + 1 re
       sameDayOrdering = sameDayOrdering
     )))
     comparatorMean <- list()
-    for (postGraceModel in c("binary", "hazard")) {
-      models <- suppressMessages(fitCensoringModels(clones, day0$data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel)))
+    choices <- list(
+      binary = list(postGraceModel = "binary", covariateTimeInteraction = "none"),
+      hazard = list(postGraceModel = "hazard", covariateTimeInteraction = "none"),
+      hazardDay0 = list(postGraceModel = "hazard", covariateTimeInteraction = "day0")
+    )
+    for (choice in names(choices)) {
+      postGraceModel <- choice
+      models <- suppressMessages(fitCensoringModels(clones, day0$data, createFitCensoringModelsArgs(
+        prior = Cyclops::createPrior("none"),
+        postGraceModel = choices[[choice]]$postGraceModel,
+        covariateTimeInteraction = choices[[choice]]$covariateTimeInteraction
+      )))
       weighted <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("none"))))
       balance <- suppressMessages(computeCovariateBalance(weighted, day0$data))
       comparatorMean[[postGraceModel]] <- balance$afterMatchingMeanComparator
@@ -247,6 +257,9 @@ test_that("With postGraceModel = 'binary', the weighted comparator at tau + 1 re
     expect_equal(comparatorMean$binary, mean(day0$x), tolerance = 1e-6)
     # 1 / S(7 | X) of the hazard model, which assumes the same effect of X on every day, does not:
     expect_gt(abs(comparatorMean$hazard - mean(day0$x)), 0.05)
+    # With the covariate-by-day-0 interaction (the default, contract section 12.1), it does: here X changes
+    # only who starts on day 0, and no outcome happens during the grace period:
+    expect_equal(comparatorMean$hazardDay0, mean(day0$x), tolerance = 1e-6)
     close(clones)
   }
 })

@@ -7,12 +7,21 @@ new defaults):
 
 * The Cox and pooled logistic outcome models are fitted with unstabilized weights by default
   (`createFitOutcomeModelArgs(msmWeights = "unstabilized")`), whatever `createComputeWeightsArgs()`
-  `stabilized` is. `msmWeights = "stabilized"` reproduces the earlier fits. The truncation cap applies
-  to the weights of `computeCensoringWeights()`, so with the default `stabilized = TRUE` it does not
-  bound the unstabilized weights of these models.
-* After the grace period, the weights of `"notInitiateWithin"` strategies come from the binary model at
-  the end of the grace period (`createFitCensoringModelsArgs(postGraceModel = "binary")`).
-  `postGraceModel = "hazard"` reproduces the earlier weights.
+  `stabilized` is. `msmWeights = "stabilized"` reproduces the earlier fits.
+* The truncation rule also caps the weights on the other scale (the unstabilized ones with the default
+  `stabilized = TRUE`), on their own scale (`createComputeWeightsArgs(truncateMsmWeights = TRUE)`), so
+  the weights of the Cox and pooled logistic models are capped whatever `msmWeights` is.
+  `truncateMsmWeights = FALSE` forms them from the truncated weights, as before. The segments gain
+  `otherScaleWeight`, and `fitOutcomeModel()` reports the cap, largest weight and share truncated of
+  the weights its MSM used (`metaData$msmWeightSummary`).
+* The initiation hazard model has covariate-by-day-0 interactions by default
+  (`createFitCensoringModelsArgs(covariateTimeInteraction = "day0")`; `"none"` with
+  `hazardModelType = "cox"`), also with longer intervals, where they multiply the first interval.
+  `covariateTimeInteraction = "none"` reproduces the earlier models.
+* After the grace period, the weights of `"notInitiateWithin"` strategies are `1 / S(G | X)` from the
+  initiation hazard model by default (`postGraceModel = "hazard"`). `postGraceModel = "binary"` uses the
+  binary model at the end of the grace period, which is biased when starting the treatment changes the
+  risk during the grace period.
 * Percentile truncation is taken over the clones whose weight varies
   (`createWeightTruncation(basis = "varying")`). `basis = "allClones"` reproduces the earlier caps.
   `metaData$weights$caps` reports the cap and the share of clones truncated per strategy.
@@ -30,6 +39,13 @@ New features:
 * `computeCensoringModelCalibration()` and `plotCensoringModelCalibration()` compare the predicted
   and observed probabilities of starting by the end of the grace period.
 * `computeWeightDistribution()` reports the exact weight of every day it reports.
+* Diagnostics to choose these options for the data at hand: `computeCcwDiagnostics()` (all of them,
+  for each `postGraceModel` and `covariateTimeInteraction`), `computeGracePeriodSelection()` (does
+  starting change the grace-period risk?), `computePositivity()`, `computeWeightSummary()` (both scales,
+  before and after truncation), and the opt-in `computeCcwSensitivity()` (estimates under alternative
+  choices), with print methods and `plotGracePeriodSelection()`, `plotPositivity()`,
+  `plotWeightSummary()` and `plotCcwSensitivity()`. `computeCensoringModelCalibration()` adds the
+  calibration in the large, covariate strata and the selection check.
 * Warnings for pooled logistic outcome grids that do not end an interval at the end of a grace period
   or use a smooth time basis with a grace period, for covariate windows that end on or after day 0,
   and for bootstrap replicates that sit predominantly on one side of the full-data estimate.

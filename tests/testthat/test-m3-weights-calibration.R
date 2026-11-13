@@ -33,19 +33,19 @@ test_that("computeCensoringModelCalibration equals a hand computation", {
     }
     models <- suppressMessages(fitCensoringModels(clones, data, m3Args(hazardModelType, postGraceModel = postGraceModel)))
     calibration <- computeCensoringModelCalibration(clones, models, numberOfGroups = 5)
-    expect_equal(colnames(calibration), c("strategyId", "model", "group", "persons", "predicted", "observed"))
+    expect_equal(colnames(calibration), c("strategyId", "model", "covariateTimeInteraction", "grouping", "covariateId", "group", "persons", "predicted", "observed"))
     expect_equal(attr(calibration, "strategyLabels"), c("initiateWithin 1", "notInitiateWithin 2"))
     expect_equal(attr(calibration, "graceEnds"), c(7L, 7L))
     expect_equal(unique(calibration$model[calibration$strategyId == 2]), if (postGraceModel == "binary") c("hazard", "binary") else "hazard")
 
     binary <- models[[1]]$predictions$propensityScore[match(reference$rowId, models[[1]]$predictions$rowId)]
     expected <- handCalibration(binary, 5)
-    actual <- calibration[calibration$strategyId == 1 & calibration$model == "binary", ]
+    actual <- calibration[calibration$strategyId == 1 & calibration$model == "binary" & calibration$grouping == "prediction", ]
     expect_equal(asPlain(actual), expected)
     # The intercept of the maximum likelihood fit reproduces the observed share overall:
     expect_equal(sum(actual$predicted * actual$persons), sum(reference$y), tolerance = 1e-6)
     if (postGraceModel == "binary") {
-      actual <- calibration[calibration$strategyId == 2 & calibration$model == "binary", ]
+      actual <- calibration[calibration$strategyId == 2 & calibration$model == "binary" & calibration$grouping == "prediction", ]
       expect_equal(asPlain(actual), expected)
     }
 
@@ -59,7 +59,7 @@ test_that("computeCensoringModelCalibration equals a hand computation", {
       survival <- exp(-lambda * exp(linearPredictor))
     }
     expected <- handCalibration(1 - survival, 5)
-    actual <- calibration[calibration$strategyId == 2 & calibration$model == "hazard", ]
+    actual <- calibration[calibration$strategyId == 2 & calibration$model == "hazard" & calibration$grouping == "prediction", ]
     expect_equal(asPlain(actual), expected, tolerance = 1e-10)
     close(clones)
   }
@@ -71,8 +71,10 @@ test_that("computeCensoringModelCalibration equals a hand computation", {
   calibration <- computeCensoringModelCalibration(clones, models)
   expect_equal(unique(calibration$strategyId), 1L)
   expect_equal(attr(calibration, "graceEnds"), c(7L, NA_integer_))
-  expect_equal(sum(calibration$persons), nrow(refBinaryRiskSet(fixture$persons, 7, "eventsFirst")))
-  expect_lte(nrow(calibration), 10)
+  groups <- calibration[calibration$grouping == "prediction", ]
+  expect_equal(sum(groups$persons), nrow(refBinaryRiskSet(fixture$persons, 7, "eventsFirst")))
+  expect_equal(calibration$persons[calibration$grouping == "overall"], sum(groups$persons))
+  expect_lte(nrow(groups), 10)
 
   # Input checks:
   expect_error(computeCensoringModelCalibration(clones, models[1]), "CcwCensoringModels")
@@ -111,9 +113,9 @@ test_that("The calibration diagnostic shows a miscalibrated initiation hazard mo
     )))
     calibration <- computeCensoringModelCalibration(clones, models)
     expect_equal(sort(unique(calibration$group)), 1:10)
-    hazard <- calibration[calibration$model == "hazard", ]
+    hazard <- calibration[calibration$model == "hazard" & calibration$grouping == "prediction", ]
     maxAbsZ[[covariateTimeInteraction]] <- max(abs(zScores(hazard)))
-    binary <- calibration[calibration$model == "binary", ]
+    binary <- calibration[calibration$model == "binary" & calibration$grouping == "prediction", ]
     expect_lt(max(abs(zScores(binary))), 4)
   }
   expect_gt(maxAbsZ$none, 6)

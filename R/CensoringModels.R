@@ -40,10 +40,11 @@
 #'   With the indicator basis, an interval without initiations gets a hazard of 0, and an interval in
 #'   which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 #'   of these intervals are left out of the fit, and the first remaining interval is the reference.
-#'   With `covariateTimeInteraction = "day0"` or `"interval"`, the pooled logistic model also has the
-#'   products of the covariates with an indicator of day 0 (daily intervals), or with each time-basis
-#'   column, penalized like the covariates (see [createFitCensoringModelsArgs()]).
-#' - `"notInitiateWithin"` with `postGraceModel = "binary"` (the default): also the binary model at `G`
+#'   With `covariateTimeInteraction = "day0"` (the default) or `"interval"`, the pooled logistic model
+#'   also has the products of the covariates with an indicator of day 0 (of the first interval with
+#'   longer intervals), or with each time-basis column, penalized like the covariates (see
+#'   [createFitCensoringModelsArgs()]).
+#' - `"notInitiateWithin"` with `postGraceModel = "binary"` (not the default, `"hazard"`): also the binary model at `G`
 #'   of an `"initiateWithin(G)"` strategy of the same treatment (shared with such a strategy when the
 #'   analysis has one), which gives the weights after `G` (see [createFitCensoringModelsArgs()]).
 #'
@@ -840,7 +841,7 @@ fitCensoringModels <- function(clones,
 }
 
 # The interaction basis (intervals x columns) whose columns multiply every covariate: none, an indicator
-# of the first interval, which is day 0 ("day0", whose settings require daily intervals), or the
+# of the first interval ("day0": day 0 with daily intervals, the first interval otherwise), or the
 # time-basis columns ("interval"). A column that takes a single value over `rowIntervals`, the intervals
 # with rows in the fit, would duplicate the covariates, so it is left out (for example "day0" when the
 # first interval is not fit, or nobody reaches a later one).

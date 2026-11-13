@@ -545,53 +545,62 @@ TimeBasis <- R6Class(
 #' (through [CohortMethod::createPs()]). In this version the hazard models are always fitted to their
 #' whole risk set.
 #'
-#' **Weights of `"notInitiateWithin"` after the grace period.** With `postGraceModel = "binary"` (the
-#' default), the weight of a `"notInitiateWithin(G)"` clone after day `G` is `1 / (1 - pi(X))`, where
-#' `pi(X)` is the probability of starting by day `G` from the binary model at `G`, the same model the
-#' `"initiateWithin(G)"` strategy uses (the fit is shared when the analysis has such a strategy for the
-#' same treatment, and made otherwise). The initiation hazard model still gives the weights on days up
-#' to `G`, and all weights of `"neverInitiate"` strategies. With `postGraceModel = "hazard"`, the weight
-#' after `G` is `1 / S(G | X)`, where `S(G | X)` is the probability of not initiating on days `0..G`
-#' from the initiation hazard model. When the analysis has no `"initiateWithin"` strategy for the same
-#' treatment, `"binary"` fits one more model (with cross-validation, when the prior uses it).
+#' **Weights of `"notInitiateWithin"` after the grace period.** With `postGraceModel = "hazard"` (the
+#' default), the weight of a `"notInitiateWithin(G)"` clone after day `G` is `1 / S(G | X)`, where
+#' `S(G | X)` is the probability of not initiating on days `0..G` from the initiation hazard model, the
+#' same model that gives the weights on days up to `G`. With `postGraceModel = "binary"`, it is
+#' `1 / (1 - pi(X))`, where `pi(X)` is the probability of starting by day `G` from the binary model at
+#' `G`, the model the `"initiateWithin(G)"` strategy uses (the fit is shared when the analysis has such
+#' a strategy for the same treatment, and made otherwise, with cross-validation when the prior uses
+#' it). The initiation hazard model gives the weights on days up to `G`, and all weights of
+#' `"neverInitiate"` strategies, under both options.
 #'
-#' The weights after `G` need the probability of not starting by `G`. The two options rest on
-#' different assumptions:
+#' When each option is valid:
 #'
-#' - **Grace-period outcomes.** The binary model is fitted on the persons under follow-up at `G`, so
-#'   `1 - pi(X)` is the probability of not starting by `G` among persons with no outcome or death by
-#'   `G`. It equals `S(G | X)` only when starting the treatment during the grace period does not change
-#'   the risk of the outcome or death during the grace period. When starting lowers that risk (a
-#'   treatment that acts within days), the persons who started are over-represented among those still
-#'   under follow-up at `G`: `pi(X)` is too large, the weights `1 / (1 - pi(X))` are too large in a
-#'   covariate-dependent way, and the risks of the `"notInitiateWithin"` strategy are biased. The hazard
-#'   model does not need this assumption, because its risk set follows each person only until the
-#'   outcome or death. In a simulation in which starting cut the outcome hazard by 80% from the next
-#'   day, the mean weight after `G` of persons with the confounder was 25.0 with `"binary"` and 14.4
-#'   with `"hazard"` (true value 13.9). [computeCensoringModelCalibration()] cannot detect this: the
-#'   binary model reproduces the observed share among the persons under follow-up at `G` and looks
-#'   calibrated, while the correct `1 - S(G | X)` differs from that share. Use `"hazard"` when the
-#'   treatment can change the outcome or death risk within the grace period.
-#' - **Functional form.** The binary model is a logistic regression of starting by `G` on the main
-#'   effects of the covariates. `S(G | X)` from the hazard model with the default
-#'   `covariateTimeInteraction = "none"` assumes that the covariate effects on initiation are the same on
-#'   every day of the grace period. When a covariate changes *when* persons start (for example on day 0
-#'   rather than later), both can be misspecified: `1 - S(G | X)` is miscalibrated, and the binary
-#'   model is too with continuous covariates, since the probability of starting by `G` is then not
-#'   logit-linear in them. `postGraceModel = "hazard"` with `covariateTimeInteraction = "day0"` (or
-#'   `"interval"`) lets the covariate effects differ by day, and is correctly specified when they
-#'   differ only on day 0 (or by interval). Compare the hazard models with and without interactions
-#'   with [computeCensoringModelCalibration()].
+#' - **`"binary"`** needs two assumptions. (1) *No effect of grace-period initiation on grace-period
+#'   risk.* The binary model is fitted on the persons still under follow-up at `G`, so `1 - pi(X)` is
+#'   the probability of not starting by `G` among persons with no outcome or death by `G`. It equals
+#'   `S(G | X)` only when starting the treatment during the grace period does not change the risk of
+#'   the outcome or death during the grace period. When starting lowers that risk (a treatment that
+#'   acts within days), the persons who started are over-represented among those still under
+#'   follow-up at `G`: `pi(X)` is too large, the weights `1 / (1 - pi(X))` are too large in a
+#'   covariate-dependent way, and the risks of the `"notInitiateWithin"` strategy are biased (in a
+#'   simulation in which starting cut the outcome hazard by 80% from the next day, the risk at day 60
+#'   was biased by +0.020, z = 12, coverage 0.72, while `"hazard"` was unbiased).
+#'   [computeGracePeriodSelection()] checks this assumption; [computeCensoringModelCalibration()]
+#'   cannot, because the binary model reproduces the observed share among the persons under follow-up
+#'   at `G` by construction. (2) *A correctly specified binary model:* a logistic regression of
+#'   starting by `G` on the main effects of the covariates. With continuous covariates that change
+#'   *when* persons start, the probability of starting by `G` is not logit-linear in them.
+#' - **`"hazard"`** follows each person only until the outcome or death, so it needs neither
+#'   assumption (1) nor a model of the selected survivors. It needs a correctly specified hazard model.
+#'   Without interactions (`covariateTimeInteraction = "none"`) the covariate effects on initiation are
+#'   the same on every day of the grace period; when covariates change *when* persons start (for
+#'   example who starts on day 0, the day of the index visit), `1 - S(G | X)` is then miscalibrated.
+#'   With `covariateTimeInteraction = "day0"` (the default) the covariate effects on day 0 differ from
+#'   those on later days, which handles covariates that change start timing on day 0; `"interval"`
+#'   lets them differ in every interval of the time basis.
 #'
-#' **Covariate-by-time interactions.** With `covariateTimeInteraction = "day0"`, the pooled logistic
-#' initiation hazard model also has, for each covariate, its product with an indicator of day 0, so the
-#' covariates can change initiation on day 0 differently from later days. It needs daily intervals
-#' (`timeBasis` with `intervalLength = 1`, the default): with longer intervals the model cannot tell
-#' day 0 from the other days of the first interval. With `"interval"`, it has each covariate's product
-#' with each time-basis column (with the indicator basis: with the indicator of each interval except
-#' the reference), so the covariate effects can differ in every interval. The interaction columns are
-#' penalized by the prior like the covariates; the time-basis columns are never penalized. The Cox
-#' model has no interactions.
+#' Compare the options on your data with [computeCcwDiagnostics()] (calibration, the grace-period
+#' selection check, weights, balance and positivity per option) and [computeCcwSensitivity()] (the
+#' estimates per option).
+#'
+#' **Covariate-by-time interactions.** With `covariateTimeInteraction = "day0"` (the default), the
+#' pooled logistic initiation hazard model also has, for each covariate, its product with an indicator
+#' of the first interval of the time basis. With daily intervals (`timeBasis` with
+#' `intervalLength = 1`, the default) that is day 0, so the covariates can change initiation on day 0
+#' differently from later days. With longer intervals the model has one row per person and interval,
+#' so it cannot tell day 0 from the other days of the first interval: `"day0"` is then the product
+#' with the indicator of the first interval (days `0..intervalLength - 1`). Use daily intervals when
+#' initiation on day 0 itself depends on the covariates differently. With `"interval"`, the model has
+#' each covariate's product with each time-basis column (with the indicator basis: with the indicator
+#' of each interval except the reference), so the covariate effects can differ in every interval.
+#' With `"none"` it has no interactions. The interaction columns are penalized by the prior like the
+#' covariates; the time-basis columns are never penalized. The Cox model has no interactions, so with
+#' `hazardModelType = "cox"` the default is `"none"`, and `"day0"` and `"interval"` are not available.
+#'
+#' Settings saved before `covariateTimeInteraction` and `postGraceModel` existed load with
+#' `"day0"` (`"none"` for the Cox model) and `"hazard"`.
 #'
 #' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
 #'                                 `"cox"` (see details for its ties caveat).
@@ -599,14 +608,16 @@ TimeBasis <- R6Class(
 #'                                 [createTimeBasis()], used by the pooled logistic model. The default
 #'                                 is a daily indicator basis.
 #' @param covariateTimeInteraction Covariate-by-time interactions in the pooled logistic initiation
-#'                                 hazard model: `"none"`, `"day0"` (each covariate times an indicator
-#'                                 of day 0; needs daily intervals), or `"interval"` (each covariate
-#'                                 times each time-basis column). See details. Must be `"none"` with
-#'                                 `hazardModelType = "cox"`.
+#'                                 hazard model: `"day0"` (each covariate times an indicator of day 0,
+#'                                 or of the first interval with longer intervals), `"interval"` (each
+#'                                 covariate times each time-basis column), or `"none"`. See details.
+#'                                 Must be `"none"` with `hazardModelType = "cox"`, and is `"none"` by
+#'                                 default then.
 #' @param postGraceModel           The model that gives the weights of `"notInitiateWithin"` strategies
-#'                                 after the grace period: `"binary"` (`1 / (1 - pi(X))` from the
-#'                                 binary model at the end of the grace period) or `"hazard"`
-#'                                 (`1 / S(G | X)` from the initiation hazard model). See details.
+#'                                 after the grace period: `"hazard"` (`1 / S(G | X)` from the
+#'                                 initiation hazard model) or `"binary"` (`1 / (1 - pi(X))` from the
+#'                                 binary model at the end of the grace period). See details for when
+#'                                 each is valid.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
 #'                                 `"artificial"` (deviation from a strategy). Censoring at the end of
 #'                                 observation is not weighted, so it is assumed to be independent of
@@ -632,13 +643,13 @@ TimeBasis <- R6Class(
 #'
 #' @examples
 #' args <- createFitCensoringModelsArgs(hazardModelType = "cox")
-#' args <- createFitCensoringModelsArgs(covariateTimeInteraction = "day0", postGraceModel = "hazard")
+#' args <- createFitCensoringModelsArgs(covariateTimeInteraction = "none", postGraceModel = "binary")
 #'
 #' @export
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
-                                         covariateTimeInteraction = "none",
-                                         postGraceModel = "binary",
+                                         covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
+                                         postGraceModel = "hazard",
                                          censoringMechanisms = "artificial",
                                          useCovariates = TRUE,
                                          excludeCovariateIds = c(),
@@ -670,8 +681,8 @@ FitCensoringModelsArgs <- R6Class(
     hazardModelType = NULL,
     timeBasis = NULL,
     # Defaults, so settings saved before these fields existed load:
-    covariateTimeInteraction = "none",
-    postGraceModel = "binary",
+    covariateTimeInteraction = "day0",
+    postGraceModel = "hazard",
     censoringMechanisms = NULL,
     useCovariates = NULL,
     excludeCovariateIds = NULL,
@@ -689,8 +700,6 @@ FitCensoringModelsArgs <- R6Class(
       checkmate::assertChoice(self$postGraceModel, c("binary", "hazard"), add = errorMessages)
       if (identical(self$hazardModelType, "cox") && !identical(self$covariateTimeInteraction, "none")) {
         errorMessages$push("covariateTimeInteraction must be \"none\" with hazardModelType = \"cox\": covariate-by-time interactions are available only in the pooled logistic initiation hazard model (hazardModelType = \"logistic\")")
-      } else if (identical(self$covariateTimeInteraction, "day0") && checkmate::testR6(self$timeBasis, "TimeBasis") && !identical(as.numeric(self$timeBasis$intervalLength), 1)) {
-        errorMessages$push("covariateTimeInteraction = \"day0\" needs daily intervals (timeBasis with intervalLength = 1): with longer intervals the hazard model cannot tell day 0 from the other days of the first interval. Use covariateTimeInteraction = \"interval\" instead")
       }
       checkmate::assertCharacter(self$censoringMechanisms, min.len = 1, add = errorMessages)
       checkmate::assertSubset(self$censoringMechanisms, "artificial", add = errorMessages)
@@ -706,6 +715,10 @@ FitCensoringModelsArgs <- R6Class(
     },
     fromList = function(list, requireTyping) {
       super$fromList(list)
+      # The Cox model has no interactions, so its settings saved without the field load with "none":
+      if (is.null(list$covariateTimeInteraction) && identical(self$hazardModelType, "cox")) {
+        self$covariateTimeInteraction <- "none"
+      }
       if (requireTyping) {
         self$timeBasis <- TimeBasis$new(untypedList = self$timeBasis)
         class(self$control) <- "cyclopsControl"
@@ -736,11 +749,14 @@ FitCensoringModelsArgs <- R6Class(
 #' `"initiateWithin"` strategy keep a weight of 1, and a percentile over all clones lies inside the
 #' distribution of the weights that vary: it truncates far more than `1 - upper` of them.
 #'
-#' The cap is computed from, and bounds, the weights of [computeCensoringWeights()], which are
-#' stabilized or not as set by `stabilized` in [createComputeWeightsArgs()]. The weights of the Cox
-#' and pooled logistic outcome models (`msmWeights` in [createFitOutcomeModelArgs()]) are formed from
-#' these truncated weights and are not bounded by the cap when they are of the other kind; see
-#' [createComputeWeightsArgs()].
+#' The rule is applied on the scale of the weights of [computeCensoringWeights()], stabilized or not as
+#' set by `stabilized` in [createComputeWeightsArgs()]. With `truncateMsmWeights = TRUE` in
+#' [createComputeWeightsArgs()] (the default), the same rule (type, `upper` and basis) is also applied,
+#' separately, to the weights on the other scale, on their own scale: the percentile is then taken
+#' over the clones' maximum weights on that scale. So the weights of the Cox and pooled logistic
+#' outcome models (`msmWeights` in [createFitOutcomeModelArgs()]) are bounded by a cap of their own
+#' scale whichever scale they are on. With `truncateMsmWeights = FALSE`, the weights on the other scale
+#' are formed from the truncated weights and are not bounded by any cap.
 #'
 #' @param type  The truncation rule: `"none"`, `"percentile"`, or `"fixed"`.
 #' @param upper For `"percentile"`, the percentile in (0, 1). For `"fixed"`, the cap (greater than 1).
@@ -793,37 +809,58 @@ WeightTruncation <- R6Class(
 #' Create a parameter object for computing the censoring weights
 #'
 #' @details
-#' `stabilized` sets the weights `weight` that [computeCensoringWeights()] stores on the segments, and
-#' so the scale on which the truncation cap is computed and applied. These weights give the weighted
-#' Kaplan-Meier and Aalen-Johansen risks (which, without truncation, are the same either way) and the
-#' weighted counts of [fitOutcomeModel()]. The Cox and pooled logistic outcome models do not use
-#' `stabilized`: they use the weights chosen by `msmWeights` in [createFitOutcomeModelArgs()]
-#' (unstabilized by default), formed from the truncated `weight` and the segments' stabilization
-#' numerators.
+#' `stabilized` sets the weights `weight` that [computeCensoringWeights()] stores on the segments. These
+#' weights give the weighted Kaplan-Meier and Aalen-Johansen risks (which, without truncation, are the
+#' same either way) and the weighted counts of [fitOutcomeModel()]. The Cox and pooled logistic outcome
+#' models do not use `stabilized`: they use the weights chosen by `msmWeights` in
+#' [createFitOutcomeModelArgs()] (unstabilized by default). [computeCensoringWeights()] therefore also
+#' stores the weight on the other scale (`otherScaleWeight`: unstabilized when `stabilized = TRUE`,
+#' stabilized otherwise).
 #'
-#' So with the defaults, `stabilized = TRUE` and `msmWeights = "unstabilized"`, the cap does not bound
-#' the weights of the Cox and pooled logistic models: these are the truncated stabilized weights
-#' divided by the numerator, so their cap on a day is the cap divided by that day's numerator. For a
-#' `"neverInitiate"` strategy the numerator is the share of persons who have not initiated yet, which
-#' can be small at long horizons: in a simulation with a 365-day horizon, the 99th percentile cap was
-#' 5.7 and the largest unstabilized weight of the `"neverInitiate"` strategy was 369. To truncate the
-#' weights of these models at a percentile of their own distribution, use `stabilized = FALSE` with
-#' `msmWeights = "unstabilized"`.
+#' **Truncation scales.** The truncation rule (`truncation`) is applied to `weight`, with a cap computed
+#' on its scale. `truncateMsmWeights` sets how the weights on the other scale are truncated:
 #'
-#' @param stabilized Stabilize the weights with a numerator model of time only? It does not change which
-#'                   weights the Cox and pooled logistic outcome models use (see details).
-#' @param truncation An object of type `WeightTruncation` as created using
-#'                   [createWeightTruncation()].
+#' - `TRUE` (the default): the same rule (type, `upper` and basis) is applied separately to the weights
+#'   on the other scale, with a cap computed on that scale from the untruncated weights on that scale.
+#'   So the weights of the Cox and pooled logistic models are capped on their own scale whatever
+#'   `stabilized` and `msmWeights` are. The two scales can truncate different segments.
+#' - `FALSE`: the weights on the other scale are formed from the truncated `weight` (divided or
+#'   multiplied by the segment's stabilization numerator), so the same segments are truncated on both
+#'   scales, but the cap does not bound the weights on the other scale: their cap on a day is the cap
+#'   divided (or multiplied) by that day's numerator. For a `"neverInitiate"` strategy the numerator is
+#'   the share of persons who have not initiated yet, which can be small at long horizons: in a
+#'   simulation with a 365-day horizon and the defaults otherwise, the 99th percentile cap was 5.7 and
+#'   the largest unstabilized weight of the `"neverInitiate"` strategy was 369. This was the behaviour
+#'   before `truncateMsmWeights` existed; settings saved without it load with `TRUE`.
+#'
+#' The argument sits here rather than in [createFitOutcomeModelArgs()] because the cap of a percentile
+#' rule is computed from the untruncated weights of all clones (and, with `basis = "varying"`, from
+#' which clones are under follow-up after the grace periods), which only [computeCensoringWeights()]
+#' has: the outcome models receive weights that are already truncated. [computeCensoringWeights()]
+#' reports the caps and the shares truncated on both scales, and [fitOutcomeModel()] reports the cap,
+#' the largest weight and the share truncated of the weights its Cox or pooled logistic model used.
+#' [computeWeightSummary()] summarizes both scales before and after truncation.
+#'
+#' @param stabilized         Stabilize the weights `weight` with a numerator model of time only? It
+#'                           does not change which weights the Cox and pooled logistic outcome models
+#'                           use (see details).
+#' @param truncation         An object of type `WeightTruncation` as created using
+#'                           [createWeightTruncation()].
+#' @param truncateMsmWeights Also apply the truncation rule to the weights on the other scale (the
+#'                           unstabilized weights when `stabilized = TRUE`), on their own scale? If
+#'                           `FALSE`, they are formed from the truncated weights (see details).
 #'
 #' @return
 #' An object of type `ComputeWeightsArgs`.
 #'
 #' @examples
 #' args <- createComputeWeightsArgs(stabilized = FALSE)
+#' args <- createComputeWeightsArgs(truncateMsmWeights = FALSE)
 #'
 #' @export
 createComputeWeightsArgs <- function(stabilized = TRUE,
-                                     truncation = createWeightTruncation()) {
+                                     truncation = createWeightTruncation(),
+                                     truncateMsmWeights = TRUE) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -837,10 +874,13 @@ ComputeWeightsArgs <- R6Class(
   public = list(
     stabilized = NULL,
     truncation = NULL,
+    # Default, so settings saved before this field existed load:
+    truncateMsmWeights = TRUE,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertFlag(self$stabilized, add = errorMessages)
       checkmate::assertR6(self$truncation, "WeightTruncation", add = errorMessages)
+      checkmate::assertFlag(self$truncateMsmWeights, add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
     },
     fromList = function(list, requireTyping) {
@@ -963,13 +1003,19 @@ BootstrapArgs <- R6Class(
 #' whose hazards are shared across strategies or days. `"stabilized"` reproduces the earlier
 #' behaviour, which fitted these models with the stabilized weights of [createComputeWeightsArgs()]
 #' `stabilized = TRUE`; its standard errors are usually smaller, but it estimates that other average.
+#' When the hazard ratio of the regimes is constant over follow-up (for example without a grace
+#' period, and with an effect that does not change over time), the numerators scale the events and the
+#' risk set of a strategy alike on each day, and both weights estimate the same hazard ratio; the
+#' stabilized one then usually has the smaller standard error.
 #'
-#' Truncation applies to the weights of [computeCensoringWeights()], on the scale set by
-#' [createComputeWeightsArgs()] `stabilized`, and the weights of `msmWeights` are formed from the
-#' truncated weights. When the two differ (as with the defaults: `stabilized = TRUE` and
-#' `msmWeights = "unstabilized"`), the cap does not bound the weights of the Cox and pooled logistic
-#' models, which can then be much larger, for example for a `"neverInitiate"` strategy at long
-#' horizons; see [createComputeWeightsArgs()].
+#' Truncation: with `truncateMsmWeights = TRUE` in [createComputeWeightsArgs()] (the default), the
+#' weights of `msmWeights` are truncated on their own scale with the rule of
+#' [createWeightTruncation()], whatever scale `stabilized` sets for the weights of
+#' [computeCensoringWeights()]. With `truncateMsmWeights = FALSE`, they are formed from the truncated
+#' weights of [computeCensoringWeights()]; when the two scales differ (as with `stabilized = TRUE` and
+#' `msmWeights = "unstabilized"`), the cap then does not bound them, and they can be much larger,
+#' for example for a `"neverInitiate"` strategy at long horizons; see [createComputeWeightsArgs()].
+#' [fitOutcomeModel()] reports the cap, largest weight and share truncated of the weights it used.
 #'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`

@@ -33,7 +33,10 @@ test_that("The saturated pooled logistic model reports the null first-interval o
     createTreatmentStrategy(1, "Initiate within 7", "initiateWithin", graceEnd = 7),
     createTreatmentStrategy(2, "Not within 7", "notInitiateWithin", graceEnd = 7)
   ))))
-  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))))
+  # The settings this test was written with (the defaults before contract section 12): with other
+  # censoring models the rounding noise of the null variance can be positive (about 1e-12), which
+  # .standardError() does not set to 0.
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"), postGraceModel = "binary", covariateTimeInteraction = "none")))
   basis <- createTimeBasis(type = "indicator", intervalLength = 1)
   weighted <- suppressMessages(computeCensoringWeights(clones, models, outcomeTimeBasis = basis))
   close(clones)

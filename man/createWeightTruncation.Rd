@@ -39,11 +39,14 @@ When few persons start the treatment by the end of a grace period, most clones o
 \code{"initiateWithin"} strategy keep a weight of 1, and a percentile over all clones lies inside the
 distribution of the weights that vary: it truncates far more than \code{1 - upper} of them.
 
-The cap is computed from, and bounds, the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, which are
-stabilized or not as set by \code{stabilized} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}. The weights of the Cox
-and pooled logistic outcome models (\code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}) are formed from
-these truncated weights and are not bounded by the cap when they are of the other kind; see
-\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
+The rule is applied on the scale of the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, stabilized or not as
+set by \code{stabilized} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}. With \code{truncateMsmWeights = TRUE} in
+\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (the default), the same rule (type, \code{upper} and basis) is also applied,
+separately, to the weights on the other scale, on their own scale: the percentile is then taken
+over the clones' maximum weights on that scale. So the weights of the Cox and pooled logistic
+outcome models (\code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}) are bounded by a cap of their own
+scale whichever scale they are on. With \code{truncateMsmWeights = FALSE}, the weights on the other scale
+are formed from the truncated weights and are not bounded by any cap.
 }
 \examples{
 truncation <- createWeightTruncation(type = "fixed", upper = 20)

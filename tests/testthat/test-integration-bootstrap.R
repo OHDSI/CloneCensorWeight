@@ -19,7 +19,8 @@ bootstrapSettings <- function(modelType = "km",
                               replicates = 3,
                               seed = 1,
                               ci = "percentile",
-                              fixHyperparameters = TRUE) {
+                              fixHyperparameters = TRUE,
+                              postGraceModel = "hazard") {
   return(list(
     createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowEnd = 15, endAnchor = "cohort start"),
     createClonesArgs = createCreateClonesArgs(
@@ -30,6 +31,7 @@ bootstrapSettings <- function(modelType = "km",
       competingEvents = "none"
     ),
     fitCensoringModelsArgs = createFitCensoringModelsArgs(
+      postGraceModel = postGraceModel,
       useCovariates = useCovariates,
       prior = prior,
       control = Cyclops::createControl(noiseLevel = "silent", cvType = "auto", seed = 1, resetCoefficients = TRUE, tolerance = 2e-07, cvRepetitions = 1, startingVariance = 0.01)
@@ -304,7 +306,8 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
     modelType = "km",
     useCovariates = TRUE,
     prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
-    replicates = 2
+    replicates = 2,
+    postGraceModel = "binary"
   )
   # The full-data censoring models, with variances chosen by cross-validation:
   population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = settings$createStudyPopulationArgs))

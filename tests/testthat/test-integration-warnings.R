@@ -83,7 +83,10 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
   afterGrace <- pooledAnalysis(riskStart = 9)
   on.exit(closeAnalysis(afterGrace), add = TRUE)
   expect_length(pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3)), 0)
-  expect_length(pooledWarnings(afterGrace, createTimeBasis("naturalSpline", intervalLength = 1, df = 3)), 0)
+  # (The odds ratio of this fit is not identified, no target outcome falling in its reference interval, and
+  # its variance can come out negative, with an "NaNs produced" warning, depending on the weights.)
+  warnings <- pooledWarnings(afterGrace, createTimeBasis("naturalSpline", intervalLength = 1, df = 3))
+  expect_false(any(grepl(gridWarning, warnings) | grepl(smoothWarning, warnings)))
 })
 
 test_that("The pooled logistic outcome model warns about a smooth time basis with a grace period", {

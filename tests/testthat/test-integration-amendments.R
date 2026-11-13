@@ -30,7 +30,9 @@ integrationAnalysis <- function(comparatorType = "neverInitiate",
     createTreatmentStrategy(2, "Comparator", comparatorType, graceEnd = if (comparatorType == "neverInitiate") NULL else graceEnd)
   )
   clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering)))
-  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))))
+  # The reference weights below have no covariate-by-time interactions (those are tested in
+  # test-m3-weights-timeInteraction.R):
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(covariateTimeInteraction = "none", prior = Cyclops::createPrior("none"))))
   return(list(data = data, clones = clones, models = models))
 }
 

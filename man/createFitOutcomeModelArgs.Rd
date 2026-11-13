@@ -125,13 +125,19 @@ of -0.513, the Cox model estimated a log hazard ratio of about -0.355 with stabi
 whose hazards are shared across strategies or days. \code{"stabilized"} reproduces the earlier
 behaviour, which fitted these models with the stabilized weights of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}
 \code{stabilized = TRUE}; its standard errors are usually smaller, but it estimates that other average.
+When the hazard ratio of the regimes is constant over follow-up (for example without a grace
+period, and with an effect that does not change over time), the numerators scale the events and the
+risk set of a strategy alike on each day, and both weights estimate the same hazard ratio; the
+stabilized one then usually has the smaller standard error.
 
-Truncation applies to the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, on the scale set by
-\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} \code{stabilized}, and the weights of \code{msmWeights} are formed from the
-truncated weights. When the two differ (as with the defaults: \code{stabilized = TRUE} and
-\code{msmWeights = "unstabilized"}), the cap does not bound the weights of the Cox and pooled logistic
-models, which can then be much larger, for example for a \code{"neverInitiate"} strategy at long
-horizons; see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
+Truncation: with \code{truncateMsmWeights = TRUE} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (the default), the
+weights of \code{msmWeights} are truncated on their own scale with the rule of
+\code{\link[=createWeightTruncation]{createWeightTruncation()}}, whatever scale \code{stabilized} sets for the weights of
+\code{\link[=computeCensoringWeights]{computeCensoringWeights()}}. With \code{truncateMsmWeights = FALSE}, they are formed from the truncated
+weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}; when the two scales differ (as with \code{stabilized = TRUE} and
+\code{msmWeights = "unstabilized"}), the cap then does not bound them, and they can be much larger,
+for example for a \code{"neverInitiate"} strategy at long horizons; see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
+\code{\link[=fitOutcomeModel]{fitOutcomeModel()}} reports the cap, largest weight and share truncated of the weights it used.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

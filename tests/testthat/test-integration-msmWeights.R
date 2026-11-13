@@ -21,7 +21,9 @@ msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eve
   )
   clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering)))
   models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(
-    hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel
+    hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel,
+    # The hand-computed references have no covariate-by-time interactions:
+    covariateTimeInteraction = "none"
   )))
   return(list(data = data, clones = clones, models = models))
 }
@@ -31,8 +33,10 @@ closeMsmAnalysis <- function(analysis) {
   close(analysis$data)
 }
 
-msmComputeWeightsArgs <- function(stabilized, truncation = createWeightTruncation("none")) {
-  return(createComputeWeightsArgs(stabilized = stabilized, truncation = truncation))
+# truncateMsmWeights = FALSE: these tests check the section 11.1 behaviour, which it reproduces (section
+# 12.2); TRUE is tested in test-integration-designChoices.R.
+msmComputeWeightsArgs <- function(stabilized, truncation = createWeightTruncation("none"), truncateMsmWeights = FALSE) {
+  return(createComputeWeightsArgs(stabilized = stabilized, truncation = truncation, truncateMsmWeights = truncateMsmWeights))
 }
 
 weightMsm <- function(analysis, computeWeightsArgs, outcomeTimeBasis = NULL) {
@@ -483,4 +487,10 @@ test_that("The cap bounds the weights of computeCensoringWeights, and the MSM we
       expect_true(all(unstabilized <= cap + 1e-12))
     }
   }
+  # With truncateMsmWeights = TRUE (contract section 12.2) the unstabilized MSM weights have a cap of their own:
+  weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE, truncation = truncation, truncateMsmWeights = TRUE))
+  outcomeData <- .withMsmWeights(.getOutcomeData(weighted), "unstabilized")
+  caps <- attr(weighted, "metaData")$weights$caps
+  close(weighted)
+  expect_true(all(outcomeData$segments$weight <= caps$otherScaleCap[outcomeData$segments$strategyId] + 1e-12))
 })
