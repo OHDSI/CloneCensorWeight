@@ -87,6 +87,13 @@ interval only one strategy enters) are \code{NA}, and so are the risks that need
 strategy.
 }
 
+The Cox and pooled logistic models, and their robust and model-based variances, use the weights
+chosen by \code{fitOutcomeModelArgs$msmWeights} (unstabilized by default; see
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} for why), formed from the segments' \code{weight} and
+\code{stabilizationNumerator} (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}). The Kaplan-Meier and Aalen-Johansen
+estimates (of \code{"km"}, and the rows at the horizons of \code{"cox"}) use \code{weight}; they are the same with
+either weight.
+
 Horizons are days since index and are read at \code{t = horizon - riskStart + 1}, so the risk includes
 events on the horizon day.
 

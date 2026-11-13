@@ -61,6 +61,13 @@
 #' - `"km"`: weighted Kaplan-Meier (no competing events) or Aalen-Johansen (competing death) per
 #'   strategy.
 #'
+#' The Cox and pooled logistic models, and their robust and model-based variances, use the weights
+#' chosen by `fitOutcomeModelArgs$msmWeights` (unstabilized by default; see
+#' [createFitOutcomeModelArgs()] for why), formed from the segments' `weight` and
+#' `stabilizationNumerator` (see [computeCensoringWeights()]). The Kaplan-Meier and Aalen-Johansen
+#' estimates (of `"km"`, and the rows at the horizons of `"cox"`) use `weight`; they are the same with
+#' either weight.
+#'
 #' Horizons are days since index and are read at `t = horizon - riskStart + 1`, so the risk includes
 #' events on the horizon day.
 #'
@@ -192,8 +199,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # not listed get count 0), with the same result as copying each person `count` times. `outcomeData`
 # (optional) is the output of .getOutcomeData(weightedClones), so that segments refitted many times are
 # collected only once (`weightedClones` is then not used). The variance estimator in
-# `fitOutcomeModelArgs` is ignored. Returns a list with `estimates` (a tibble with estimand, estimate
-# and logEstimate, in the same order as fitOutcomeModel()) and `coefficients`.
+# `fitOutcomeModelArgs` is ignored; its `msmWeights` is used, as in fitOutcomeModel(). Returns a list
+# with `estimates` (a tibble with estimand, estimate and logEstimate, in the same order as
+# fitOutcomeModel()) and `coefficients`.
 .fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL, outcomeData = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   if (is.null(outcomeData)) {
@@ -232,7 +240,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     stop("All clones must have the same riskStart")
   }
   segments <- weightedClones$segments |>
-    select("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "outcome", "competing") |>
+    select("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "outcome", "competing") |>
     collect()
   segments <- as.data.frame(segments[order(segments$cloneRowId, segments$startTime), ])
   segments$count <- rep(1, nrow(segments))
@@ -245,8 +253,24 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     riskStart = riskStart,
     competingEvents = metaData$competingEvents,
     strategies = metaData$strategies,
-    cutIntervalLength = metaData$weights$cutIntervalLength
+    cutIntervalLength = metaData$weights$cutIntervalLength,
+    stabilized = metaData$weights$stabilized
   ))
+}
+
+# The data with the segment weights of the Cox and pooled logistic MSMs (`msmWeights`, Phase1Contracts
+# section 11.1): the weights of computeCensoringWeights() when they are already of that kind, and
+# otherwise those weights divided (to unstabilize) or multiplied (to stabilize) by the segments'
+# stabilization numerators, so the same segments are truncated under both weights.
+.withMsmWeights <- function(data, msmWeights) {
+  stabilize <- msmWeights == "stabilized"
+  if (stabilize == data$stabilized) {
+    return(data)
+  }
+  numerator <- data$segments$stabilizationNumerator
+  data$segments$weight <- if (stabilize) data$segments$weight * numerator else data$segments$weight / numerator
+  data$stabilized <- stabilize
+  return(data)
 }
 
 # Frequency weights: multiplies each segment's weight by its person's count (data frame personSeqId,
@@ -318,15 +342,18 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     return(.fitKm(data, horizons, competing, computeVariance))
   }
   variance <- if (computeVariance) fitOutcomeModelArgs$varianceEstimator else "none"
+  # The MSMs use the weights chosen by msmWeights; the Kaplan-Meier and Aalen-Johansen estimates, which
+  # are the same with either weight, use the weights of computeCensoringWeights():
+  msmData <- .withMsmWeights(data, fitOutcomeModelArgs$msmWeights)
   if (fitOutcomeModelArgs$modelType == "cox") {
     # The hazard ratio of the Cox MSM, and the rows of "km" for the horizons (Phase1Contracts section
     # 10.5), with their IJ standard errors only under the robust variance:
-    model <- .fitCoxMsm(data, fitOutcomeModelArgs, variance)
+    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance)
     km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
     return(model)
   }
-  return(.fitLogisticMsm(data, fitOutcomeModelArgs, competing, variance))
+  return(.fitLogisticMsm(msmData, fitOutcomeModelArgs, competing, variance))
 }
 
 # Kaplan-Meier / Aalen-Johansen ------------------------------------------------------------------

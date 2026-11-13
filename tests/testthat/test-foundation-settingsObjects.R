@@ -201,12 +201,15 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expect_equal(defaults$timeBasis$toList()[c("type", "intervalLength", "df")], list(type = "naturalSpline", intervalLength = 1, df = 4))
   expect_equal(defaults$control[c("algorithm", "convergenceType", "tolerance")], list(algorithm = "newton", convergenceType = "gradient", tolerance = 1e-10))
   expect_equal(FitOutcomeModelArgs$new(json = defaults$toJson())$control$algorithm, "newton")
+  # Contract section 11.1: the MSMs use unstabilized weights by default.
+  expect_equal(defaults$msmWeights, "unstabilized")
   expectRoundTrip(
     createFitOutcomeModelArgs(
       modelType = "logistic",
       horizons = c(30, 180, 365),
       timeBasis = createTimeBasis(type = "naturalSpline", intervalLength = 7, df = 5),
       armByTimeInteraction = TRUE,
+      msmWeights = "stabilized",
       varianceEstimator = "bootstrap",
       bootstrapArgs = createBootstrapArgs(replicates = 100),
       prior = Cyclops::createPrior("laplace", variance = 0.5),
@@ -221,6 +224,8 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expect_error(createFitOutcomeModelArgs(horizons = c(30.5)), "horizons")
   expect_error(createFitOutcomeModelArgs(horizons = c(-1)), "horizons")
   expect_error(createFitOutcomeModelArgs(varianceEstimator = "jackknife"), "varianceEstimator")
+  expect_error(createFitOutcomeModelArgs(msmWeights = "truncated"), "msmWeights")
+  expect_error(createFitOutcomeModelArgs(msmWeights = TRUE), "msmWeights")
   expect_error(createFitOutcomeModelArgs(useCovariates = TRUE), "Not yet supported")
   expect_error(createFitOutcomeModelArgs(stratified = TRUE), "Not yet supported")
 })

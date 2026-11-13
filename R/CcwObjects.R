@@ -73,6 +73,7 @@ setClass("CcwClones", contains = "Andromeda")
   startTime = "numeric",
   stopTime = "numeric",
   weight = "numeric",
+  stabilizationNumerator = "numeric",
   outcome = "integer",
   competing = "integer"
 )

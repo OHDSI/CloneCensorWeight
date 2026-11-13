@@ -828,6 +828,25 @@ BootstrapArgs <- R6Class(
 #' the two strategies start to follow different treatments, and a smooth function of time cannot follow
 #' that change.
 #'
+#' The Cox and pooled logistic models are fitted with the weights chosen by `msmWeights`, whatever
+#' [createComputeWeightsArgs()] `stabilized` is ([computeCensoringWeights()] stores what is needed to
+#' form both). The default is the unstabilized weights. Under a grace period the stabilization
+#' numerators depend on the strategy and the day: after the grace period of an `"initiateWithin"`
+#' strategy the weight is multiplied by the share of persons who started by its end, and during the
+#' grace period of a strategy of not initiating by the share who have not initiated yet, which falls
+#' from day to day. Within a strategy, all clones at risk on a day share the numerator, so it cancels
+#' in the weighted Kaplan-Meier and Aalen-Johansen risks. It does not cancel in the Cox partial
+#' likelihood, which compares the clones of both strategies in each risk set: it changes how much each
+#' strategy, and each period of follow-up, counts. Because a grace period makes the hazards
+#' non-proportional (during the grace period the clones of both strategies follow the same course),
+#' the hazard ratio fitted with stabilized weights is then a different average over follow-up, not the
+#' hazard ratio of the regimes. In a simulation with a 7-day grace period and a regime log hazard ratio
+#' of -0.513, the Cox model estimated a log hazard ratio of about -0.355 with stabilized weights and
+#' -0.516 with unstabilized weights (means over replicates). The same holds for a pooled logistic model
+#' whose hazards are shared across strategies or days. `"stabilized"` reproduces the earlier
+#' behaviour, which fitted these models with the stabilized weights of [createComputeWeightsArgs()]
+#' `stabilized = TRUE`; its standard errors are usually smaller, but it estimates that other average.
+#'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
@@ -842,6 +861,10 @@ BootstrapArgs <- R6Class(
 #'                             often have the same weights and hazards, so it is close to 1), and at no
 #'                             particular interval for an orthogonal polynomial basis. It is not a
 #'                             summary of the effect over follow-up.
+#' @param msmWeights           The weights of the Cox and pooled logistic models: `"unstabilized"` or
+#'                             `"stabilized"` (see Details). The weighted Kaplan-Meier and
+#'                             Aalen-Johansen estimates (of `"km"`, and the rows at the horizons of
+#'                             `"cox"`) do not depend on it.
 #' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
 #'                             `"bootstrap"` (computed by [bootstrapCcwAnalysis()]), or `"modelBased"`.
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
@@ -869,6 +892,7 @@ createFitOutcomeModelArgs <- function(modelType = "cox",
                                                                   intervalLength = 1,
                                                                   df = 4),
                                       armByTimeInteraction = FALSE,
+                                      msmWeights = "unstabilized",
                                       varianceEstimator = "robust",
                                       bootstrapArgs = createBootstrapArgs(),
                                       useCovariates = FALSE,
@@ -893,6 +917,7 @@ FitOutcomeModelArgs <- R6Class(
     horizons = NULL,
     timeBasis = NULL,
     armByTimeInteraction = NULL,
+    msmWeights = NULL,
     varianceEstimator = NULL,
     bootstrapArgs = NULL,
     useCovariates = NULL,
@@ -905,6 +930,7 @@ FitOutcomeModelArgs <- R6Class(
       checkmate::assertIntegerish(self$horizons, lower = 0, min.len = 1, any.missing = FALSE, add = errorMessages)
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
       checkmate::assertFlag(self$armByTimeInteraction, add = errorMessages)
+      checkmate::assertChoice(self$msmWeights, c("unstabilized", "stabilized"), add = errorMessages)
       checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased"), add = errorMessages)
       checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
       checkmate::assertFlag(self$useCovariates, add = errorMessages)

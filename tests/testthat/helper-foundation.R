@@ -133,6 +133,7 @@ createFoundationSegments <- function(clones) {
     startTime = 0,
     stopTime = as.numeric(clones$survivalTime),
     weight = 1,
+    stabilizationNumerator = 1,
     outcome = clones$outcomeCount,
     competing = 0L
   )

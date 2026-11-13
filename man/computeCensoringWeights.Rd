@@ -31,8 +31,10 @@ metaData of \code{clones} and two more tables. \code{clones} itself is not chang
 weighted several times (for example with and without stabilization).
 \itemize{
 \item \code{segments}: \code{segmentId}, \code{cloneRowId}, \code{rowId}, \code{personSeqId}, \code{strategyId}, \code{startTime}
-(exclusive), \code{stopTime} (inclusive), \code{weight} (truncated), \code{outcome} and \code{competing} (1 only on the
-clone's last segment when it ends with the outcome or death).
+(exclusive), \code{stopTime} (inclusive), \code{weight} (truncated; stabilized when
+\code{computeWeightsArgs$stabilized}), \code{stabilizationNumerator} (the stabilized weight is the
+unstabilized one times it, see above), \code{outcome} and \code{competing} (1 only on the clone's last
+segment when it ends with the outcome or death).
 \item \code{personWeights}: \code{cloneRowId}, \code{strategyId}, \code{maxWeight} and \code{weightAtEnd}, the largest and the
 last segment weight of each clone with segments, before truncation.
 }
@@ -80,6 +82,15 @@ Kaplan-Meier and Aalen-Johansen estimates are the same with and without them.
 
 Weights are truncated per strategy: the cap is the \code{upper} percentile (\code{quantile} type 7) of the
 clones' maximum weight, or the fixed value.
+
+Every segment also stores its stabilization numerator (the quantity from the numerator model that
+stabilizes its weight), whether or not the weights are stabilized, so that the outcome models can
+use either weight (see \code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}): the other weight is \code{weight / stabilizationNumerator} (stabilized weights) or \code{weight * stabilizationNumerator} (unstabilized
+weights). Truncation applies to \code{weight}, and the other weight is formed from the truncated
+\code{weight}, so the same segments are truncated under both weights: the other weight's cap on a
+segment is the cap divided (or multiplied) by the segment's numerator. Within a strategy, the
+clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
+Aalen-Johansen estimates are the same with either weight.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:
