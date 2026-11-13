@@ -4,13 +4,16 @@
 \alias{createWeightTruncation}
 \title{Create a weight truncation rule}
 \usage{
-createWeightTruncation(type = "percentile", upper = 0.99)
+createWeightTruncation(type = "percentile", upper = 0.99, basis = "varying")
 }
 \arguments{
 \item{type}{The truncation rule: \code{"none"}, \code{"percentile"}, or \code{"fixed"}.}
 
 \item{upper}{For \code{"percentile"}, the percentile in (0, 1). For \code{"fixed"}, the cap (greater than 1).
 Ignored for \code{"none"}.}
+
+\item{basis}{For \code{"percentile"}, the clones over which the percentile is taken: \code{"varying"} or
+\code{"allClones"} (see details). Ignored for other types.}
 }
 \value{
 An object of type \code{WeightTruncation}.
@@ -19,10 +22,25 @@ An object of type \code{WeightTruncation}.
 Create a weight truncation rule
 }
 \details{
-Weights are truncated per strategy. With \code{type = "percentile"}, the cap is the \code{upper} percentile
-of the maximum weight over the clones of the strategy. With \code{type = "fixed"}, the cap is \code{upper}.
+Weights are truncated per strategy: every segment weight above the strategy's cap is set to the cap.
+With \code{type = "fixed"}, the cap is \code{upper}. With \code{type = "percentile"}, the cap is the \code{upper}
+percentile (\code{quantile} type 7) of the clones' maximum weights, taken over:
+\itemize{
+\item \code{basis = "varying"} (the default): the clones under follow-up on day \code{tau + 1} (or on their
+\code{riskStart}, if later), where \code{tau} is the largest \code{graceEnd} of the strategies. These are the
+clones whose weight varies. Clones censored during a grace period (for example the non-starters
+of an \code{"initiateWithin"} strategy, whose weight is 1 throughout) do not lower the cap. Without a
+grace period, or when no clone of a strategy is under follow-up on that day, all clones of the
+strategy are used.
+\item \code{basis = "allClones"}: all clones of the strategy.
+}
+
+When few persons start the treatment by the end of a grace period, most clones of an
+\code{"initiateWithin"} strategy keep a weight of 1, and a percentile over all clones lies inside the
+distribution of the weights that vary: it truncates far more than \code{1 - upper} of them.
 }
 \examples{
 truncation <- createWeightTruncation(type = "fixed", upper = 20)
+truncation <- createWeightTruncation(type = "percentile", upper = 0.99, basis = "allClones")
 
 }

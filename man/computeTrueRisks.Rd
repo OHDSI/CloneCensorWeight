@@ -76,6 +76,12 @@ Under DGP \code{"a"}, with G equal to the DGP's \code{graceEnd}, the two grace r
 Under DGP \code{"b"}, the binary-at-G regime moves the start of persons who would not start by G to
 earlier days, where the effect has had longer to build up.
 
+The start-day probabilities P(A = a | X) use the day-0 initiation hazard when the settings have
+day-0 initiation parameters. Under DGP \code{"a"}, the truths of strategies with G equal to the DGP's
+\code{graceEnd} (and of \code{neverInitiate}) do not depend on the initiation process at all, and those of
+strategies with G up to \code{graceEnd} do not depend on the day-0 parameters. Under DGP \code{"b"}, the
+\code{initiateWithin} truths depend on them under both grace regimes.
+
 With \code{riskStart = 0} the risks count outcomes from day 0 (the index date), the estimands of analyses
 with \code{riskStart = 0}. An analysis with \code{riskStart = r > 0} (with CohortMethod's default removal of
 persons with the outcome before \code{riskStart}, and with the clones of persons who die before

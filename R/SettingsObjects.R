@@ -539,15 +539,49 @@ TimeBasis <- R6Class(
 #' largest for `"neverInitiate"` strategies. For long horizons, prefer the pooled logistic model, with
 #' a longer `intervalLength` if daily intervals are too costly.
 #'
-#' `maxCohortSizeForFitting` applies only to the binary model at the end of the grace period of
-#' `"initiateWithin"` strategies (through [CohortMethod::createPs()]). In this version the hazard
-#' models are always fitted to their whole risk set.
+#' `maxCohortSizeForFitting` applies only to the binary models at the end of the grace period
+#' (through [CohortMethod::createPs()]). In this version the hazard models are always fitted to their
+#' whole risk set.
+#'
+#' **Weights of `"notInitiateWithin"` after the grace period.** With `postGraceModel = "binary"` (the
+#' default), the weight of a `"notInitiateWithin(G)"` clone after day `G` is `1 / (1 - pi(X))`, where
+#' `pi(X)` is the probability of starting by day `G` from the binary model at `G`, the same model the
+#' `"initiateWithin(G)"` strategy uses (the fit is shared when the analysis has such a strategy for the
+#' same treatment, and made otherwise). The initiation hazard model still gives the weights on days up
+#' to `G`, and all weights of `"neverInitiate"` strategies. The binary model is fitted on the persons
+#' under follow-up at `G`, so `1 - pi(X)` is the probability of not starting by `G` among persons with
+#' no outcome or death by `G`. It equals the probability `S(G | X)` of not initiating on days `0..G` of
+#' the hazard model when starting the treatment during the grace period does not change the risk of
+#' the outcome or death during the grace period. Unlike `S(G | X)`, it does not assume that the
+#' covariate effects on initiation are the same on every day of the grace period (with the default
+#' `covariateTimeInteraction = "none"`): when a covariate changes *when* persons start (for example
+#' on day 0 rather than later), `1 - S(G | X)` is miscalibrated and the weights `1 / S(G | X)` do not
+#' balance the covariates after `G`; see [computeCensoringModelCalibration()]. With
+#' `postGraceModel = "hazard"`, the weight after `G` is `1 / S(G | X)`.
+#'
+#' **Covariate-by-time interactions.** With `covariateTimeInteraction = "day0"`, the pooled logistic
+#' initiation hazard model also has, for each covariate, its product with an indicator of the first
+#' interval of the time basis (day 0 with the default daily intervals), so the covariates can change
+#' initiation on day 0 differently from later days. With `"interval"`, it has each covariate's product
+#' with each time-basis column (with the indicator basis: with the indicator of each interval except
+#' the reference), so the covariate effects can differ in every interval. The interaction columns are
+#' penalized by the prior like the covariates; the time-basis columns are never penalized. The Cox
+#' model has no interactions.
 #'
 #' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
 #'                                 `"cox"` (see details for its ties caveat).
 #' @param timeBasis                An object of type `TimeBasis` as created using
 #'                                 [createTimeBasis()], used by the pooled logistic model. The default
 #'                                 is a daily indicator basis.
+#' @param covariateTimeInteraction Covariate-by-time interactions in the pooled logistic initiation
+#'                                 hazard model: `"none"`, `"day0"` (each covariate times an indicator
+#'                                 of the first interval, day 0 with daily intervals), or `"interval"`
+#'                                 (each covariate times each time-basis column). See details. Must be
+#'                                 `"none"` with `hazardModelType = "cox"`.
+#' @param postGraceModel           The model that gives the weights of `"notInitiateWithin"` strategies
+#'                                 after the grace period: `"binary"` (`1 / (1 - pi(X))` from the
+#'                                 binary model at the end of the grace period) or `"hazard"`
+#'                                 (`1 / S(G | X)` from the initiation hazard model). See details.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
 #'                                 `"artificial"` (deviation from a strategy). Censoring at the end of
 #'                                 observation is not weighted, so it is assumed to be independent of
@@ -577,6 +611,8 @@ TimeBasis <- R6Class(
 #' @export
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
+                                         covariateTimeInteraction = "none",
+                                         postGraceModel = "binary",
                                          censoringMechanisms = "artificial",
                                          useCovariates = TRUE,
                                          excludeCovariateIds = c(),
@@ -607,6 +643,9 @@ FitCensoringModelsArgs <- R6Class(
   public = list(
     hazardModelType = NULL,
     timeBasis = NULL,
+    # Defaults, so settings saved before these fields existed load:
+    covariateTimeInteraction = "none",
+    postGraceModel = "binary",
     censoringMechanisms = NULL,
     useCovariates = NULL,
     excludeCovariateIds = NULL,
@@ -620,6 +659,11 @@ FitCensoringModelsArgs <- R6Class(
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertChoice(self$hazardModelType, c("cox", "logistic"), add = errorMessages)
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
+      checkmate::assertChoice(self$covariateTimeInteraction, c("none", "day0", "interval"), add = errorMessages)
+      checkmate::assertChoice(self$postGraceModel, c("binary", "hazard"), add = errorMessages)
+      if (identical(self$hazardModelType, "cox") && !identical(self$covariateTimeInteraction, "none")) {
+        errorMessages$push("covariateTimeInteraction must be \"none\" with hazardModelType = \"cox\": covariate-by-time interactions are available only in the pooled logistic initiation hazard model (hazardModelType = \"logistic\")")
+      }
       checkmate::assertCharacter(self$censoringMechanisms, min.len = 1, add = errorMessages)
       checkmate::assertSubset(self$censoringMechanisms, "artificial", add = errorMessages)
       checkmate::assertFlag(self$useCovariates, add = errorMessages)
@@ -648,22 +692,39 @@ FitCensoringModelsArgs <- R6Class(
 #' Create a weight truncation rule
 #'
 #' @details
-#' Weights are truncated per strategy. With `type = "percentile"`, the cap is the `upper` percentile
-#' of the maximum weight over the clones of the strategy. With `type = "fixed"`, the cap is `upper`.
+#' Weights are truncated per strategy: every segment weight above the strategy's cap is set to the cap.
+#' With `type = "fixed"`, the cap is `upper`. With `type = "percentile"`, the cap is the `upper`
+#' percentile (`quantile` type 7) of the clones' maximum weights, taken over:
+#'
+#' - `basis = "varying"` (the default): the clones under follow-up on day `tau + 1` (or on their
+#'   `riskStart`, if later), where `tau` is the largest `graceEnd` of the strategies. These are the
+#'   clones whose weight varies. Clones censored during a grace period (for example the non-starters
+#'   of an `"initiateWithin"` strategy, whose weight is 1 throughout) do not lower the cap. Without a
+#'   grace period, or when no clone of a strategy is under follow-up on that day, all clones of the
+#'   strategy are used.
+#' - `basis = "allClones"`: all clones of the strategy.
+#'
+#' When few persons start the treatment by the end of a grace period, most clones of an
+#' `"initiateWithin"` strategy keep a weight of 1, and a percentile over all clones lies inside the
+#' distribution of the weights that vary: it truncates far more than `1 - upper` of them.
 #'
 #' @param type  The truncation rule: `"none"`, `"percentile"`, or `"fixed"`.
 #' @param upper For `"percentile"`, the percentile in (0, 1). For `"fixed"`, the cap (greater than 1).
 #'              Ignored for `"none"`.
+#' @param basis For `"percentile"`, the clones over which the percentile is taken: `"varying"` or
+#'              `"allClones"` (see details). Ignored for other types.
 #'
 #' @return
 #' An object of type `WeightTruncation`.
 #'
 #' @examples
 #' truncation <- createWeightTruncation(type = "fixed", upper = 20)
+#' truncation <- createWeightTruncation(type = "percentile", upper = 0.99, basis = "allClones")
 #'
 #' @export
 createWeightTruncation <- function(type = "percentile",
-                                   upper = 0.99) {
+                                   upper = 0.99,
+                                   basis = "varying") {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -677,10 +738,13 @@ WeightTruncation <- R6Class(
   public = list(
     type = NULL,
     upper = NULL,
+    # Default, so settings saved before this field existed load:
+    basis = "varying",
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertChoice(self$type, c("none", "percentile", "fixed"), add = errorMessages)
       checkmate::assertNumber(self$upper, null.ok = TRUE, add = errorMessages)
+      checkmate::assertChoice(self$basis, c("varying", "allClones"), add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
       if (self$type == "percentile" && (is.null(self$upper) || self$upper <= 0 || self$upper >= 1)) {
         stop("For percentile truncation, upper must be in (0, 1)")

@@ -39,9 +39,11 @@ segment when it ends with the outcome or death).
 last segment weight of each clone with segments, before truncation.
 }
 
-\code{metaData$weights} holds whether the weights are stabilized, the truncation rule, the cap used per
-strategy, a summary of the untruncated weights, and \code{cutIntervalLength}, the interval length of the
-\code{outcomeTimeBasis} grid the clones are split on (\code{NA} without one).
+\code{metaData$weights} holds whether the weights are stabilized, the truncation rule, \code{caps} (a tibble
+with, per strategy, the \code{cap} used, \code{NA} without truncation, and \code{truncatedShare}, the share of the
+strategy's segments whose weight was truncated), a summary of the untruncated weights, and
+\code{cutIntervalLength}, the interval length of the \code{outcomeTimeBasis} grid the clones are split on
+(\code{NA} without one).
 }
 \description{
 Computes the inverse probability of censoring weights of every clone from the censoring models, and
@@ -52,16 +54,22 @@ Let \code{W(d)} be the weight on day \code{d} (days since index). With \code{sam
 \itemize{
 \item \code{"initiateWithin"} (grace period ending on day \code{G}): \code{W(d) = 1} for \code{d <= G} and \code{1 / pi(X)} for
 \code{d > G}, where \code{pi(X)} is the probability of starting by \code{G} from the binary model.
-\item \code{"notInitiateWithin"}: \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= G} (with \code{S(-1) = 1}) and
-\code{1 / S(G | X)} for \code{d > G}, where \code{S(d | X)} is the probability of not initiating on days \verb{0..d}.
+\item \code{"notInitiateWithin"}: \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= G} (with \code{S(-1) = 1}), where
+\code{S(d | X)} is the probability of not initiating on days \verb{0..d} from the initiation hazard model.
+For \code{d > G}, \code{W(d) = 1 / (1 - pi(X))}, with \code{pi(X)} from the binary model at \code{G}, when the models
+were fit with \code{postGraceModel = "binary"} (the default), and \code{1 / S(G | X)} with
+\code{postGraceModel = "hazard"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} for the assumption that makes
+the two agree).
 \item \code{"neverInitiate"}: \code{W(d) = 1 / S(d - 1 | X)}.
 }
 
 With \code{"deviationFirst"}, \code{S(d | X)} is used in place of \code{S(d - 1 | X)}, and the \code{"initiateWithin"}
-weight is \code{1 / pi(X)} from day \code{G} on. A clone that deviates on day \code{d} then does so before any
-outcome on that day, so it is not at risk of the outcome on day \code{d}: its segments end on day
+weight is \code{1 / pi(X)} from day \code{G} on (and the \code{"notInitiateWithin"} weight \code{1 / (1 - pi(X))} from
+day \code{G} on, with \code{postGraceModel = "binary"}). A clone that deviates on day \code{d} then does so before
+any outcome on that day, so it is not at risk of the outcome on day \code{d}: its segments end on day
 \code{d - 1}, and a clone that deviates on its first day of follow-up has no segments. Stabilized
-weights multiply by the same quantity from the numerator model without covariates.
+weights multiply by the same quantity from the numerator model without covariates (the marginal
+\code{pi-bar} of the binary model in place of \code{pi(X)}, also in \code{1 - pi(X)}).
 
 Each clone's follow-up is split, on the survival time scale \code{t = day - riskStart + 1}, at the end of
 day \code{G} (day \code{G - 1} with \code{"deviationFirst"}) for \code{"initiateWithin"}, and, for the hazard
@@ -80,8 +88,11 @@ day in that interval, as the pooled logistic outcome model requires. With daily 
 segment is one day long. These extra splits do not change any weight at an event time, so the Cox,
 Kaplan-Meier and Aalen-Johansen estimates are the same with and without them.
 
-Weights are truncated per strategy: the cap is the \code{upper} percentile (\code{quantile} type 7) of the
-clones' maximum weight, or the fixed value.
+Weights are truncated per strategy: each segment weight above the cap is set to the cap. The cap
+is the fixed value, or the \code{upper} percentile (\code{quantile} type 7) of the clones' maximum weights,
+taken over the clones under follow-up on day \code{tau + 1} (or \code{riskStart}, if later), whose weight
+varies, with \code{basis = "varying"}, or over all clones of the strategy with \code{basis = "allClones"} (see
+\code{\link[=createWeightTruncation]{createWeightTruncation()}}).
 
 Every segment also stores its stabilization numerator (the quantity from the numerator model that
 stabilizes its weight), whether or not the weights are stabilized, so that the outcome models can

@@ -173,6 +173,47 @@ test_that("FitCensoringModelsArgs round trip and validation", {
   expect_error(createFitCensoringModelsArgs(control = list()), "cyclopsControl")
 })
 
+test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (contract section 11.2-11.3)", {
+  defaults <- createFitCensoringModelsArgs()
+  expect_equal(defaults$postGraceModel, "binary")
+  expect_equal(defaults$covariateTimeInteraction, "none")
+  for (covariateTimeInteraction in c("none", "day0", "interval")) {
+    for (postGraceModel in c("binary", "hazard")) {
+      expectRoundTrip(
+        createFitCensoringModelsArgs(covariateTimeInteraction = covariateTimeInteraction, postGraceModel = postGraceModel),
+        FitCensoringModelsArgs
+      )
+    }
+  }
+  expectRoundTrip(createFitCensoringModelsArgs(hazardModelType = "cox", postGraceModel = "hazard"), FitCensoringModelsArgs)
+  expect_error(createFitCensoringModelsArgs(postGraceModel = "logistic"), "postGraceModel")
+  expect_error(createFitCensoringModelsArgs(covariateTimeInteraction = "week1"), "covariateTimeInteraction")
+  for (covariateTimeInteraction in c("day0", "interval")) {
+    expect_error(
+      createFitCensoringModelsArgs(hazardModelType = "cox", covariateTimeInteraction = covariateTimeInteraction),
+      "covariateTimeInteraction must be \"none\""
+    )
+  }
+  # Settings saved before these fields existed load with the defaults:
+  untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(postGraceModel = "hazard")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$postGraceModel <- NULL
+  untypedList$covariateTimeInteraction <- NULL
+  old <- FitCensoringModelsArgs$new(untypedList = untypedList)
+  expect_equal(old$postGraceModel, "binary")
+  expect_equal(old$covariateTimeInteraction, "none")
+})
+
+test_that("WeightTruncation basis (contract section 11.5)", {
+  expect_equal(createWeightTruncation()$basis, "varying")
+  expectRoundTrip(createWeightTruncation(basis = "allClones"), WeightTruncation)
+  expectRoundTrip(createWeightTruncation(type = "percentile", upper = 0.95, basis = "varying"), WeightTruncation)
+  expectRoundTrip(createComputeWeightsArgs(truncation = createWeightTruncation(basis = "allClones")), ComputeWeightsArgs)
+  expect_error(createWeightTruncation(basis = "all"), "basis")
+  untypedList <- jsonlite::fromJSON(createWeightTruncation(basis = "allClones")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$basis <- NULL
+  expect_equal(WeightTruncation$new(untypedList = untypedList)$basis, "varying")
+})
+
 test_that("WeightTruncation and ComputeWeightsArgs round trip and validation", {
   expectRoundTrip(createWeightTruncation(), WeightTruncation)
   expectRoundTrip(createWeightTruncation(type = "fixed", upper = 20), WeightTruncation)

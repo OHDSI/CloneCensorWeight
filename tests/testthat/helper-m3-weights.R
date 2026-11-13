@@ -174,11 +174,14 @@ m3Strategies <- function(first = "initiateWithin", second = "notInitiateWithin",
   return(list(make(1, first), make(2, second)))
 }
 
-# Unpenalized fits with tight convergence, as plan section 6.4 requires for exact comparisons.
-m3Args <- function(hazardModelType = "cox", useCovariates = TRUE, timeBasis = createTimeBasis(), prior = Cyclops::createPrior("none")) {
+# Unpenalized fits with tight convergence, as plan section 6.4 requires for exact comparisons. The M3
+# references give notInitiateWithin clones W = 1 / S(G | X) after G (postGraceModel = "hazard"); the
+# binary post-grace weights (contract section 11.2) are tested in test-m3-weights-postGrace.R.
+m3Args <- function(hazardModelType = "cox", useCovariates = TRUE, timeBasis = createTimeBasis(), prior = Cyclops::createPrior("none"), postGraceModel = "hazard") {
   return(createFitCensoringModelsArgs(
     hazardModelType = hazardModelType,
     timeBasis = timeBasis,
+    postGraceModel = postGraceModel,
     useCovariates = useCovariates,
     errorOnHighCorrelation = FALSE,
     prior = prior,

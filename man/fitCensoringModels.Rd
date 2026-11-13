@@ -21,9 +21,11 @@ covariates of the persons in \code{clones}.}
 \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}.}
 
 \item{.fixedPriorVariances}{For internal use (the bootstrap): \code{NULL}, or a list named by
-\code{strategyId} (\code{"1"}, \code{"2"}) of prior variances. For a strategy in the
-list, its covariate model is fit with that prior variance and without
-cross-validation.}
+\code{strategyId} (\code{"1"}, \code{"2"}) of prior variances, and by
+\code{"<strategyId>.postGrace"} for the binary model of a
+\code{"notInitiateWithin"} strategy's weights after the grace period. For a
+model in the list, its covariate model is fit with that prior variance
+and without cross-validation.}
 }
 \value{
 An object of class \code{CcwCensoringModels}: a list with one element per strategy (in strategy order),
@@ -31,19 +33,29 @@ each a list with
 \itemize{
 \item \code{strategyId}, \code{type}, \code{treatment}, \code{kind} (\code{"binary"} or \code{"hazard"}), \code{modelType} (\code{"binary"},
 \code{"cox"} or \code{"logistic"}), and \code{horizon} (\code{G}, or the largest \code{riskEnd} for \code{"neverInitiate"}).
-\item \code{coefficients} (named by covariate ID; \code{"(Intercept)"} and the time-basis columns for the logistic
-model) and \code{priorVariance} (\code{NA} without a prior).
+\item \code{coefficients} (named by covariate ID; \code{"(Intercept)"}, the time-basis columns and the
+interactions, named \code{"<covariateId>:<column>"}, for the logistic model) and \code{priorVariance} (\code{NA}
+without a prior).
 \item \code{predictions}: a tibble with \code{rowId} and \code{propensityScore} (binary) or \code{linearPredictor} (the
 covariate part of the linear predictor, hazard models) for every person in the risk set.
 \item For Cox: \code{baselineHazard}, a tibble \verb{time, cumHazard} (Breslow, at the initiation times, on the
 scale time = day + 1). For logistic: \code{timeBasis} (the settings, interval length, number of
-intervals, the basis matrix, and the intervals with a hazard of 0 or 1) and \code{intervals}, a tibble
+intervals, the basis matrix, and the intervals with a hazard of 0 or 1), \code{intervals}, a tibble
 \verb{k, startDay, endDay, baseline} with the intercept plus time-basis part of the linear predictor of
-each interval (\code{-Inf} or \code{Inf} for a hazard of 0 or 1).
+each interval (\code{-Inf} or \code{Inf} for a hazard of 0 or 1), and \code{interactions}: the
+\code{covariateTimeInteraction} setting (\code{type}), the interaction \code{basis} (a matrix with one row per
+interval and one column per interaction column, which multiplies every covariate), and
+\code{predictions}, a tibble \verb{rowId, columnIndex, value} with the covariate part of each interaction
+column's coefficients per person (non-zero values only). The linear predictor of a person in
+interval \code{k} is \code{baseline + linearPredictor + sum(basis[k, ] * value)}.
 \item \code{numerator}: the model without covariates (\code{propensityScore}; \code{baselineHazard}; or
 \code{coefficients} and \code{intervals}).
 \item \code{diagnostics}: risk-set size, number of rows, events (initiations or starts by \code{G}), the AUC
 (binary models), and the fitting status.
+\item \code{postGrace} (\code{"notInitiateWithin"} strategies with \code{postGraceModel = "binary"} only): the binary
+model at \code{G} whose \code{1 - propensityScore} gives the weights after \code{G}, a list with the elements of
+a binary model above (\code{kind}, \code{horizon}, \code{modelType}, \code{coefficients}, \code{priorVariance},
+\code{predictions}, \code{numerator}, \code{diagnostics}).
 }
 
 The \code{metaData} attribute holds the outcome ID, same-day ordering, competing events, strategies and
@@ -73,6 +85,12 @@ covariates; \code{S(d | X)} is the product of \code{1 - h} over the intervals en
 With the indicator basis, an interval without initiations gets a hazard of 0, and an interval in
 which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 of these intervals are left out of the fit, and the first remaining interval is the reference.
+With \code{covariateTimeInteraction = "day0"} or \code{"interval"}, the pooled logistic model also has the
+products of the covariates with an indicator of the first interval, or with each time-basis
+column, penalized like the covariates (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\item \code{"notInitiateWithin"} with \code{postGraceModel = "binary"} (the default): also the binary model at \code{G}
+of an \code{"initiateWithin(G)"} strategy of the same treatment (shared with such a strategy when the
+analysis has one), which gives the weights after \code{G} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 }
 
 Hazard models are fit per strategy horizon, and a fit is shared only between strategies with the

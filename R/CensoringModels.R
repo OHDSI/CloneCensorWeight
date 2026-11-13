@@ -40,6 +40,12 @@
 #'   With the indicator basis, an interval without initiations gets a hazard of 0, and an interval in
 #'   which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 #'   of these intervals are left out of the fit, and the first remaining interval is the reference.
+#'   With `covariateTimeInteraction = "day0"` or `"interval"`, the pooled logistic model also has the
+#'   products of the covariates with an indicator of the first interval, or with each time-basis
+#'   column, penalized like the covariates (see [createFitCensoringModelsArgs()]).
+#' - `"notInitiateWithin"` with `postGraceModel = "binary"` (the default): also the binary model at `G`
+#'   of an `"initiateWithin(G)"` strategy of the same treatment (shared with such a strategy when the
+#'   analysis has one), which gives the weights after `G` (see [createFitCensoringModelsArgs()]).
 #'
 #' Hazard models are fit per strategy horizon, and a fit is shared only between strategies with the
 #' same type, treatment and horizon. Each model also has a numerator model without covariates, fit on
@@ -71,9 +77,11 @@
 #' @param fitCensoringModelsArgs An object of type `FitCensoringModelsArgs` as created using
 #'                               [createFitCensoringModelsArgs()].
 #' @param .fixedPriorVariances   For internal use (the bootstrap): `NULL`, or a list named by
-#'                               `strategyId` (`"1"`, `"2"`) of prior variances. For a strategy in the
-#'                               list, its covariate model is fit with that prior variance and without
-#'                               cross-validation.
+#'                               `strategyId` (`"1"`, `"2"`) of prior variances, and by
+#'                               `"<strategyId>.postGrace"` for the binary model of a
+#'                               `"notInitiateWithin"` strategy's weights after the grace period. For a
+#'                               model in the list, its covariate model is fit with that prior variance
+#'                               and without cross-validation.
 #'
 #' @return
 #' An object of class `CcwCensoringModels`: a list with one element per strategy (in strategy order),
@@ -81,19 +89,29 @@
 #'
 #' - `strategyId`, `type`, `treatment`, `kind` (`"binary"` or `"hazard"`), `modelType` (`"binary"`,
 #'   `"cox"` or `"logistic"`), and `horizon` (`G`, or the largest `riskEnd` for `"neverInitiate"`).
-#' - `coefficients` (named by covariate ID; `"(Intercept)"` and the time-basis columns for the logistic
-#'   model) and `priorVariance` (`NA` without a prior).
+#' - `coefficients` (named by covariate ID; `"(Intercept)"`, the time-basis columns and the
+#'   interactions, named `"<covariateId>:<column>"`, for the logistic model) and `priorVariance` (`NA`
+#'   without a prior).
 #' - `predictions`: a tibble with `rowId` and `propensityScore` (binary) or `linearPredictor` (the
 #'   covariate part of the linear predictor, hazard models) for every person in the risk set.
 #' - For Cox: `baselineHazard`, a tibble `time, cumHazard` (Breslow, at the initiation times, on the
 #'   scale time = day + 1). For logistic: `timeBasis` (the settings, interval length, number of
-#'   intervals, the basis matrix, and the intervals with a hazard of 0 or 1) and `intervals`, a tibble
+#'   intervals, the basis matrix, and the intervals with a hazard of 0 or 1), `intervals`, a tibble
 #'   `k, startDay, endDay, baseline` with the intercept plus time-basis part of the linear predictor of
-#'   each interval (`-Inf` or `Inf` for a hazard of 0 or 1).
+#'   each interval (`-Inf` or `Inf` for a hazard of 0 or 1), and `interactions`: the
+#'   `covariateTimeInteraction` setting (`type`), the interaction `basis` (a matrix with one row per
+#'   interval and one column per interaction column, which multiplies every covariate), and
+#'   `predictions`, a tibble `rowId, columnIndex, value` with the covariate part of each interaction
+#'   column's coefficients per person (non-zero values only). The linear predictor of a person in
+#'   interval `k` is `baseline + linearPredictor + sum(basis[k, ] * value)`.
 #' - `numerator`: the model without covariates (`propensityScore`; `baselineHazard`; or
 #'   `coefficients` and `intervals`).
 #' - `diagnostics`: risk-set size, number of rows, events (initiations or starts by `G`), the AUC
 #'   (binary models), and the fitting status.
+#' - `postGrace` (`"notInitiateWithin"` strategies with `postGraceModel = "binary"` only): the binary
+#'   model at `G` whose `1 - propensityScore` gives the weights after `G`, a list with the elements of
+#'   a binary model above (`kind`, `horizon`, `modelType`, `coefficients`, `priorVariance`,
+#'   `predictions`, `numerator`, `diagnostics`).
 #'
 #' The `metaData` attribute holds the outcome ID, same-day ordering, competing events, strategies and
 #' the settings.
@@ -122,7 +140,7 @@ fitCensoringModels <- function(clones,
   checkmate::assertR6(fitCensoringModelsArgs, "FitCensoringModelsArgs", add = errorMessages)
   checkmate::assertList(.fixedPriorVariances, types = "numeric", null.ok = TRUE, add = errorMessages)
   if (!is.null(.fixedPriorVariances)) {
-    checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2"), empty.ok = FALSE, add = errorMessages)
+    checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2", "1.postGrace", "2.postGrace"), empty.ok = FALSE, add = errorMessages)
   }
   checkmate::reportAssertions(collection = errorMessages)
 
@@ -140,6 +158,35 @@ fitCensoringModels <- function(clones,
 
   models <- list()
   fitted <- list()
+  # Fits a model, or reuses the fit of an earlier strategy with the same key. The binary model at G has
+  # the key of an initiateWithin(G) strategy, so the binary model that gives a notInitiateWithin(G)
+  # strategy's weights after G is shared with an initiateWithin(G) strategy of the same treatment: their
+  # risk sets are the same (both use the analysis' sameDayOrdering).
+  fitModel <- function(kind, treatment, horizon, fixedVariance, description) {
+    treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
+    prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
+    message("Fitting ", description)
+    # Errors (for example CohortMethod::createPs()'s high-correlation check, which speaks of the
+    # "treatment") name the model that failed:
+    model <- tryCatch(
+      {
+        if (kind == "binary") {
+          riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+          .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+        } else {
+          riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+          if (fitCensoringModelsArgs$hazardModelType == "cox") {
+            .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+          } else {
+            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+          }
+        }
+      },
+      error = function(e) stop(sprintf("Fitting the %s failed: %s", description, conditionMessage(e)), call. = FALSE)
+    )
+    return(c(list(kind = kind, horizon = horizon), model))
+  }
+  varianceKey <- function(fixedVariance) if (is.null(fixedVariance)) "cv" else fixedVariance
   for (strategyId in seq_along(strategies)) {
     strategy <- strategies[[strategyId]]
     if (strategy$type == "initiateWithin") {
@@ -150,47 +197,38 @@ fitCensoringModels <- function(clones,
       horizon <- if (strategy$type == "neverInitiate") as.integer(maxRiskEnd) else as.integer(strategy$graceEnd)
     }
     fixedVariance <- .fixedPriorVariances[[as.character(strategyId)]]
-    key <- paste(strategy$type, strategy$treatment, horizon, if (is.null(fixedVariance)) "cv" else fixedVariance)
+    key <- paste(strategy$type, strategy$treatment, horizon, varianceKey(fixedVariance))
+    if (kind == "binary") {
+      description <- sprintf("binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label)
+    } else {
+      description <- sprintf(
+        "%s initiation hazard model through day %d for strategy %d (%s)",
+        fitCensoringModelsArgs$hazardModelType, horizon, strategyId, strategy$label
+      )
+    }
     if (key %in% names(fitted)) {
       message(sprintf("Strategy %d shares the censoring model of an earlier strategy", strategyId))
-      model <- fitted[[key]]
     } else {
-      treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
-      prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
-      if (kind == "binary") {
-        description <- sprintf("binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label)
-      } else {
-        description <- sprintf(
-          "%s initiation hazard model through day %d for strategy %d (%s)",
-          fitCensoringModelsArgs$hazardModelType, horizon, strategyId, strategy$label
-        )
-      }
-      message("Fitting ", description)
-      # Errors (for example CohortMethod::createPs()'s high-correlation check, which speaks of the
-      # "treatment") name the model that failed:
-      model <- tryCatch(
-        {
-          if (kind == "binary") {
-            riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
-            .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
-          } else {
-            riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
-            if (fitCensoringModelsArgs$hazardModelType == "cox") {
-              .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
-            } else {
-              .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior)
-            }
-          }
-        },
-        error = function(e) stop(sprintf("Fitting the %s failed: %s", description, conditionMessage(e)), call. = FALSE)
-      )
-      model <- c(list(kind = kind, horizon = horizon), model)
-      fitted[[key]] <- model
+      fitted[[key]] <- fitModel(kind, strategy$treatment, horizon, fixedVariance, description)
     }
     models[[strategyId]] <- c(
       list(strategyId = strategyId, type = strategy$type, treatment = strategy$treatment),
-      model
+      fitted[[key]]
     )
+    if (strategy$type == "notInitiateWithin" && fitCensoringModelsArgs$postGraceModel == "binary") {
+      fixedVariance <- .fixedPriorVariances[[paste0(strategyId, ".postGrace")]]
+      key <- paste("initiateWithin", strategy$treatment, horizon, varianceKey(fixedVariance))
+      if (key %in% names(fitted)) {
+        message(sprintf("Strategy %d shares the binary model at day %d of an earlier strategy for its weights after the grace period", strategyId, horizon))
+      } else {
+        description <- sprintf(
+          "binary censoring model at day %d for the weights after the grace period of strategy %d (%s)",
+          horizon, strategyId, strategy$label
+        )
+        fitted[[key]] <- fitModel("binary", strategy$treatment, horizon, fixedVariance, description)
+      }
+      models[[strategyId]]$postGrace <- fitted[[key]]
+    }
   }
   attr(models, "metaData") <- list(
     outcomeId = metaData$outcomeId,
@@ -567,6 +605,25 @@ fitCensoringModels <- function(clones,
   covariateIds <- covariateData$covariates |>
     dplyr::distinct(.data$covariateId) |>
     pull()
+  # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
+  interactionBasis <- .createInteractionBasis(
+    fitCensoringModelsArgs$covariateTimeInteraction,
+    basis,
+    k,
+    rowIntervals = fitIntervals[fitIntervals <= max(c(-1L, riskSet$lastInterval))]
+  )
+  interactionRef <- tibble(
+    covariateId = rep(as.numeric(covariateIds), ncol(interactionBasis)),
+    columnIndex = rep(seq_len(ncol(interactionBasis)), each = length(covariateIds))
+  )
+  interactionRef$interactionId <- -(ncol(basis) + seq_len(nrow(interactionRef)))
+  covariateData$interactionRef <- interactionRef
+  covariateData$interactionBasis <- tibble(
+    k = rep(k, ncol(interactionBasis)),
+    columnIndex = rep(seq_len(ncol(interactionBasis)), each = nIntervals),
+    zValue = as.vector(interactionBasis)
+  ) |>
+    filter(.data$zValue != 0)
   covariateData$riskSet <- riskSet |>
     select("rowId", "lastInterval", "y")
   covariateData$intervals <- tibble(k = fitIntervals)
@@ -607,7 +664,19 @@ fitCensoringModels <- function(clones,
       ON hazardRows.personRowId = covariates.rowId
     UNION ALL
     SELECT rowId, covariateId, covariateValue
-    FROM hazardBasis;")
+    FROM hazardBasis
+    UNION ALL
+    SELECT hazardRows.rowId,
+      interactionRef.interactionId AS covariateId,
+      covariates.covariateValue * interactionBasis.zValue AS covariateValue
+    FROM hazardRows
+    INNER JOIN interactionBasis
+      ON hazardRows.k = interactionBasis.k
+    INNER JOIN covariates
+      ON hazardRows.personRowId = covariates.rowId
+    INNER JOIN interactionRef
+      ON covariates.covariateId = interactionRef.covariateId
+        AND interactionBasis.columnIndex = interactionRef.columnIndex;")
   nRows <- covariateData$hazardRows |>
     count() |>
     pull()
@@ -646,10 +715,12 @@ fitCensoringModels <- function(clones,
   priorVariance <- NA_real_
   error <- "OK"
   linearPredictor <- rep(0, nrow(riskSet))
+  interactionPredictions <- tibble(rowId = integer(0), columnIndex = integer(0), value = numeric(0))
   if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
     error <- .checkHighCorrelation(covariateData, riskSet, fitCensoringModelsArgs)
     if (is.null(error)) {
       error <- "OK"
+      # The interaction columns are not excluded, so they are penalized like the covariates:
       prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c(0, presentBasisIds))
       cyclopsFit <- fitLr(covariateData$hazardCovariates, prior)
       if (is.character(cyclopsFit)) {
@@ -657,14 +728,23 @@ fitCensoringModels <- function(clones,
       } else {
         coefficients <- stats::coef(cyclopsFit)
         priorVariance <- .getPriorVariance(prior, cyclopsFit)
-        covariateCoefficients <- coefficients[!names(coefficients) %in% c("(Intercept)", as.character(basisIds))]
+        isInteraction <- names(coefficients) %in% as.character(interactionRef$interactionId)
+        covariateCoefficients <- coefficients[!names(coefficients) %in% c("(Intercept)", as.character(basisIds)) & !isInteraction]
         linearPredictor <- .computeLinearPredictor(covariateData, riskSet, covariateCoefficients)
+        interactionPredictions <- .computeInteractionPredictions(covariateData, interactionRef, coefficients[isInteraction])
       }
     }
     if (error != "OK") {
       message("Using the censoring model without covariates: ", error)
     }
   }
+  # Interaction coefficients are named covariateId:column, for example "1001:day0":
+  idx <- match(names(coefficients), as.character(interactionRef$interactionId))
+  names(coefficients)[!is.na(idx)] <- sprintf(
+    "%s:%s",
+    as.character(interactionRef$covariateId[idx[!is.na(idx)]]),
+    colnames(interactionBasis)[interactionRef$columnIndex[idx[!is.na(idx)]]]
+  )
   return(list(
     modelType = "logistic",
     coefficients = .renameBasisCoefficients(coefficients, basisIds, colnames(basis)),
@@ -677,6 +757,11 @@ fitCensoringModels <- function(clones,
       basis = basis,
       emptyIntervals = emptyIntervals,
       fullIntervals = fullIntervals
+    ),
+    interactions = list(
+      type = fitCensoringModelsArgs$covariateTimeInteraction,
+      basis = interactionBasis,
+      predictions = interactionPredictions
     ),
     intervals = dplyr::mutate(intervals, baseline = .computeBaseline(coefficients, basis, basisIds, emptyIntervals, fullIntervals)),
     numerator = list(
@@ -691,6 +776,74 @@ fitCensoringModels <- function(clones,
       status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; ")
     )
   ))
+}
+
+# The interaction basis (intervals x columns) whose columns multiply every covariate: none, an indicator
+# of the first interval ("day0"), or the time-basis columns ("interval"). A column that takes a single
+# value over `rowIntervals`, the intervals with rows in the fit, would duplicate the covariates, so it is
+# left out (for example "day0" when the first interval is not fit, or nobody reaches a later one).
+.createInteractionBasis <- function(covariateTimeInteraction, basis, k, rowIntervals) {
+  if (covariateTimeInteraction == "day0") {
+    interactionBasis <- matrix(as.numeric(k == 0), ncol = 1, dimnames = list(NULL, "day0"))
+  } else if (covariateTimeInteraction == "interval") {
+    interactionBasis <- basis
+  } else {
+    interactionBasis <- matrix(0, nrow = length(k), ncol = 0)
+  }
+  varies <- vapply(seq_len(ncol(interactionBasis)), function(column) {
+    length(unique(interactionBasis[rowIntervals + 1L, column])) > 1
+  }, logical(1))
+  return(interactionBasis[, varies, drop = FALSE])
+}
+
+# The covariate part of the interaction coefficients, per person and interaction column with a non-zero
+# value (rowId, columnIndex, value): in interval k, the linear predictor of a person gains the sum over
+# columns c of interactionBasis[k, c] * value_c.
+.computeInteractionPredictions <- function(covariateData, interactionRef, coefficients) {
+  coefficients <- coefficients[coefficients != 0]
+  if (length(coefficients) == 0) {
+    return(tibble(rowId = integer(0), columnIndex = integer(0), value = numeric(0)))
+  }
+  idx <- match(names(coefficients), as.character(interactionRef$interactionId))
+  covariateData$interactionCoefficients <- tibble(
+    covariateId = interactionRef$covariateId[idx],
+    columnIndex = interactionRef$columnIndex[idx],
+    beta = as.vector(coefficients)
+  )
+  predictions <- .andromedaSql(covariateData, "
+    SELECT covariates.rowId,
+      interactionCoefficients.columnIndex,
+      SUM(covariates.covariateValue * interactionCoefficients.beta) AS value
+    FROM covariates
+    INNER JOIN interactionCoefficients
+      ON covariates.covariateId = interactionCoefficients.covariateId
+    GROUP BY covariates.rowId,
+      interactionCoefficients.columnIndex
+    ORDER BY covariates.rowId,
+      interactionCoefficients.columnIndex;")
+  covariateData$interactionCoefficients <- NULL
+  return(tibble(rowId = as.integer(predictions$rowId), columnIndex = as.integer(predictions$columnIndex), value = predictions$value))
+}
+
+# S(day | X) of a hazard model, the probability of no initiation on days 0..day (day <= horizon), for
+# the persons `rowIds` of its risk set.
+.computeHazardSurvival <- function(model, rowIds, day) {
+  person <- match(rowIds, model$predictions$rowId)
+  linearPredictor <- model$predictions$linearPredictor[person]
+  if (model$modelType == "cox") {
+    return(exp(-.evaluateCumulativeHazard(model$baselineHazard, day + 1) * exp(linearPredictor)))
+  }
+  complete <- which(model$intervals$endDay <= day)
+  eta <- outer(linearPredictor, model$intervals$baseline[complete], "+")
+  interactions <- model$interactions
+  if (!is.null(interactions) && nrow(interactions$predictions) > 0) {
+    values <- matrix(0, nrow = nrow(model$predictions), ncol = ncol(interactions$basis))
+    values[cbind(match(interactions$predictions$rowId, model$predictions$rowId), interactions$predictions$columnIndex)] <- interactions$predictions$value
+    eta <- eta + values[person, , drop = FALSE] %*% t(interactions$basis[complete, , drop = FALSE])
+  }
+  # log(1 - expit(eta)) = -log(1 + exp(eta)):
+  logSurvival <- -ifelse(eta > 30, eta, log1p(exp(eta)))
+  return(exp(rowSums(matrix(logSurvival, nrow = length(rowIds)))))
 }
 
 # The intercept plus time-basis part of the linear predictor for each interval (-Inf or Inf, a hazard
