@@ -724,7 +724,11 @@ test_that("Clone attrition and metaData", {
 
   attrition <- metaData$attrition
   populationAttrition <- attr(population, "metaData")$attrition
-  expect_equal(attrition[seq_len(nrow(populationAttrition)), ], populationAttrition)
+  # Every person is cloned into both strategies, so the population rows count them in both columns:
+  expectedPopulationAttrition <- populationAttrition
+  expectedPopulationAttrition$comparatorPersons <- populationAttrition$targetPersons
+  expectedPopulationAttrition$comparatorExposures <- populationAttrition$targetExposures
+  expect_equal(attrition[seq_len(nrow(populationAttrition)), ], expectedPopulationAttrition)
   cloneAttrition <- as.data.frame(attrition[nrow(populationAttrition) + 1:2, ])
   expect_equal(cloneAttrition, data.frame(
     description = c("Clones created", "Clones with follow-up"),
@@ -733,6 +737,20 @@ test_that("Clone attrition and metaData", {
     targetExposures = c(10L, 1L),
     comparatorExposures = c(10L, 9L)
   ))
+
+  # drawAttritionDiagram() removes previous minus current persons at each step: never a negative number,
+  # nothing when the clones are created, and the clones without follow-up of each strategy after that.
+  removed <- -diff(as.matrix(attrition[, c("targetPersons", "comparatorPersons")]))
+  expect_true(all(removed >= 0))
+  expect_equal(unname(removed[nrow(removed) - 1, ]), c(0L, 0L))
+  expect_equal(unname(removed[nrow(removed), ]), c(9L, 1L))
+  skip_if_not_installed("ggplot2")
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies)))
+  on.exit(close(clones), add = TRUE)
+  diagram <- drawAttritionDiagram(clones)
+  labels <- unlist(lapply(ggplot2::ggplot_build(diagram)$data, function(layer) as.character(layer$label)))
+  expect_true(any(grepl("Comparator: n = 9", labels, fixed = TRUE)))
+  expect_false(any(grepl("n = -", labels, fixed = TRUE)))
 })
 
 test_that("createClones stops for unsupported strategies and invalid input", {

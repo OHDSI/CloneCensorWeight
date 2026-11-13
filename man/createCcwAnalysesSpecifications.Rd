@@ -38,7 +38,9 @@ Create full clone-censor-weight analysis specifications
 \details{
 \subsection{Analyses to Exclude}{
 
-Normally, \code{runCcwAnalyses()} runs all combinations of target-treatment-outcomes and analyses. The
+The driver that runs many analyses, \code{runCcwAnalyses()}, comes in a later version; in this version
+the specifications can be created, saved and loaded. It will run all combinations of
+target-treatment-outcomes and analyses. The
 \code{analysesToExclude} argument removes some of them. It is a data frame with at least one of the
 columns \code{targetId}, \code{treatmentId}, \code{comparatorTreatmentId}, \code{outcomeId}, and \code{analysisId}. Rows of
 the reference table that match a row of \code{analysesToExclude} are skipped.

@@ -39,8 +39,12 @@
 #'   `armByTimeInteraction`) their interaction. The weighted clones must be split on the same interval
 #'   grid, by `computeCensoringWeights(outcomeTimeBasis = timeBasis)`. With daily intervals (the
 #'   default) every row carries the exact weight of its day, so a saturated time basis per strategy
-#'   gives the weighted Kaplan-Meier or Aalen-Johansen risks. Risks are `1 - prod(1 - h)` without
-#'   competing events;
+#'   (an indicator basis with `armByTimeInteraction = TRUE`) gives the weighted Kaplan-Meier or
+#'   Aalen-Johansen risks. With an indicator basis, an interval (or, with the interaction, a strategy
+#'   and interval) with rows but no events has a hazard of 0, and one in which every row has the event
+#'   a hazard of 1, the limits of the maximum likelihood fit; their rows are left out of the fit, and the
+#'   coefficients that only they inform (whose estimates are infinite) are `NA`. Risks are
+#'   `1 - prod(1 - h)` without competing events;
 #'   with competing death, the outcome model is fitted to rows with no death in the interval, a death
 #'   model to all rows, and the risk is that of Young et al. (2020). The model is fitted to the
 #'   weighted numbers of rows with and without an event per strategy and interval, which have the
@@ -54,6 +58,17 @@
 #'
 #' Horizons are days since index and are read at `t = horizon - riskStart + 1`, so the risk includes
 #' events on the horizon day.
+#'
+#' The risks of the `"cox"` model, and of the `"logistic"` model without `armByTimeInteraction`, assume
+#' an effect of the strategy that is constant over follow-up (proportional hazards or odds). A grace
+#' period violates this assumption by design: the clones of both strategies follow the same course
+#' during the grace period. Their risks, risk differences and risk ratios can then be biased, also at
+#' horizons within the grace period. The `"km"` risks do not make this assumption.
+#'
+#' The models are fitted with Cyclops using `fitOutcomeModelArgs$control`; a fit that fails is refitted
+#' with Cyclops' default algorithm and convergence criterion, with a warning. When the death model of
+#' competing death cannot be fitted, the hazard or odds ratio of the outcome model is still reported,
+#' and the risks are `NA`.
 #'
 #' The robust variance (`varianceEstimator = "robust"`) is the HC0 sandwich clustered on person, so all
 #' clones of a person share a cluster, treating the weights as fixed. For `"cox"` and `"km"` the risk
@@ -72,7 +87,8 @@
 #' @return
 #' An object of class `CcwOutcomeModel`: a list with
 #' - `modelType` and `varianceEstimator`;
-#' - `estimates`: a tibble with one row per estimand (`"hr"` or `"or"`, and per horizon `h`
+#' - `estimates`: a tibble with one row per estimand (`"hr"` or `"or"` (with `armByTimeInteraction`,
+#'   the odds ratio where the time basis is 0; see [createFitOutcomeModelArgs()]), and per horizon `h`
 #'   `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`, and for `"km"`
 #'   `"rmst_<h>"` (without competing events) and `"rmtl_<h>"`, the target minus comparator
 #'   differences, with the per-strategy values in `"rmst_target_<h>"`, `"rmst_comparator_<h>"`,
@@ -90,15 +106,24 @@
 #' Young JG, Stensrud MJ, Tchetgen Tchetgen EJ, Hernan MA. A causal framework for classical statistical
 #' estimands in failure-time settings with competing events. Statistics in Medicine. 2020;39:1199-1236.
 #'
+#' @example inst/examples/clones.R
+#' @example inst/examples/weightedClones.R
 #' @examples
-#' \dontrun{
 #' outcomeModel <- fitOutcomeModel(
 #'   weightedClones = weightedClones,
-#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 60))
 #' )
 #' outcomeModel
 #' confint(outcomeModel)
-#' }
+#' # The pooled logistic model with the default daily natural spline basis:
+#' logisticModel <- fitOutcomeModel(
+#'   weightedClones = weightedClones,
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "logistic", horizons = c(30, 60))
+#' )
+#' coef(logisticModel)
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutcomeModelArgs()) {
@@ -139,14 +164,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return(result)
 }
 
-# Point estimates only, for the bootstrap driver (R/Bootstrap.R). `personCounts` (optional) is a data
-# frame with columns personSeqId and count (non-negative integers): each person's segment weights are
-# multiplied by their count (frequency weights; persons not listed get count 0), with the same result
-# as copying each person `count` times. `outcomeData` (optional) is the output of
-# .getOutcomeData(weightedClones), so that a driver refitting the same segments many times collects them
-# only once (`weightedClones` is then not used). The variance estimator in `fitOutcomeModelArgs` is
-# ignored. Returns a list with `estimates` (a tibble with estimand, estimate and logEstimate, in the
-# same order as fitOutcomeModel()) and `coefficients`.
+# Point estimates only. The bootstrap driver (R/Bootstrap.R) resamples by copying persons and calls this
+# with the weighted clones of each replicate. `personCounts` and `outcomeData` serve the frequency-weight
+# bootstrap of plan section 4.4, which is not built yet; the test that frequency weights equal copies
+# (test-m4-outcomes.R) uses them. `personCounts` (optional) is a data frame with columns personSeqId and
+# count (non-negative integers): each person's segment weights are multiplied by their count (persons
+# not listed get count 0), with the same result as copying each person `count` times. `outcomeData`
+# (optional) is the output of .getOutcomeData(weightedClones), so that segments refitted many times are
+# collected only once (`weightedClones` is then not used). The variance estimator in
+# `fitOutcomeModelArgs` is ignored. Returns a list with `estimates` (a tibble with estimand, estimate
+# and logEstimate, in the same order as fitOutcomeModel()) and `coefficients`.
 .fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL, outcomeData = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   if (is.null(outcomeData)) {
@@ -331,9 +358,56 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # Cox ------------------------------------------------------------------------------------------------
 
+# Fits a Cyclops model of an outcome model with `control`. When that fit fails (an error, or a status
+# other than SUCCESS, such as MAX_ITERATIONS), it is refitted with Cyclops' default algorithm and
+# convergence criterion (the other settings of `control` kept), with a warning. Returns the fit, or NULL
+# with a warning when both fail. The covariates `unpenalizedIds` (the target indicator, the time basis
+# and their interactions) are excluded from the prior, as CohortMethod excludes the treatment variable.
+.fitOutcomeCyclopsModel <- function(cyclopsData, prior, control, unpenalizedIds, description) {
+  if (prior$priorType != "none") {
+    prior$exclude <- unique(c(prior$exclude, unpenalizedIds))
+  }
+  attempt <- .tryFitCyclopsModel(cyclopsData, prior, control)
+  if (!is.null(attempt$failure)) {
+    defaultControl <- control
+    defaultControl[c("algorithm", "convergenceType", "tolerance", "maxIterations")] <- list(NULL)
+    retry <- .tryFitCyclopsModel(cyclopsData, prior, defaultControl)
+    if (is.null(retry$failure)) {
+      warning(sprintf("Fitting the %s failed (%s), so it was fitted with Cyclops' default algorithm and convergence criterion", description, attempt$failure))
+      attempt <- retry
+    }
+  }
+  for (message in attempt$warnings) {
+    warning(message, call. = FALSE)
+  }
+  if (!is.null(attempt$failure)) {
+    warning(sprintf("Fitting the %s failed: %s", description, attempt$failure))
+    return(NULL)
+  }
+  return(attempt$fit)
+}
+
+# One Cyclops fit, with its warnings collected (not signalled) and `failure`: NULL, or the error message
+# or return flag of a failed fit.
+.tryFitCyclopsModel <- function(cyclopsData, prior, control) {
+  warnings <- character(0)
+  fit <- withCallingHandlers(
+    tryCatch(
+      Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
+      error = function(e) conditionMessage(e)
+    ),
+    warning = function(w) {
+      warnings <<- c(warnings, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  failure <- if (is.character(fit)) fit else if (fit$return_flag != "SUCCESS") fit$return_flag else NULL
+  return(list(fit = fit, failure = failure, warnings = warnings))
+}
+
 # Fits the weighted counting-process Cox model with the target indicator as the only covariate, using
 # Cyclops cox_counting (Breslow ties). Returns the coefficient, or NA (with a warning) when there are
-# no events or the fit does not converge.
+# no events or the fit fails.
 .fitCyclopsCox <- function(segments, y, prior, control, label) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s Cox model", label, label))
@@ -348,12 +422,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   )
   covariates <- data.frame(rowId = which(segments$x == 1), covariateId = 1, covariateValue = 1)
   cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE, quiet = TRUE)
-  fit <- tryCatch(
-    Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
-    error = function(e) e$message
-  )
-  if (is.character(fit) || fit$return_flag != "SUCCESS") {
-    warning(sprintf("Fitting the %s Cox model failed: %s", label, if (is.character(fit)) fit else fit$return_flag))
+  fit <- .fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label))
+  if (is.null(fit)) {
     return(NA_real_)
   }
   return(as.numeric(stats::coef(fit)[["1"]]))
@@ -374,13 +444,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   outcome <- .breslow(segments, segments$outcome == 1, beta, nTimes)
   coefficients <- c(target = beta)
   death <- NULL
+  deathFailed <- FALSE
   if (competing && any(segments$competing == 1)) {
     deathBeta <- .fitCyclopsCox(segments, segments$competing, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "death")
     if (is.na(deathBeta)) {
-      return(.naEstimates("hr", horizons, coefficientNames = c("target", "death:target")))
+      # The hazard ratio comes from the outcome model alone; the risks need the death model too.
+      deathFailed <- TRUE
+    } else {
+      death <- .breslow(segments, segments$competing == 1, deathBeta, nTimes)
+      coefficients <- c(coefficients, `death:target` = deathBeta)
     }
-    death <- .breslow(segments, segments$competing == 1, deathBeta, nTimes)
-    coefficients <- c(coefficients, `death:target` = deathBeta)
   }
 
   coefficientInfluence <- NULL
@@ -401,6 +474,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
 
   rows <- list(.ratioRow("hr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1])))
+  if (deathFailed) {
+    return(.withoutRisks(rows, horizons, coefficients, vcov, "death:target"))
+  }
   for (horizon in horizons) {
     tau <- horizon - data$riskStart + 1
     risks <- numeric(2)
@@ -434,6 +510,21 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     rows[[length(rows) + 1]] <- .riskContrastRows(horizon, risks, influences, competing)
   }
   return(list(estimates = dplyr::bind_rows(rows), coefficients = coefficients, vcov = vcov))
+}
+
+# The result when the outcome model was fitted but the death model failed: the ratio row(s) `rows`, NA
+# risks, RD and RR at every horizon, the coefficients with the death-model ones (`deathNames`) NA, and
+# the covariance with NA rows and columns for them.
+.withoutRisks <- function(rows, horizons, coefficients, vcov, deathNames) {
+  risks <- .naEstimates("ratio", horizons, coefficientNames = character(0))$estimates[-1, ]
+  allNames <- c(names(coefficients), deathNames)
+  if (!is.null(vcov)) {
+    fullVcov <- matrix(NA_real_, length(allNames), length(allNames), dimnames = list(allNames, allNames))
+    fullVcov[names(coefficients), names(coefficients)] <- vcov[names(coefficients), names(coefficients)]
+    vcov <- fullVcov
+  }
+  coefficients <- c(coefficients, stats::setNames(rep(NA_real_, length(deathNames)), deathNames))
+  return(list(estimates = dplyr::bind_rows(c(rows, list(risks))), coefficients = coefficients, vcov = vcov))
 }
 
 # All estimates NA, when the model cannot be fitted.
@@ -510,10 +601,18 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # The design depends on a row only through its cell (strategy and interval; `design` has one row per
 # cell), so the model is fitted to the weighted numbers of rows with and without an event in each cell,
 # which have the same likelihood as the rows (plan section 4.3). Columns that the cells with rows do not
-# identify are dropped and get coefficient NA (see .identifiedColumns()). Unless `variance` is "none",
-# also returns the bread (inverse weighted information) and the score residuals summed by person and
-# cell. Returns NULL (with a warning) if the model cannot be fitted.
-.fitPooledModel <- function(rows, y, design, prior, control, label, variance) {
+# identify are dropped and get coefficient NA (see .identifiedColumns()).
+#
+# With an indicator time basis, `groups` (one per cell) gives the cells that share a free hazard: the
+# interval (without the arm-by-time interaction) or the cell itself (with it). A group with rows but no
+# events has a hazard of 0, and one in which every row has the event a hazard of 1: the limits of the
+# maximum likelihood fit, whose coefficient would be -Inf or Inf. Their rows carry no information on the
+# other coefficients, so they are left out of the fit, and their cells get the fixed hazard
+# (`fixedHazard`, NA for the other cells), as the censoring models do. The coefficients that only these
+# cells inform are NA (their estimates are infinite), without a warning. Unless `variance` is "none", also
+# returns the bread (inverse weighted information) and the score residuals summed by person and cell.
+# Returns NULL (with a warning) if the model cannot be fitted.
+.fitPooledModel <- function(rows, y, design, prior, control, label, variance, groups = NULL) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s pooled logistic model", label, label))
     return(NULL)
@@ -521,10 +620,25 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   nCells <- nrow(design)
   events <- .sumBy(rows$weight * y, rows$cell, nCells)
   nonEvents <- .sumBy(rows$weight * (1 - y), rows$cell, nCells)
-  identification <- .identifiedColumns(design, events + nonEvents > 0)
+  fixedHazard <- rep(NA_real_, nCells)
+  if (!is.null(groups)) {
+    groupEvents <- .sumBy(events, groups, max(groups))[groups]
+    groupNonEvents <- .sumBy(nonEvents, groups, max(groups))[groups]
+    fixedHazard[groupEvents + groupNonEvents > 0 & groupEvents == 0] <- 0
+    fixedHazard[groupEvents > 0 & groupNonEvents == 0] <- 1
+  }
+  fitted <- events + nonEvents > 0 & is.na(fixedHazard)
+  if (!any(fitted)) {
+    warning(sprintf("No cell of the %s pooled logistic model has both rows with and without the event: it cannot be fitted", label))
+    return(NULL)
+  }
+  identification <- .identifiedColumns(design, fitted)
   kept <- identification$kept
+  # Columns that no cell with rows identifies (columns that only cells with a fixed hazard identify have
+  # infinite estimates instead; both are NA):
+  notIdentified <- setdiff(seq_len(ncol(design)), .identifiedColumns(design, events + nonEvents > 0)$kept)
 
-  cells <- which(events + nonEvents > 0)
+  cells <- which(fitted)
   outcomes <- data.frame(cell = c(cells, cells), y = rep(c(1, 0), each = length(cells)), weights = c(events[cells], nonEvents[cells]))
   outcomes <- outcomes[outcomes$weights > 0, ]
   outcomes$rowId <- seq_len(nrow(outcomes))
@@ -537,28 +651,34 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     covariateValue = covariateColumns[nonZero]
   )
   cyclopsData <- Cyclops::convertToCyclopsData(outcomes[, c("rowId", "y", "weights")], covariates, modelType = "lr", addIntercept = TRUE, quiet = TRUE)
-  fit <- tryCatch(
-    Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
-    error = function(e) e$message
-  )
-  if (is.character(fit) || fit$return_flag != "SUCCESS") {
-    warning(sprintf("Fitting the %s pooled logistic model failed: %s", label, if (is.character(fit)) fit else fit$return_flag))
+  # 0 is the intercept:
+  fit <- .fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = c(0, kept[-1]), description = sprintf("%s pooled logistic model", label))
+  if (is.null(fit)) {
     return(NULL)
   }
-  fitted <- stats::coef(fit)
+  estimates <- stats::coef(fit)
   coefficients <- stats::setNames(rep(NA_real_, ncol(design)), colnames(design))
-  coefficients[1] <- fitted[["(Intercept)"]]
-  ids <- setdiff(names(fitted), "(Intercept)")
-  coefficients[as.integer(ids)] <- fitted[ids]
-  if (length(kept) < ncol(design)) {
+  coefficients[1] <- estimates[["(Intercept)"]]
+  ids <- setdiff(names(estimates), "(Intercept)")
+  coefficients[as.integer(ids)] <- estimates[ids]
+  if (length(notIdentified) > 0) {
     warning(sprintf(
       "Coefficient(s) %s of the %s pooled logistic model are not identified by the data and are NA",
-      paste(colnames(design)[-kept], collapse = ", "), label
+      paste(colnames(design)[notIdentified], collapse = ", "), label
     ))
   }
-  result <- list(coefficients = coefficients, kept = kept, estimable = identification$estimable, design = design[, kept, drop = FALSE])
+  result <- list(
+    coefficients = coefficients,
+    kept = kept,
+    estimable = identification$estimable,
+    fixedHazard = fixedHazard,
+    design = design[, kept, drop = FALSE]
+  )
   if (variance != "none") {
     probability <- stats::plogis(as.vector(result$design %*% coefficients[kept]))
+    # The cells with a fixed hazard add nothing to the information or the scores (p (1 - p) = 0, and
+    # y - p = 0 on their rows):
+    probability[!is.na(fixedHazard)] <- fixedHazard[!is.na(fixedHazard)]
     information <- crossprod(result$design, result$design * ((events + nonEvents) * probability * (1 - probability)))
     result$bread <- .invertInformation(information, sprintf("%s pooled logistic", label))
     result$residuals <- .sumByPersonAndCell(rows$weight * (y - probability[rows$cell]), rows$personIndex, rows$cell, nCells)
@@ -597,12 +717,14 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # Risks at each horizon (`horizonIntervals` complete intervals, or NA), ordered (target, comparator)
 # per horizon, as a function of `theta`, the identified coefficients of the outcome model and then of
-# the death model (`layout$index`). A risk is NA when it needs the hazard of a cell that is not
-# identified.
+# the death model (`layout$index`). Cells with a fixed hazard of 0 or 1 (`layout$fixedHazards`) get it.
+# A risk is NA when it needs the hazard of a cell that is not identified.
 .pooledRisks <- function(theta, layout, horizonIntervals) {
   hazard <- function(i) {
     result <- stats::plogis(as.vector(layout$designs[[i]] %*% theta[layout$index[[i]]]))
     result[!layout$estimable[[i]]] <- NA
+    fixed <- !is.na(layout$fixedHazards[[i]])
+    result[fixed] <- layout$fixedHazards[[i]][fixed]
     return(result)
   }
   nIntervals <- nrow(layout$designs[[1]]) / 2
@@ -629,7 +751,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   prior <- fitOutcomeModelArgs$prior
   control <- fitOutcomeModelArgs$control
   if (isTRUE(prior$useCrossValidation)) {
-    stop("Cross-validation is not supported for the pooled logistic outcome model, which is fitted to rows aggregated by strategy and interval. Use a prior with a fixed variance")
+    stop("Cross-validation is not supported for the pooled logistic outcome model, which is fitted to rows aggregated by strategy and interval. Use a prior without cross-validation")
   }
   # Each row takes the weight of the clone's last segment in its interval, which is the weight of its
   # last day in the interval only when the segments are split on the interval grid:
@@ -650,19 +772,28 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   cellInterval <- rep(seq_len(nIntervals) - 1, 2)
   design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(cellInterval), basisNames, fitOutcomeModelArgs$armByTimeInteraction)
   rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
+  # With an indicator basis, the cells that share a free hazard (see .fitPooledModel()): each cell with
+  # the arm-by-time interaction, each interval without it.
+  groups <- NULL
+  if (timeBasis$type == "indicator") {
+    groups <- if (fitOutcomeModelArgs$armByTimeInteraction) seq_len(2 * nIntervals) else cellInterval + 1
+  }
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))
-  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance))
+  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance, groups))
   if (is.null(models[[1]])) {
     return(.naEstimates("or", horizons, coefficientNames = colnames(design)))
   }
+  deathFailed <- FALSE
   if (competing && any(rows$death == 1)) {
-    deathModel <- .fitPooledModel(rows, rows$death, design, prior, control, "death", variance)
+    deathModel <- .fitPooledModel(rows, rows$death, design, prior, control, "death", variance, groups)
     if (is.null(deathModel)) {
-      return(.naEstimates("or", horizons, coefficientNames = c(colnames(design), paste0("death:", colnames(design)))))
+      # The odds ratio comes from the outcome model alone; the risks need the death model too.
+      deathFailed <- TRUE
+    } else {
+      names(deathModel$coefficients) <- paste0("death:", names(deathModel$coefficients))
+      models[[2]] <- deathModel
     }
-    names(deathModel$coefficients) <- paste0("death:", names(deathModel$coefficients))
-    models[[2]] <- deathModel
   }
   coefficients <- unlist(lapply(models, function(model) model$coefficients))
   # The identified coefficients, which the variance and the risks are functions of:
@@ -671,6 +802,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   layout <- list(
     designs = lapply(models, function(model) model$design),
     estimable = lapply(models, function(model) model$estimable),
+    fixedHazards = lapply(models, function(model) model$fixedHazard),
     index = split(seq_along(theta), rep(seq_along(models), sizes))
   )
 
@@ -687,6 +819,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
 
   estimates <- list(.ratioRow("or", coefficients[["target"]], if (is.null(vcov)) NA_real_ else sqrt(vcov["target", "target"])))
+  if (deathFailed) {
+    return(.withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design))))
+  }
   horizonIntervals <- .pooledHorizonIntervals(horizons, data$riskStart, intervalLength, nIntervals)
   riskFunction <- function(theta) .pooledRisks(theta, layout, horizonIntervals)
   risks <- matrix(riskFunction(theta), nrow = 2)

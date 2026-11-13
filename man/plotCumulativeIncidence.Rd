@@ -23,9 +23,46 @@ Plots the cumulative incidence (risk) curves of both strategies with their 95 pe
 bands, as computed by \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}}. Requires the \code{ggplot2} package.
 }
 \examples{
-\dontrun{
+# Simulated data, its study population, and the clones of two strategies:
+data <- simulateCloneCensorWeightData(n = 200, maxDays = 60, graceEnd = 7, seed = 1)
+population <- createStudyPopulation(
+  cloneCensorWeightData = data,
+  outcomeId = 3,
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 60,
+    endAnchor = "cohort start"
+  )
+)
+clones <- createClones(
+  population = population,
+  cloneCensorWeightData = data,
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+    )
+  )
+)
+# The censoring models (without the baseline covariates, to keep the example fast; by default they
+# use all covariates) and the weighted clones, also split on the daily grid of the pooled logistic
+# outcome model:
+censoringModels <- fitCensoringModels(
+  clones = clones,
+  cloneCensorWeightData = data,
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
+)
+weightedClones <- computeCensoringWeights(
+  clones = clones,
+  censoringModels = censoringModels,
+  computeWeightsArgs = createComputeWeightsArgs(),
+  outcomeTimeBasis = createTimeBasis(type = "naturalSpline", intervalLength = 1, df = 4)
+)
 curves <- computeCumulativeIncidence(weightedClones)
-plotCumulativeIncidence(curves, labels = c("Initiate within 30 days", "Do not initiate"))
+if (requireNamespace("ggplot2", quietly = TRUE)) {
+  plotCumulativeIncidence(curves, labels = c("Initiate within 7 days", "Do not initiate"))
 }
+close(weightedClones)
+close(clones)
+close(data)
 
 }

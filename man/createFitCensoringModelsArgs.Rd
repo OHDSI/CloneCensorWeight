@@ -37,8 +37,10 @@ is a daily indicator basis.}
 
 \item{includeCovariateIds}{Include only these covariates in the censoring models.}
 
-\item{maxCohortSizeForFitting}{If the risk set is larger than this number, it is sampled to this
-size before fitting. \code{0} means no sampling.}
+\item{maxCohortSizeForFitting}{If the risk set of the binary model of an \code{"initiateWithin"}
+strategy is larger than this number, it is sampled to this size
+before fitting. \code{0} means no sampling. The hazard models do not
+sample in this version.}
 
 \item{errorOnHighCorrelation}{Check each covariate for high correlation with the response, and
 throw an error if found?}
@@ -65,9 +67,15 @@ initiation is modelled with \code{hazardModelType}.
 The default hazard model, pooled logistic regression with a daily indicator time basis, is the
 exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
 times with Breslow ties, so its survival of non-initiation, \verb{exp(-Lambda0(d + 1) exp(X beta))}, is
-biased when many persons initiate on the same day (for example on day 0): \code{exp(-h)} is larger than
-\code{1 - h} for a daily probability \code{h}. Use \code{"cox"} only for long horizons (for example
-\code{"neverInitiate"} strategies) with few initiations per day.
+biased when persons initiate on the same day: \code{exp(-h)} is larger than \code{1 - h} for a daily
+probability \code{h}, and the error builds up over the days of the horizon. The bias of the Cox weights
+therefore grows with the horizon and with each person's daily probability of initiating; it is
+largest for \code{"neverInitiate"} strategies. For long horizons, prefer the pooled logistic model, with
+a longer \code{intervalLength} if daily intervals are too costly.
+
+\code{maxCohortSizeForFitting} applies only to the binary model at the end of the grace period of
+\code{"initiateWithin"} strategies (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). In this version the hazard
+models are always fitted to their whole risk set.
 }
 \examples{
 args <- createFitCensoringModelsArgs(hazardModelType = "cox")

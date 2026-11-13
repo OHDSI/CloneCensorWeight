@@ -54,7 +54,12 @@ number of replicates.}
 An object of class \code{CcwOutcomeModel} (see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}) with \code{varianceEstimator = "bootstrap"}: the full-data estimates with their bootstrap standard errors, limits and p-values,
 the full-data coefficients with their bootstrap covariance (\code{vcov}), the counts of the full-data
 clones, and \code{metaData$bootstrap} (the settings, the number of replicates, the number of failed
-replicates, and the fixed prior variances). It also holds \code{replicates}, a matrix with one row per
+replicates, the number of finite replicates of each estimate, and the fixed prior variances). For the
+pooled logistic model with a natural spline or orthogonal polynomial time basis, whose knots or
+polynomial coefficients are recomputed from the data of each replicate, the time-basis coefficients
+(and the intercepts, and with an orthogonal polynomial and the interaction also the target
+coefficients) mean different things in different replicates: their rows and columns of \code{vcov} are
+\code{NA}. It also holds \code{replicates}, a matrix with one row per
 replicate and one column per estimand of the estimates, and, with \code{returnCounts = TRUE},
 \code{bootstrapCounts}, the counts (persons by replicates, with the \code{personSeqId} as row names).
 }
@@ -76,9 +81,19 @@ models use the prior variances of the full-data fit (chosen by cross-validation,
 every replicate, without cross-validation. The pooled logistic outcome model gets clones split on
 its interval grid (\code{computeCensoringWeights(outcomeTimeBasis = )}).
 
-A replicate in which the analysis fails (for example because a censoring model cannot be fitted)
-gets \code{NA} estimates, with a warning, and replicates with a missing or infinite estimate are left out
-of that estimate's standard error and limits, as in \code{\link[boot:boot.ci]{boot::boot.ci()}}. Ratios (hazard, odds and risk
+In the replicates, the censoring models are fitted with \code{errorOnHighCorrelation = FALSE}: the check
+for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
+already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
+replicates are not shown; those of a failed replicate are reported with its failure.
+
+A replicate fails when the analysis stops with an error (for example because a censoring model
+cannot be fitted) or gives no finite estimate (for example because the outcome model cannot be
+fitted). Failed replicates get \code{NA} estimates and are counted in \code{metaData$bootstrap$failedReplicates},
+with a warning. Replicates with a missing or infinite estimate (for example the risks of a replicate
+whose death model cannot be fitted) are left out of that estimate's standard error and limits, as
+in \code{\link[boot:boot.ci]{boot::boot.ci()}}; \code{metaData$bootstrap$finiteReplicates} gives the number of replicates used for
+each estimate, with a warning when it is smaller than the number of replicates that did not fail.
+Ratios (hazard, odds and risk
 ratios) are summarized on the log scale. The standard error is the standard deviation of the
 replicates. The 95\% limits follow \code{\link[boot:boot.ci]{boot::boot.ci()}}: with \code{bootstrapArgs$ci = "percentile"} they are
 its \code{"perc"} limits, the (R + 1) 0.025 and (R + 1) 0.975 order statistics of the R replicates,

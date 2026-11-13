@@ -253,6 +253,11 @@ test_that("The bootstrap runs for km, cox and logistic outcome models", {
     } else {
       expect_equal(names(result$coefficients), names(full$coefficients))
       expect_equal(dimnames(result$vcov), list(names(full$coefficients), names(full$coefficients)))
+      # The natural spline basis of the default pooled logistic model is rebuilt in every replicate, so
+      # only the target coefficient has a bootstrap covariance:
+      invariant <- if (modelType == "logistic") "target" else names(full$coefficients)
+      expect_false(anyNA(result$vcov[invariant, invariant]))
+      expect_true(all(is.na(result$vcov[!rownames(result$vcov) %in% invariant, ])))
     }
     # print, coef and confint work on the result:
     expect_equal(coef(result), stats::setNames(result$estimates$estimate, result$estimates$estimand))
@@ -323,4 +328,81 @@ test_that("Failed replicates are NA, left out with a warning, and inputs are che
   weighted <- createM4WeightedClones(createM4Fixture(n = 20))
   on.exit(close(weighted), add = TRUE)
   expect_error(fitOutcomeModel(weighted, createFitOutcomeModelArgs(varianceEstimator = "bootstrap")), "bootstrapCcwAnalysis")
+})
+
+test_that("Coefficients whose meaning changes between replicates get no bootstrap covariance", {
+  names <- c("(Intercept)", "target", "time1", "target:time1", "death:(Intercept)", "death:target", "death:time1", "death:target:time1")
+  args <- function(...) createFitOutcomeModelArgs(modelType = "logistic", ...)
+  expect_equal(.replicateInvariantCoefficients(names, args()), c("target", "death:target"))
+  expect_equal(.replicateInvariantCoefficients(names, args(armByTimeInteraction = TRUE)), c("target", "death:target"))
+  for (timeBasis in list(createTimeBasis("indicator"), createTimeBasis("linear"), createTimeBasis("polynomial", raw = TRUE))) {
+    expect_equal(.replicateInvariantCoefficients(names, args(timeBasis = timeBasis, armByTimeInteraction = TRUE)), names)
+  }
+  orthogonal <- createTimeBasis("polynomial", raw = FALSE)
+  expect_equal(.replicateInvariantCoefficients(names, args(timeBasis = orthogonal)), c("target", "death:target"))
+  expect_equal(.replicateInvariantCoefficients(names, args(timeBasis = orthogonal, armByTimeInteraction = TRUE)), character(0))
+  expect_equal(.replicateInvariantCoefficients(c("target", "death:target"), createFitOutcomeModelArgs(modelType = "cox")), c("target", "death:target"))
+})
+
+test_that("A replicate whose outcome model cannot be fitted counts as failed", {
+  data <- bootstrapData(seed = 5)
+  on.exit(close(data))
+  settings <- bootstrapSettings(modelType = "cox", replicates = 2)
+  # The second replicate draws only the persons without the outcome, so its Cox outcome model has no
+  # events and gives no estimate, without an error:
+  cohorts <- dplyr::collect(data$cohorts)
+  withOutcome <- unique(cohorts$personSeqId[cohorts$rowId %in% dplyr::collect(data$outcomes)$rowId])
+  personSeqIds <- sort(unique(cohorts$personSeqId))
+  counts <- cbind(rep(1L, 120), as.integer(!personSeqIds %in% withOutcome))
+  expect_gt(length(withOutcome), 0)
+  warnings <- capture_warnings(result <- runBootstrap(data, settings, counts = counts))
+  expect_length(warnings, 1)
+  expect_match(warnings, "failed in 1 of 2 bootstrap replicates, which are left out: replicate 2: no finite estimate \\(No outcome events")
+  expect_equal(result$metaData$bootstrap$failedReplicates, 1)
+  expect_true(all(is.na(result$replicates[2, ])))
+  expect_equal(result$metaData$bootstrap$finiteReplicates, stats::setNames(rep(1, nrow(result$estimates)), result$estimates$estimand))
+})
+
+test_that("Estimates missing in replicates that did not fail are counted, with a warning", {
+  data <- bootstrapData(seed = 6)
+  on.exit(close(data))
+  settings <- bootstrapSettings(replicates = 3)
+  realPoint <- .fitOutcomeModelPoint
+  calls <- 0
+  # The second replicate (third fit) loses its risks, as when its death model cannot be fitted:
+  local_mocked_bindings(.fitOutcomeModelPoint = function(weightedClones, fitOutcomeModelArgs, ...) {
+    calls <<- calls + 1
+    result <- realPoint(weightedClones, fitOutcomeModelArgs, ...)
+    if (calls == 3) {
+      result$estimates$estimate[grepl("^(risk|rd|rr)_", result$estimates$estimand)] <- NA
+      warning("Fitting the death model failed: test")
+    }
+    return(result)
+  })
+  warnings <- capture_warnings(result <- runBootstrap(data, settings))
+  # The replicate's own warning is not shown; the summary is:
+  expect_length(warnings, 1)
+  expect_match(warnings, "missing or infinite in bootstrap replicates that did not fail.*\\(finite replicates of 3\\): risk_target_8 \\(2\\)")
+  expect_equal(result$metaData$bootstrap$failedReplicates, 0)
+  missing <- grepl("^(risk|rd|rr)_", result$estimates$estimand)
+  expect_equal(unname(result$metaData$bootstrap$finiteReplicates), ifelse(missing, 2, 3))
+  expect_true(all(is.na(result$replicates[2, missing])))
+  expect_false(anyNA(result$replicates[2, !missing]))
+})
+
+test_that("Replicates fit the censoring models without the high-correlation check", {
+  data <- bootstrapData(seed = 7)
+  on.exit(close(data))
+  settings <- bootstrapSettings(useCovariates = TRUE, replicates = 2)
+  expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
+  realFitCensoringModels <- fitCensoringModels
+  checks <- logical(0)
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL) {
+    checks <<- c(checks, fitCensoringModelsArgs$errorOnHighCorrelation)
+    return(realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances))
+  })
+  result <- runBootstrap(data, settings)
+  # The full data first, with the check; then the replicates, without it:
+  expect_equal(checks, c(TRUE, FALSE, FALSE))
+  expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
 })

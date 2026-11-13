@@ -522,9 +522,15 @@ TimeBasis <- R6Class(
 #' The default hazard model, pooled logistic regression with a daily indicator time basis, is the
 #' exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
 #' times with Breslow ties, so its survival of non-initiation, `exp(-Lambda0(d + 1) exp(X beta))`, is
-#' biased when many persons initiate on the same day (for example on day 0): `exp(-h)` is larger than
-#' `1 - h` for a daily probability `h`. Use `"cox"` only for long horizons (for example
-#' `"neverInitiate"` strategies) with few initiations per day.
+#' biased when persons initiate on the same day: `exp(-h)` is larger than `1 - h` for a daily
+#' probability `h`, and the error builds up over the days of the horizon. The bias of the Cox weights
+#' therefore grows with the horizon and with each person's daily probability of initiating; it is
+#' largest for `"neverInitiate"` strategies. For long horizons, prefer the pooled logistic model, with
+#' a longer `intervalLength` if daily intervals are too costly.
+#'
+#' `maxCohortSizeForFitting` applies only to the binary model at the end of the grace period of
+#' `"initiateWithin"` strategies (through [CohortMethod::createPs()]). In this version the hazard
+#' models are always fitted to their whole risk set.
 #'
 #' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
 #'                                 `"cox"` (see details for its ties caveat).
@@ -536,8 +542,10 @@ TimeBasis <- R6Class(
 #' @param useCovariates            Use the baseline covariates in the censoring models?
 #' @param excludeCovariateIds      Exclude these covariates from the censoring models.
 #' @param includeCovariateIds      Include only these covariates in the censoring models.
-#' @param maxCohortSizeForFitting  If the risk set is larger than this number, it is sampled to this
-#'                                 size before fitting. `0` means no sampling.
+#' @param maxCohortSizeForFitting  If the risk set of the binary model of an `"initiateWithin"`
+#'                                 strategy is larger than this number, it is sampled to this size
+#'                                 before fitting. `0` means no sampling. The hazard models do not
+#'                                 sample in this version.
 #' @param errorOnHighCorrelation   Check each covariate for high correlation with the response, and
 #'                                 throw an error if found?
 #' @param stopOnError              If an error occurs while fitting, should the function stop?
@@ -776,10 +784,21 @@ BootstrapArgs <- R6Class(
 #' (`computeCensoringWeights(outcomeTimeBasis = timeBasis)`). Its default, daily intervals with a
 #' natural spline of time, uses the exact daily weights.
 #'
-#' The default `control` (Newton steps until the Karush-Kuhn-Tucker conditions hold to `1e-10`) fits
-#' the models to the precision of their reference implementations (`survival::coxph()` and
-#' `stats::glm()`), also on ill-scaled time bases, where Cyclops' default coordinate descent stops
-#' early.
+#' The default `control` (Newton steps until the relative change of the log likelihood is below
+#' `1e-10`) fits the models to the precision of their reference implementations (`survival::coxph()`
+#' and `stats::glm()`), also on ill-scaled time bases, where coordinate descent stops early. The
+#' criterion is relative, so it is met on large data (millions of weighted rows) and on models with
+#' quasi-separated hazards, where a criterion on the gradient can fail to be met at the optimum. If a
+#' fit with `control` fails, [fitOutcomeModel()] refits it with Cyclops' default algorithm and
+#' convergence criterion, with a warning.
+#'
+#' The Cox and pooled logistic models without `armByTimeInteraction` assume an effect of the strategy
+#' that is constant over follow-up (proportional hazards or odds). Their risks at the horizons inherit
+#' this assumption, which a grace period violates: during the grace period the clones of both
+#' strategies follow the same course, so the true hazards are equal there. Their risks, risk
+#' differences and risk ratios can then be biased, also at horizons within the grace period. The
+#' Kaplan-Meier (`"km"`) risks, or the pooled logistic model with `armByTimeInteraction = TRUE` and an
+#' indicator (saturated) time basis, do not make this assumption.
 #'
 #' @param modelType            The outcome model: `"cox"`, `"logistic"` (pooled logistic), or `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
@@ -787,14 +806,24 @@ BootstrapArgs <- R6Class(
 #'                             reported.
 #' @param timeBasis            An object of type `TimeBasis` as created using [createTimeBasis()], used
 #'                             by the pooled logistic model.
-#' @param armByTimeInteraction Add strategy-by-time interactions to the pooled logistic model?
+#' @param armByTimeInteraction Add strategy-by-time interactions to the pooled logistic model? With the
+#'                             interactions, the odds ratio reported as `"or"` is the odds ratio where
+#'                             the time basis is 0: in the first interval for the indicator, natural
+#'                             spline, linear and raw polynomial bases (where clones of both strategies
+#'                             often have the same weights and hazards, so it is close to 1), and at no
+#'                             particular interval for an orthogonal polynomial basis. It is not a
+#'                             summary of the effect over follow-up.
 #' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
 #'                             `"bootstrap"` (computed by [bootstrapCcwAnalysis()]), or `"modelBased"`.
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
 #'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?
 #' @param stratified           Fit a stratified model?
-#' @param prior                The prior used to fit the model. See [Cyclops::createPrior()].
+#' @param prior                The prior used to fit the model. See [Cyclops::createPrior()]. The target
+#'                             indicator, the time basis and their interactions are never regularized
+#'                             (they are added to the prior's `exclude`), as CohortMethod excludes the
+#'                             treatment variable. This version fits no other covariates, so the prior
+#'                             has no effect on the estimates.
 #' @param control              The control object used to fit the model. See
 #'                             [Cyclops::createControl()].
 #'
@@ -817,7 +846,7 @@ createFitOutcomeModelArgs <- function(modelType = "cox",
                                       stratified = FALSE,
                                       prior = Cyclops::createPrior("none"),
                                       control = Cyclops::createControl(algorithm = "newton",
-                                                                       convergenceType = "kkt",
+                                                                       convergenceType = "gradient",
                                                                        tolerance = 1e-10,
                                                                        noiseLevel = "silent")) {
   args <- list()
@@ -878,7 +907,9 @@ FitOutcomeModelArgs <- R6Class(
 #' Create a clone-censor-weight analysis specification
 #'
 #' @details
-#' Create a set of analysis choices, to be used with `runCcwAnalyses()`.
+#' Create a set of analysis choices. In this version the specification can be saved and loaded (see
+#' [saveCcwAnalysisList()]); the driver that runs many analyses, `runCcwAnalyses()`, comes in a later
+#' version.
 #'
 #' @param analysisId                     An integer that will be used later to refer to this specific
 #'                                       set of analysis choices.
@@ -1141,7 +1172,9 @@ CcwDiagnosticThresholds <- R6Class(
 #' @details
 #' ## Analyses to Exclude
 #'
-#' Normally, `runCcwAnalyses()` runs all combinations of target-treatment-outcomes and analyses. The
+#' The driver that runs many analyses, `runCcwAnalyses()`, comes in a later version; in this version
+#' the specifications can be created, saved and loaded. It will run all combinations of
+#' target-treatment-outcomes and analyses. The
 #' `analysesToExclude` argument removes some of them. It is a data frame with at least one of the
 #' columns `targetId`, `treatmentId`, `comparatorTreatmentId`, `outcomeId`, and `analysisId`. Rows of
 #' the reference table that match a row of `analysesToExclude` are skipped.

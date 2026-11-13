@@ -43,13 +43,17 @@
 #' "target" is strategy 1 and "comparator" is strategy 2, "before" is the unweighted comparison of the
 #' compliant clones, and "after" the weighted comparison.
 #'
+#' @example inst/examples/clones.R
+#' @example inst/examples/weightedClones.R
 #' @examples
-#' \dontrun{
 #' balance <- computeCovariateBalance(
 #'   weightedClones = weightedClones,
-#'   cloneCensorWeightData = cloneCensorWeightData
+#'   cloneCensorWeightData = data
 #' )
-#' }
+#' balance[, c("covariateName", "beforeMatchingStdDiff", "afterMatchingStdDiff")]
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 computeCovariateBalance <- function(weightedClones,

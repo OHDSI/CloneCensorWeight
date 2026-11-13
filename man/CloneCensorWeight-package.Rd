@@ -6,7 +6,7 @@
 \alias{CloneCensorWeight-package}
 \title{CloneCensorWeight: Clone-Censor-Weight Target Trial Emulation}
 \description{
-Implements clone-censor-weight target trial emulation for observational studies in the OMOP Common Data Model. The package follows the OHDSI HADES framework and provides data extraction, cloning, artificial and classical inverse probability of censoring weighting, clustered-variance outcome models, covariate balance diagnostics, and empirical calibration.
+Implements clone-censor-weight target trial emulation for observational studies in the OMOP Common Data Model. The package follows the OHDSI HADES framework and provides data extraction, cloning, inverse probability weighting for artificial censoring (deviation from the treatment strategies), weighted outcome models with person-clustered robust and bootstrap variances, covariate balance diagnostics, and a simulator with known true risks.
 }
 \seealso{
 Useful links:

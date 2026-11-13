@@ -350,11 +350,47 @@ test_that("Weights are 1 when stabilized models have no covariates, and inputs a
   expect_error(computeCensoringWeights(otherClones, models), "sameDayOrdering")
   otherClones2 <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 6), "deviationFirst")
   expect_error(computeCensoringWeights(otherClones2, models), "does not match")
+  otherClones3 <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 5), "deviationFirst", competingEvents = "none")
+  expect_error(computeCensoringWeights(otherClones3, models), "competingEvents")
+  expect_equal(attr(models, "metaData")$competingEvents, "death")
   expect_error(computeCensoringWeights(clones, list()), "CcwCensoringModels")
+  close(weighted)
   close(otherClones)
   close(otherClones2)
+  close(otherClones3)
   close(clones)
   close(data)
+})
+
+test_that("Weighting the same clones twice leaves the clones and the first weighted clones unchanged", {
+  fixture <- createM3Fixture(100, riskStart = 0L, seed = 24)
+  data <- createM3Data(fixture)
+  on.exit(close(data))
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 5))
+  on.exit(close(clones), add = TRUE)
+  models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic")))
+  daily <- createTimeBasis("indicator", intervalLength = 1)
+  first <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(), outcomeTimeBasis = daily))
+  on.exit(close(first), add = TRUE)
+  firstSegments <- collectSegments(first)
+  args <- createFitOutcomeModelArgs(modelType = "logistic", horizons = 10, timeBasis = createTimeBasis("linear", intervalLength = 1))
+  firstModel <- suppressMessages(fitOutcomeModel(first, args))
+
+  second <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
+  on.exit(close(second), add = TRUE)
+  # The input clones get no tables, and the two weighted objects have their own segments and metaData:
+  expect_setequal(names(clones), c("persons", "clones"))
+  expect_null(attr(clones, "metaData")$weights)
+  expect_false(nrow(collectSegments(second)) == nrow(firstSegments))
+  expect_equal(collectSegments(first), firstSegments)
+  expect_true(attr(first, "metaData")$weights$stabilized)
+  expect_equal(attr(first, "metaData")$weights$cutIntervalLength, 1L)
+  expect_false(attr(second, "metaData")$weights$stabilized)
+  expect_equal(suppressMessages(fitOutcomeModel(first, args))$estimates, firstModel$estimates)
+
+  # Unweighted clones are rejected by the functions that need weights, naming computeCensoringWeights():
+  expect_error(fitOutcomeModel(clones, args), "computeCensoringWeights\\(\\)")
+  expect_error(computeWeightDistribution(clones), "computeCensoringWeights\\(\\)")
 })
 
 test_that("Censoring models fit on other clones are rejected", {
@@ -477,6 +513,7 @@ test_that("computeWeightDistribution summarizes the weights of clones under foll
     expect_equal(distribution$effectiveSampleSize[i], sum(w)^2 / sum(w^2))
   }
   expect_equal(nrow(distribution), 8)
+  expect_equal(attr(distribution, "strategyLabels"), vapply(attr(clones, "metaData")$strategies, function(strategy) strategy$label, character(1)))
 
   defaultDays <- computeWeightDistribution(weighted)
   expect_equal(sort(unique(defaultDays$day)), sort(unique(as.integer(segments$stopTime))))
@@ -484,10 +521,14 @@ test_that("computeWeightDistribution summarizes the weights of clones under foll
 
   skip_if_not_installed("ggplot2")
   fileName <- tempfile(fileext = ".png")
-  plot <- plotWeightDistribution(defaultDays, strategyLabels = c("Initiate", "Defer"), fileName = fileName)
+  plot <- plotWeightDistribution(defaultDays, labels = c("Initiate", "Defer"), fileName = fileName)
   expect_true(file.exists(fileName))
   unlink(fileName)
   expect_s3_class(plot, "ggplot")
+  expect_equal(levels(plot$data$strategy), c("Initiate", "Defer"))
+  # Without labels, the strategy labels of the weighted clones:
+  expect_equal(levels(plotWeightDistribution(defaultDays)$data$strategy), attr(defaultDays, "strategyLabels"))
+  close(weighted)
   close(clones)
   close(data)
 })

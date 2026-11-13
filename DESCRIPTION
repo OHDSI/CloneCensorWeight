@@ -17,9 +17,10 @@ Authors@R:
 Description: Implements clone-censor-weight target trial emulation for
     observational studies in the OMOP Common Data Model. The package
     follows the OHDSI HADES framework and provides data extraction,
-    cloning, artificial and classical inverse probability of censoring
-    weighting, clustered-variance outcome models, covariate balance
-    diagnostics, and empirical calibration.
+    cloning, inverse probability weighting for artificial censoring
+    (deviation from the treatment strategies), weighted outcome models
+    with person-clustered robust and bootstrap variances, covariate
+    balance diagnostics, and a simulator with known true risks.
 License: Apache License (>= 2) | file LICENSE
 Encoding: UTF-8
 LazyData: false
@@ -55,7 +56,6 @@ Suggests:
     ipw (>= 1.3.2),
     knitr,
     PhenotypeLibrary,
-    ResultModelManager,
     rmarkdown,
     RSQLite,
     sandwich (>= 3.1-0),
@@ -63,8 +63,7 @@ Suggests:
     survival (>= 3.8-6),
     testthat (>= 3.0.0),
     trtswitch (>= 0.2.8),
-    TTE (>= 1.1.2),
-    withr
+    TTE (>= 1.1.2)
 Remotes:
     ohdsi/Cyclops@develop,
     ohdsi/CohortMethod@left-censored

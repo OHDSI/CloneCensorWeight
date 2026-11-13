@@ -210,10 +210,13 @@
   tables <- c("persons", "clones", if (weighted) c("segments", "personWeights"))
   missingTables <- setdiff(tables, names(x))
   if (length(missingTables) > 0) {
-    return(sprintf("Must contain table(s) %s", paste(missingTables, collapse = ", ")))
+    return(sprintf(
+      "Must contain table(s) %s%s", paste(missingTables, collapse = ", "),
+      if (weighted) ": use the weighted clones returned by computeCensoringWeights()" else ""
+    ))
   }
   if (weighted && is.null(attr(x, "metaData")$weights)) {
-    return("Must have metaData$weights (use the object returned by .addSegments())")
+    return("Must have metaData$weights: use the weighted clones returned by computeCensoringWeights()")
   }
   return(TRUE)
 }

@@ -25,8 +25,9 @@
 #' - `clones`: one row per person and strategy with follow-up, with the day the strategy is violated,
 #'   the last day of follow-up, and the reason follow-up ended.
 #'
-#' After `computeCensoringWeights()` it also holds `segments` (weighted pieces of each clone's
-#' follow-up) and `personWeights` (weight summaries per clone). The `metaData` attribute holds the
+#' The weighted clones that `computeCensoringWeights()` returns (a copy in a new Andromeda) also hold
+#' `segments` (weighted pieces of each clone's follow-up) and `personWeights` (weight summaries per
+#' clone). The `metaData` attribute holds the
 #' strategies, outcome ID, treatment IDs, same-day ordering, competing events, attrition, and target ID.
 #'
 #' @name CcwClones-class
@@ -139,6 +140,21 @@ setClass("CcwClones", contains = "Andromeda")
   class(ccwClones) <- "CcwClones"
   attr(class(ccwClones), "package") <- "CloneCensorWeight"
   return(ccwClones)
+}
+
+# A new CcwClones object, in its own Andromeda, with copies of the `persons` and `clones` tables and of
+# the metaData (without `metaData$weights`) of `clones`. computeCensoringWeights() weights such a copy,
+# so weighting the same clones twice leaves the earlier weighted object unchanged.
+.copyCcwClones <- function(clones) {
+  copy <- Andromeda::andromeda()
+  copy$persons <- clones$persons
+  copy$clones <- clones$clones
+  metaData <- attr(clones, "metaData")
+  metaData$weights <- NULL
+  attr(copy, "metaData") <- metaData
+  class(copy) <- "CcwClones"
+  attr(class(copy), "package") <- "CloneCensorWeight"
+  return(copy)
 }
 
 # Adds the `segments` and `personWeights` tables (data frames or Andromeda tables) to a CcwClones

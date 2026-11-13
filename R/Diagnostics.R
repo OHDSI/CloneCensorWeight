@@ -48,10 +48,11 @@ CohortMethod::drawAttritionDiagram
 #' The data frame returned by [CohortMethod::computeMdrr()]: counts of persons, clones (exposures),
 #' days at risk and outcomes per arm, the MDRR, and the expected standard error.
 #'
+#' @example inst/examples/clones.R
 #' @examples
-#' \dontrun{
 #' computeMdrr(clones)
-#' }
+#' close(clones)
+#' close(data)
 #'
 #' @export
 computeMdrr <- function(clones, alpha = 0.05, power = 0.8, twoSided = TRUE, modelType = "cox") {

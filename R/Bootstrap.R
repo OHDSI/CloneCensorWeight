@@ -34,9 +34,19 @@
 #' every replicate, without cross-validation. The pooled logistic outcome model gets clones split on
 #' its interval grid (`computeCensoringWeights(outcomeTimeBasis = )`).
 #'
-#' A replicate in which the analysis fails (for example because a censoring model cannot be fitted)
-#' gets `NA` estimates, with a warning, and replicates with a missing or infinite estimate are left out
-#' of that estimate's standard error and limits, as in [boot::boot.ci()]. Ratios (hazard, odds and risk
+#' In the replicates, the censoring models are fitted with `errorOnHighCorrelation = FALSE`: the check
+#' for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
+#' already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
+#' replicates are not shown; those of a failed replicate are reported with its failure.
+#'
+#' A replicate fails when the analysis stops with an error (for example because a censoring model
+#' cannot be fitted) or gives no finite estimate (for example because the outcome model cannot be
+#' fitted). Failed replicates get `NA` estimates and are counted in `metaData$bootstrap$failedReplicates`,
+#' with a warning. Replicates with a missing or infinite estimate (for example the risks of a replicate
+#' whose death model cannot be fitted) are left out of that estimate's standard error and limits, as
+#' in [boot::boot.ci()]; `metaData$bootstrap$finiteReplicates` gives the number of replicates used for
+#' each estimate, with a warning when it is smaller than the number of replicates that did not fail.
+#' Ratios (hazard, odds and risk
 #' ratios) are summarized on the log scale. The standard error is the standard deviation of the
 #' replicates. The 95% limits follow [boot::boot.ci()]: with `bootstrapArgs$ci = "percentile"` they are
 #' its `"perc"` limits, the (R + 1) 0.025 and (R + 1) 0.975 order statistics of the R replicates,
@@ -72,7 +82,12 @@
 #' "bootstrap"`: the full-data estimates with their bootstrap standard errors, limits and p-values,
 #' the full-data coefficients with their bootstrap covariance (`vcov`), the counts of the full-data
 #' clones, and `metaData$bootstrap` (the settings, the number of replicates, the number of failed
-#' replicates, and the fixed prior variances). It also holds `replicates`, a matrix with one row per
+#' replicates, the number of finite replicates of each estimate, and the fixed prior variances). For the
+#' pooled logistic model with a natural spline or orthogonal polynomial time basis, whose knots or
+#' polynomial coefficients are recomputed from the data of each replicate, the time-basis coefficients
+#' (and the intercepts, and with an orthogonal polynomial and the interaction also the target
+#' coefficients) mean different things in different replicates: their rows and columns of `vcov` are
+#' `NA`. It also holds `replicates`, a matrix with one row per
 #' replicate and one column per estimand of the estimates, and, with `returnCounts = TRUE`,
 #' `bootstrapCounts`, the counts (persons by replicates, with the `personSeqId` as row names).
 #'
@@ -184,29 +199,49 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   if (!is.null(full$coefficients)) {
     coefficientReplicates <- matrix(NA_real_, nReplicates, length(full$coefficients), dimnames = list(NULL, names(full$coefficients)))
   }
+  # The full-data fit has passed the high-correlation diagnostic; in replicates, duplicated persons can
+  # fail it by chance, which would drop those replicates selectively.
+  replicateCensoringModelsArgs <- fitCensoringModelsArgs$clone()
+  replicateCensoringModelsArgs$errorOnHighCorrelation <- FALSE
   failures <- character(0)
   for (replicate in seq_len(nReplicates)) {
     message(sprintf("Bootstrap replicate %d of %d", replicate, nReplicates))
     resampled <- .resampleCloneCensorWeightData(cloneCensorWeightData, personSeqIds, counts[, replicate])
-    result <- tryCatch(
-      suppressMessages(.runBootstrapAnalysis(
-        cloneCensorWeightData = resampled,
-        outcomeId = outcomeId,
-        createStudyPopulationArgs = createStudyPopulationArgs,
-        createClonesArgs = createClonesArgs,
-        fitCensoringModelsArgs = fitCensoringModelsArgs,
-        computeWeightsArgs = computeWeightsArgs,
-        fitOutcomeModelArgs = fitOutcomeModelArgs,
-        fixedPriorVariances = fixedPriorVariances
-      )),
-      error = function(e) conditionMessage(e)
+    replicateWarnings <- character(0)
+    result <- withCallingHandlers(
+      tryCatch(
+        suppressMessages(.runBootstrapAnalysis(
+          cloneCensorWeightData = resampled,
+          outcomeId = outcomeId,
+          createStudyPopulationArgs = createStudyPopulationArgs,
+          createClonesArgs = createClonesArgs,
+          fitCensoringModelsArgs = replicateCensoringModelsArgs,
+          computeWeightsArgs = computeWeightsArgs,
+          fitOutcomeModelArgs = fitOutcomeModelArgs,
+          fixedPriorVariances = fixedPriorVariances
+        )),
+        error = function(e) conditionMessage(e)
+      ),
+      warning = function(w) {
+        replicateWarnings <<- c(replicateWarnings, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      }
     )
     close(resampled)
     if (is.character(result)) {
       failures <- c(failures, sprintf("replicate %d: %s", replicate, result))
       next
     }
-    replicates[replicate, ] <- result$estimates$estimate[match(estimands, result$estimates$estimand)]
+    estimates <- result$estimates$estimate[match(estimands, result$estimates$estimand)]
+    if (!any(is.finite(estimates))) {
+      # The outcome model could not be fitted (it warns why):
+      failures <- c(failures, sprintf(
+        "replicate %d: no finite estimate%s", replicate,
+        if (length(replicateWarnings) == 0) "" else sprintf(" (%s)", paste(unique(replicateWarnings), collapse = "; "))
+      ))
+      next
+    }
+    replicates[replicate, ] <- estimates
     if (!is.null(coefficientReplicates)) {
       coefficientReplicates[replicate, ] <- result$coefficients[colnames(coefficientReplicates)]
     }
@@ -217,10 +252,22 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
       length(failures), nReplicates, paste(utils::head(failures, 3), collapse = "; ")
     ))
   }
+  finiteReplicates <- colSums(is.finite(replicates))
+  incomplete <- finiteReplicates < nReplicates - length(failures)
+  if (any(incomplete)) {
+    warning(sprintf(
+      "Some estimates are missing or infinite in bootstrap replicates that did not fail, and are left out of their standard errors and limits (finite replicates of %d): %s",
+      nReplicates - length(failures),
+      paste(sprintf("%s (%d)", estimands[incomplete], finiteReplicates[incomplete]), collapse = ", ")
+    ))
+  }
 
   vcov <- NULL
   if (!is.null(coefficientReplicates)) {
     vcov <- stats::cov(coefficientReplicates, use = "pairwise.complete.obs")
+    variable <- !(colnames(vcov) %in% .replicateInvariantCoefficients(colnames(vcov), fitOutcomeModelArgs))
+    vcov[variable, ] <- NA
+    vcov[, variable] <- NA
   }
   metaData <- full$metaData
   result <- list(
@@ -240,6 +287,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
       bootstrap = list(
         replicates = nReplicates,
         failedReplicates = length(failures),
+        finiteReplicates = finiteReplicates,
         seed = bootstrapArgs$seed,
         ci = bootstrapArgs$ci,
         fixHyperparameters = bootstrapArgs$fixHyperparameters,
@@ -279,6 +327,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   }
   outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
   weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)
+  on.exit(close(weightedClones), add = TRUE)
   point <- .fitOutcomeModelPoint(weightedClones, fitOutcomeModelArgs)
   return(list(
     estimates = point$estimates,
@@ -288,6 +337,23 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     metaData = attr(weightedClones, "metaData"),
     riskStart = createStudyPopulationArgs$riskWindowStart
   ))
+}
+
+# The coefficients (of `coefficientNames`) that mean the same in every replicate. The time basis of the
+# pooled logistic model is rebuilt from the data of each replicate for a natural spline (knots at
+# quantiles) or an orthogonal polynomial (centring and scaling), so then only the target coefficients
+# are comparable: the odds ratios without the interaction and, with it, where the basis is 0 (the first
+# interval for the natural spline; a data-dependent point for the orthogonal polynomial, so none).
+.replicateInvariantCoefficients <- function(coefficientNames, fitOutcomeModelArgs) {
+  timeBasis <- fitOutcomeModelArgs$timeBasis
+  dataDependent <- timeBasis$type == "naturalSpline" || (timeBasis$type == "polynomial" && !timeBasis$raw)
+  if (fitOutcomeModelArgs$modelType != "logistic" || !dataDependent) {
+    return(coefficientNames)
+  }
+  if (timeBasis$type == "polynomial" && fitOutcomeModelArgs$armByTimeInteraction) {
+    return(character(0))
+  }
+  return(intersect(coefficientNames, c("target", "death:target")))
 }
 
 # A new CloneCensorWeightData in which the person with personSeqIds[i] appears counts[i] times, each

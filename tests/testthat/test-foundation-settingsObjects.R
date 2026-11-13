@@ -195,11 +195,11 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expectRoundTrip(createBootstrapArgs(), BootstrapArgs)
   expectRoundTrip(createBootstrapArgs(replicates = 50, seed = 42, ci = "normal", fixHyperparameters = FALSE), BootstrapArgs)
   expectRoundTrip(createFitOutcomeModelArgs(), FitOutcomeModelArgs)
-  # Contract section 9, amendments 6 and 7: daily natural-spline basis and Newton steps to a KKT
-  # tolerance of 1e-10.
+  # Contract section 9, amendments 6 and 7: daily natural-spline basis and Newton steps until the relative
+  # change of the objective is below 1e-10.
   defaults <- createFitOutcomeModelArgs()
   expect_equal(defaults$timeBasis$toList()[c("type", "intervalLength", "df")], list(type = "naturalSpline", intervalLength = 1, df = 4))
-  expect_equal(defaults$control[c("algorithm", "convergenceType", "tolerance")], list(algorithm = "newton", convergenceType = "kkt", tolerance = 1e-10))
+  expect_equal(defaults$control[c("algorithm", "convergenceType", "tolerance")], list(algorithm = "newton", convergenceType = "gradient", tolerance = 1e-10))
   expect_equal(FitOutcomeModelArgs$new(json = defaults$toJson())$control$algorithm, "newton")
   expectRoundTrip(
     createFitOutcomeModelArgs(

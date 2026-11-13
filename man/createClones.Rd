@@ -66,9 +66,12 @@ window of the same person (\code{censorAtNewRiskWindow}). With \code{competingEv
 an event: it ends follow-up as the end of observation.
 
 Clones that end before \code{riskStart} (for example a start on day 0 in a \code{"neverInitiate"} strategy
-when \code{riskStart = 1}) have no follow-up and are dropped. The attrition gains two rows,
-\code{"Clones created"} and \code{"Clones with follow-up"}, with the target strategy counted in the target
-columns and the comparator strategy in the comparator columns.
+when \code{riskStart = 1}) have no follow-up and are dropped. In the attrition, the rows of the study
+population count every person in both the target and the comparator columns (every person is
+cloned into both strategies), and two rows are added, \code{"Clones created"} and
+\code{"Clones with follow-up"}, with the target strategy counted in the target columns and the comparator
+strategy in the comparator columns, so that \code{\link[=drawAttritionDiagram]{drawAttritionDiagram()}} shows the clones without
+follow-up as removed from each strategy.
 
 This version supports strategies with \code{graceStart = 0} and without \code{prohibitedTreatments}.
 }

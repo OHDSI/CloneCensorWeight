@@ -46,7 +46,8 @@ each interval (\code{-Inf} or \code{Inf} for a hazard of 0 or 1).
 (binary models), and the fitting status.
 }
 
-The \code{metaData} attribute holds the outcome ID, same-day ordering, strategies and the settings.
+The \code{metaData} attribute holds the outcome ID, same-day ordering, competing events, strategies and
+the settings.
 }
 \description{
 Fits, for each strategy, the model of artificial censoring (deviation from the strategy) used to
@@ -85,20 +86,49 @@ The default, \code{hazardModelType = "logistic"} with a daily indicator basis, i
 discrete-time hazard of initiation. The Cox model treats initiation days as continuous times with
 Breslow ties, so \verb{exp(-Lambda0(d + 1) exp(X beta))} is not the probability of no initiation on days
 \verb{0..d} when the daily probability of initiating is large (for example \code{exp(-0.3) = 0.74} against
-\code{1 - 0.3 = 0.7} for one day, as when many persons start on day 0). The resulting weights do not
-reproduce the population, and weighted risks can be biased when initiation is confounded. The Cox
-model is meant for long horizons (for example \code{"neverInitiate"}) with few initiations per day.
+\code{1 - 0.3 = 0.7} for one day, as when many persons start on day 0). The error builds up over the
+days of the horizon, so the bias of the Cox weights grows with the horizon and with each person's
+daily probability of initiating, and is largest for \code{"neverInitiate"} strategies. The resulting
+weights do not reproduce the population, and weighted risks can be biased when initiation is
+confounded. For long horizons, prefer the pooled logistic model, with a longer \code{intervalLength} if
+daily intervals are too costly.
+
+\code{maxCohortSizeForFitting} applies only to the binary models (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}});
+in this version the hazard models are always fitted to their whole risk set.
 
 With \code{useCovariates = FALSE} the models have only an intercept and time, so they equal their
 numerator models.
 }
 \examples{
-\dontrun{
+# Simulated data, its study population, and the clones of two strategies:
+data <- simulateCloneCensorWeightData(n = 200, maxDays = 60, graceEnd = 7, seed = 1)
+population <- createStudyPopulation(
+  cloneCensorWeightData = data,
+  outcomeId = 3,
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 60,
+    endAnchor = "cohort start"
+  )
+)
+clones <- createClones(
+  population = population,
+  cloneCensorWeightData = data,
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+    )
+  )
+)
+# Without the baseline covariates, to keep the example fast (by default the models use all
+# covariates, with a cross-validated prior):
 censoringModels <- fitCensoringModels(
   clones = clones,
-  cloneCensorWeightData = cloneCensorWeightData,
-  fitCensoringModelsArgs = createFitCensoringModelsArgs()
+  cloneCensorWeightData = data,
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
 )
-}
+censoringModels[[2]]$diagnostics
+close(clones)
+close(data)
 
 }

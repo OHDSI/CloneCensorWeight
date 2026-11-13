@@ -410,7 +410,7 @@ test_that("The default outcome-model control agrees with the references to 1e-8 
   }
   control <- createFitOutcomeModelArgs()$control
   expect_equal(control$algorithm, "newton")
-  expect_equal(control$convergenceType, "kkt")
+  expect_equal(control$convergenceType, "gradient")
   expect_equal(control$tolerance, 1e-10)
 })
 
@@ -514,4 +514,197 @@ test_that("The censoring and outcome models build the same time basis for the sa
   censoring <- .createTimeBasisMatrix(createTimeBasis("indicator"), 6, c(0, 2, 5))
   expect_equal(colnames(censoring), c("timeBasis2", "timeBasis5"))
   expect_equal(unname(censoring), unname(.timeBasisColumns(createTimeBasis("indicator"), c(0, 2, 5))$build(0:5)))
+})
+
+# Review of the integrated package --------------------------------------------------------------------
+
+# A dailyWeightFixture whose deaths (`reason = "death"`) or outcomes (`"outcome"`) are kept only on the
+# given days (since index); the other clones with that end reason end follow-up as the end of
+# observation instead.
+keepEventsOn <- function(fixture, reason, days) {
+  drop <- fixture$clones$endReason == reason & !(fixture$clones$endDay %in% days)
+  fixture$clones$endReason[drop] <- "observationEnd"
+  fixture$clones$outcomeCount[drop] <- 0L
+  column <- if (reason == "outcome") "outcome" else "competing"
+  fixture$segments[[column]][fixture$segments$cloneRowId %in% fixture$clones$cloneRowId[drop]] <- 0L
+  return(fixture)
+}
+
+test_that("The default control fits a weighted Cox MSM on a million segments as coxph does", {
+  skip_on_cran()
+  skip_if_not_installed("survival")
+  # The clones of 20,000 simulated persons split on the daily grid (about 1e6 segments). Newton steps
+  # stopped by the standardized-gradient ("kkt") criterion reached maxIterations at the optimum here.
+  data <- simulateCloneCensorWeightData(
+    n = 20000, graceEnd = 10, maxDays = 60, initiationHazard = 0.03, outcomeHazard = 0.003, deathHazard = 0.001,
+    observationEndHazard = 0.003, initiationCoefficients = rep(0.5, 5), outcomeCoefficients = rep(0.5, 5),
+    deathCoefficients = rep(0.3, 5), treatmentEffect = 0, seed = 1
+  )
+  on.exit(close(data))
+  population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 60, endAnchor = "cohort start"
+  )))
+  strategies <- list(
+    createTreatmentStrategy(1, "Initiate", "initiateWithin", graceEnd = 10),
+    createTreatmentStrategy(2, "Defer", "notInitiateWithin", graceEnd = 10)
+  )
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies, sameDayOrdering = "deviationFirst")))
+  on.exit(close(clones), add = TRUE)
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(hazardModelType = "cox", prior = Cyclops::createPrior("none"))))
+  weightedClones <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("none")), outcomeTimeBasis = createTimeBasis("indicator", 1)))
+  on.exit(close(weightedClones), add = TRUE)
+  segments <- as.data.frame(dplyr::collect(weightedClones$segments))
+  expect_gt(nrow(segments), 1e6)
+
+  expect_silent(point <- .fitOutcomeModelPoint(weightedClones, createFitOutcomeModelArgs(modelType = "cox", horizons = 60)))
+  segments$x <- as.integer(segments$strategyId == 1)
+  reference <- survival::coxph(
+    survival::Surv(startTime, stopTime, outcome) ~ x,
+    data = segments[segments$weight > 0, ], weights = weight, ties = "breslow",
+    control = survival::coxph.control(eps = 1e-12, toler.chol = 1e-14, iter.max = 50)
+  )
+  expect_equal(point$estimates$logEstimate[point$estimates$estimand == "hr"], unname(coef(reference)), tolerance = 1e-8)
+  expect_false(anyNA(point$estimates$estimate))
+})
+
+test_that("The default control fits a quasi-separated death model, whose risks equal glm", {
+  # Deaths on days 1, 2 and 10 only: the natural spline death model is quasi-separated (its hazard tends
+  # to 0 away from those days). A standardized-gradient criterion was not met at its optimum.
+  glmControl <- glm.control(epsilon = 1e-14, maxit = 100)
+  for (riskStart in 0:1) {
+    fixture <- keepEventsOn(dailyWeightFixture(riskStart, "death", seed = 3, n = 150, maxDays = 15, outcomeRate = 0.5, deathRate = 0.3), "death", riskStart + c(1, 2, 10))
+    rows <- handIntervalRows(fixture, 1)
+    expect_equal(sort(unique(rows$k[rows$death == 1])), c(1, 2, 10))
+    weightedClones <- createM4WeightedClones(fixture, 1)
+    horizons <- riskStart + c(7, 14)
+    expect_silent(model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons))))
+    close(weightedClones)
+    basis <- splines::ns(rows$k, df = 4)
+    noDeath <- rows$death == 0
+    outcomeFit <- glm(rows$y[noDeath] ~ rows$x[noDeath] + basis[noDeath, ], family = quasibinomial(), weights = rows$weight[noDeath], control = glmControl)
+    deathFit <- glm(rows$death ~ rows$x + basis, family = quasibinomial(), weights = rows$weight, control = glmControl)
+    expect_true(deathFit$converged)
+    # The outcome model is not separated, so its coefficients agree; the death model's agree only where
+    # its likelihood is not flat, which its hazards and so the risks show:
+    expect_equal(unname(model$coefficients[1:6]), unname(coef(outcomeFit)), tolerance = 1e-8)
+    for (h in horizons) {
+      newBasis <- predict(basis, seq_len(h - riskStart + 1) - 1)
+      for (x in 1:0) {
+        hazardY <- plogis(as.vector(cbind(1, x, newBasis) %*% coef(outcomeFit)))
+        hazardD <- plogis(as.vector(cbind(1, x, newBasis) %*% coef(deathFit)))
+        estimand <- sprintf("risk_%s_%s", if (x == 1) "target" else "comparator", h)
+        expect_equal(getM4Estimate(model, estimand), utils::tail(youngCif(hazardY, hazardD), 1), tolerance = 1e-8)
+      }
+    }
+    expect_false(anyNA(model$estimates$estimate))
+    expect_false(anyNA(model$estimates$se[grepl("^(risk|rd)_", model$estimates$estimand)]))
+  }
+})
+
+test_that("Indicator bases give intervals or cells without events a hazard of 0", {
+  skip_if_not_installed("survival")
+  for (riskStart in 0:1) {
+    # Saturated (indicator x strategy): some strategy x day cells have no deaths. Risks and their robust
+    # standard errors equal the weighted Aalen-Johansen ones.
+    fixture <- dailyWeightFixture(riskStart, "death", seed = 13, n = 300, maxDays = 8, outcomeRate = 0.6, deathRate = 0.25)
+    rows <- handIntervalRows(fixture, 1)
+    cells <- aggregate(cbind(death, rows = 1) ~ x + k, data = rows, FUN = sum)
+    expect_true(any(cells$death == 0))
+    weightedClones <- createM4WeightedClones(fixture, 1)
+    horizons <- riskStart + c(3, 8)
+    expect_silent(saturated <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(
+      modelType = "logistic", horizons = horizons, timeBasis = createTimeBasis("indicator", intervalLength = 1), armByTimeInteraction = TRUE
+    ))))
+    km <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "km", horizons = horizons)))
+    close(weightedClones)
+    contrasts <- grepl("^(risk|rd)_", saturated$estimates$estimand)
+    expect_equal(sum(contrasts), 6)
+    reference <- km$estimates[match(saturated$estimates$estimand[contrasts], km$estimates$estimand), ]
+    expect_equal(saturated$estimates$estimate[contrasts], reference$estimate, tolerance = 1e-8)
+    expect_equal(saturated$estimates$se[contrasts], reference$se, tolerance = 1e-6)
+
+    # Without the interaction and with outcomes on only a few days: the other days have a hazard of 0,
+    # and the model is the glm of the days with outcomes.
+    fixture <- keepEventsOn(dailyWeightFixture(riskStart, "none", seed = 14, n = 200, maxDays = 20, outcomeRate = 0.5), "outcome", riskStart + c(2, 5, 6, 11, 17))
+    rows <- handIntervalRows(fixture, 1)
+    eventIntervals <- sort(unique(rows$k[rows$y == 1]))
+    expect_lt(length(eventIntervals), 10)
+    weightedClones <- createM4WeightedClones(fixture, 1)
+    horizons <- riskStart + c(9, 19)
+    expect_silent(model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(
+      modelType = "logistic", horizons = horizons, timeBasis = createTimeBasis("indicator", intervalLength = 1)
+    ))))
+    close(weightedClones)
+    fitRows <- rows[rows$k %in% eventIntervals, ]
+    referenceFit <- glm(y ~ x + factor(k), family = quasibinomial(), weights = weight, data = fitRows, control = glm.control(epsilon = 1e-14, maxit = 100))
+    expect_equal(model$coefficients[["target"]], unname(coef(referenceFit)[["x"]]), tolerance = 1e-8)
+    for (h in horizons) {
+      k <- seq_len(h - riskStart + 1) - 1
+      for (x in 1:0) {
+        hazard <- numeric(length(k))
+        hazard[k %in% eventIntervals] <- predict(referenceFit, newdata = data.frame(x = x, k = k[k %in% eventIntervals]), type = "response")
+        estimand <- sprintf("risk_%s_%s", if (x == 1) "target" else "comparator", h)
+        expect_equal(getM4Estimate(model, estimand), 1 - prod(1 - hazard), tolerance = 1e-8)
+      }
+    }
+  }
+})
+
+test_that("A fit that fails with the given control is refitted with Cyclops' default control", {
+  skip_if_not_installed("survival")
+  fixture <- createM4Fixture(n = 200, riskStart = 0, competingEvents = "none", seed = 3)
+  weightedClones <- createM4WeightedClones(fixture)
+  on.exit(close(weightedClones))
+  control <- Cyclops::createControl(algorithm = "newton", convergenceType = "gradient", tolerance = 1e-10, maxIterations = 1, noiseLevel = "silent")
+  expect_warning(
+    model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "cox", horizons = 10, control = control))),
+    "Fitting the outcome Cox model failed \\(MAX_ITERATIONS\\), so it was fitted with Cyclops' default"
+  )
+  data <- toSurvivalData(fixture$segments)
+  reference <- survival::coxph(survival::Surv(startTime, stopTime, outcome) ~ x, data = data, weights = weight, ties = "breslow")
+  expect_equal(model$coefficients[["target"]], unname(coef(reference)), tolerance = 1e-6)
+})
+
+test_that("When only the death model fails, the ratio is kept and the risks are NA", {
+  fixture <- createM4Fixture(n = 200, riskStart = 0, competingEvents = "death", seed = 3, maxDays = 15, outcomeRate = 0.7)
+  full <- list(
+    cox = fitM4(fixture, modelType = "cox", horizons = c(5, 10)),
+    logistic = fitM4(fixture, modelType = "logistic", horizons = c(5, 10), timeBasis = createTimeBasis("linear", intervalLength = 1))
+  )
+  realCox <- .fitCyclopsCox
+  realPooled <- .fitPooledModel
+  local_mocked_bindings(
+    .fitCyclopsCox = function(segments, y, prior, control, label) {
+      if (label == "death") NA_real_ else realCox(segments, y, prior, control, label)
+    },
+    .fitPooledModel = function(rows, y, design, prior, control, label, variance, groups = NULL) {
+      if (label == "death") NULL else realPooled(rows, y, design, prior, control, label, variance, groups)
+    }
+  )
+  for (modelType in names(full)) {
+    model <- fitM4(fixture, modelType = modelType, horizons = c(5, 10), timeBasis = createTimeBasis("linear", intervalLength = 1))
+    ratio <- model$estimates[1, ]
+    expect_equal(ratio, full[[modelType]]$estimates[1, ], tolerance = 1e-10)
+    expect_false(is.na(ratio$estimate) || is.na(ratio$seLogEstimate))
+    expect_true(all(is.na(model$estimates$estimate[-1])))
+    expect_equal(model$estimates$estimand, full[[modelType]]$estimates$estimand)
+    death <- startsWith(names(model$coefficients), "death:")
+    expect_equal(names(model$coefficients), names(full[[modelType]]$coefficients))
+    expect_true(all(is.na(model$coefficients[death])))
+    expect_equal(model$coefficients[!death], full[[modelType]]$coefficients[!death], tolerance = 1e-10)
+    expect_true(all(is.na(model$vcov[death, ])))
+    expect_equal(model$vcov[!death, !death], full[[modelType]]$vcov[!death, !death], tolerance = 1e-8)
+  }
+})
+
+test_that("The target and time-basis coefficients of the outcome models are not regularized", {
+  fixture <- createM4Fixture(n = 200, riskStart = 0, competingEvents = "death", seed = 3, maxDays = 15, outcomeRate = 0.7)
+  prior <- Cyclops::createPrior("laplace", variance = 0.01)
+  for (modelType in c("cox", "logistic")) {
+    timeBasis <- createTimeBasis("naturalSpline", intervalLength = 1, df = 3)
+    unpenalized <- fitM4(fixture, modelType = modelType, horizons = c(5, 10), timeBasis = timeBasis)
+    penalized <- fitM4(fixture, modelType = modelType, horizons = c(5, 10), timeBasis = timeBasis, prior = prior)
+    expect_equal(penalized$coefficients, unpenalized$coefficients, tolerance = 1e-8)
+    expect_equal(penalized$estimates, unpenalized$estimates, tolerance = 1e-6)
+  }
 })

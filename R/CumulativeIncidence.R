@@ -131,11 +131,14 @@
 #' weighted number of outcomes since the previous row), `risk`, `lb95` and `ub95`. The attribute
 #' `strategyLabels` holds the strategy labels.
 #'
+#' @example inst/examples/clones.R
+#' @example inst/examples/weightedClones.R
 #' @examples
-#' \dontrun{
-#' curves <- computeCumulativeIncidence(weightedClones)
-#' plotCumulativeIncidence(curves)
-#' }
+#' curves <- computeCumulativeIncidence(weightedClones, horizons = c(7, 30, 60))
+#' curves
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 computeCumulativeIncidence <- function(weightedClones, horizons = NULL) {
@@ -230,11 +233,16 @@ computeCumulativeIncidence <- function(weightedClones, horizons = NULL) {
 #' @return
 #' A ggplot object. Use the [ggplot2::ggsave()] function to save to file in a different format.
 #'
+#' @example inst/examples/clones.R
+#' @example inst/examples/weightedClones.R
 #' @examples
-#' \dontrun{
 #' curves <- computeCumulativeIncidence(weightedClones)
-#' plotCumulativeIncidence(curves, labels = c("Initiate within 30 days", "Do not initiate"))
+#' if (requireNamespace("ggplot2", quietly = TRUE)) {
+#'   plotCumulativeIncidence(curves, labels = c("Initiate within 7 days", "Do not initiate"))
 #' }
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 plotCumulativeIncidence <- function(curves, labels = NULL, fileName = NULL) {

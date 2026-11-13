@@ -52,9 +52,15 @@
 #' discrete-time hazard of initiation. The Cox model treats initiation days as continuous times with
 #' Breslow ties, so `exp(-Lambda0(d + 1) exp(X beta))` is not the probability of no initiation on days
 #' `0..d` when the daily probability of initiating is large (for example `exp(-0.3) = 0.74` against
-#' `1 - 0.3 = 0.7` for one day, as when many persons start on day 0). The resulting weights do not
-#' reproduce the population, and weighted risks can be biased when initiation is confounded. The Cox
-#' model is meant for long horizons (for example `"neverInitiate"`) with few initiations per day.
+#' `1 - 0.3 = 0.7` for one day, as when many persons start on day 0). The error builds up over the
+#' days of the horizon, so the bias of the Cox weights grows with the horizon and with each person's
+#' daily probability of initiating, and is largest for `"neverInitiate"` strategies. The resulting
+#' weights do not reproduce the population, and weighted risks can be biased when initiation is
+#' confounded. For long horizons, prefer the pooled logistic model, with a longer `intervalLength` if
+#' daily intervals are too costly.
+#'
+#' `maxCohortSizeForFitting` applies only to the binary models (through [CohortMethod::createPs()]);
+#' in this version the hazard models are always fitted to their whole risk set.
 #'
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
@@ -89,16 +95,21 @@
 #' - `diagnostics`: risk-set size, number of rows, events (initiations or starts by `G`), the AUC
 #'   (binary models), and the fitting status.
 #'
-#' The `metaData` attribute holds the outcome ID, same-day ordering, strategies and the settings.
+#' The `metaData` attribute holds the outcome ID, same-day ordering, competing events, strategies and
+#' the settings.
 #'
+#' @example inst/examples/clones.R
 #' @examples
-#' \dontrun{
+#' # Without the baseline covariates, to keep the example fast (by default the models use all
+#' # covariates, with a cross-validated prior):
 #' censoringModels <- fitCensoringModels(
 #'   clones = clones,
-#'   cloneCensorWeightData = cloneCensorWeightData,
-#'   fitCensoringModelsArgs = createFitCensoringModelsArgs()
+#'   cloneCensorWeightData = data,
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
 #' )
-#' }
+#' censoringModels[[2]]$diagnostics
+#' close(clones)
+#' close(data)
 #'
 #' @export
 fitCensoringModels <- function(clones,
@@ -173,6 +184,7 @@ fitCensoringModels <- function(clones,
   attr(models, "metaData") <- list(
     outcomeId = metaData$outcomeId,
     sameDayOrdering = sameDayOrdering,
+    competingEvents = metaData$competingEvents,
     strategies = strategies,
     fitCensoringModelsArgs = fitCensoringModelsArgs$toList()
   )

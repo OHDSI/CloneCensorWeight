@@ -20,7 +20,8 @@ fitOutcomeModel(
 An object of class \code{CcwOutcomeModel}: a list with
 \itemize{
 \item \code{modelType} and \code{varianceEstimator};
-\item \code{estimates}: a tibble with one row per estimand (\code{"hr"} or \code{"or"}, and per horizon \code{h}
+\item \code{estimates}: a tibble with one row per estimand (\code{"hr"} or \code{"or"} (with \code{armByTimeInteraction},
+the odds ratio where the time basis is 0; see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), and per horizon \code{h}
 \code{"risk_target_<h>"}, \code{"risk_comparator_<h>"}, \code{"rd_<h>"}, \code{"rr_<h>"}, and for \code{"km"}
 \code{"rmst_<h>"} (without competing events) and \code{"rmtl_<h>"}, the target minus comparator
 differences, with the per-strategy values in \code{"rmst_target_<h>"}, \code{"rmst_comparator_<h>"},
@@ -58,8 +59,12 @@ segment in the interval), and covariates intercept, target indicator, time basis
 \code{armByTimeInteraction}) their interaction. The weighted clones must be split on the same interval
 grid, by \code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}. With daily intervals (the
 default) every row carries the exact weight of its day, so a saturated time basis per strategy
-gives the weighted Kaplan-Meier or Aalen-Johansen risks. Risks are \code{1 - prod(1 - h)} without
-competing events;
+(an indicator basis with \code{armByTimeInteraction = TRUE}) gives the weighted Kaplan-Meier or
+Aalen-Johansen risks. With an indicator basis, an interval (or, with the interaction, a strategy
+and interval) with rows but no events has a hazard of 0, and one in which every row has the event
+a hazard of 1, the limits of the maximum likelihood fit; their rows are left out of the fit, and the
+coefficients that only they inform (whose estimates are infinite) are \code{NA}. Risks are
+\code{1 - prod(1 - h)} without competing events;
 with competing death, the outcome model is fitted to rows with no death in the interval, a death
 model to all rows, and the risk is that of Young et al. (2020). The model is fitted to the
 weighted numbers of rows with and without an event per strategy and interval, which have the
@@ -75,6 +80,17 @@ strategy.
 Horizons are days since index and are read at \code{t = horizon - riskStart + 1}, so the risk includes
 events on the horizon day.
 
+The risks of the \code{"cox"} model, and of the \code{"logistic"} model without \code{armByTimeInteraction}, assume
+an effect of the strategy that is constant over follow-up (proportional hazards or odds). A grace
+period violates this assumption by design: the clones of both strategies follow the same course
+during the grace period. Their risks, risk differences and risk ratios can then be biased, also at
+horizons within the grace period. The \code{"km"} risks do not make this assumption.
+
+The models are fitted with Cyclops using \code{fitOutcomeModelArgs$control}; a fit that fails is refitted
+with Cyclops' default algorithm and convergence criterion, with a warning. When the death model of
+competing death cannot be fitted, the hazard or odds ratio of the outcome model is still reported,
+and the risks are \code{NA}.
+
 The robust variance (\code{varianceEstimator = "robust"}) is the HC0 sandwich clustered on person, so all
 clones of a person share a cluster, treating the weights as fixed. For \code{"cox"} and \code{"km"} the risk
 standard errors are infinitesimal-jackknife standard errors (for \code{"cox"}, including the estimation
@@ -85,14 +101,55 @@ not supported. \code{varianceEstimator = "bootstrap"} is computed by \code{\link
 this function.
 }
 \examples{
-\dontrun{
+# Simulated data, its study population, and the clones of two strategies:
+data <- simulateCloneCensorWeightData(n = 200, maxDays = 60, graceEnd = 7, seed = 1)
+population <- createStudyPopulation(
+  cloneCensorWeightData = data,
+  outcomeId = 3,
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 60,
+    endAnchor = "cohort start"
+  )
+)
+clones <- createClones(
+  population = population,
+  cloneCensorWeightData = data,
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+    )
+  )
+)
+# The censoring models (without the baseline covariates, to keep the example fast; by default they
+# use all covariates) and the weighted clones, also split on the daily grid of the pooled logistic
+# outcome model:
+censoringModels <- fitCensoringModels(
+  clones = clones,
+  cloneCensorWeightData = data,
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
+)
+weightedClones <- computeCensoringWeights(
+  clones = clones,
+  censoringModels = censoringModels,
+  computeWeightsArgs = createComputeWeightsArgs(),
+  outcomeTimeBasis = createTimeBasis(type = "naturalSpline", intervalLength = 1, df = 4)
+)
 outcomeModel <- fitOutcomeModel(
   weightedClones = weightedClones,
-  fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
+  fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 60))
 )
 outcomeModel
 confint(outcomeModel)
-}
+# The pooled logistic model with the default daily natural spline basis:
+logisticModel <- fitOutcomeModel(
+  weightedClones = weightedClones,
+  fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "logistic", horizons = c(30, 60))
+)
+coef(logisticModel)
+close(weightedClones)
+close(clones)
+close(data)
 
 }
 \references{

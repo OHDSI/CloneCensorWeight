@@ -14,7 +14,7 @@ createFitOutcomeModelArgs(
   useCovariates = FALSE,
   stratified = FALSE,
   prior = Cyclops::createPrior("none"),
-  control = Cyclops::createControl(algorithm = "newton", convergenceType = "kkt",
+  control = Cyclops::createControl(algorithm = "newton", convergenceType = "gradient",
     tolerance = 1e-10, noiseLevel = "silent")
 )
 }
@@ -28,7 +28,13 @@ reported.}
 \item{timeBasis}{An object of type \code{TimeBasis} as created using \code{\link[=createTimeBasis]{createTimeBasis()}}, used
 by the pooled logistic model.}
 
-\item{armByTimeInteraction}{Add strategy-by-time interactions to the pooled logistic model?}
+\item{armByTimeInteraction}{Add strategy-by-time interactions to the pooled logistic model? With the
+interactions, the odds ratio reported as \code{"or"} is the odds ratio where
+the time basis is 0: in the first interval for the indicator, natural
+spline, linear and raw polynomial bases (where clones of both strategies
+often have the same weights and hazards, so it is close to 1), and at no
+particular interval for an orthogonal polynomial basis. It is not a
+summary of the effect over follow-up.}
 
 \item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person),
 \code{"bootstrap"} (computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}), or \code{"modelBased"}.}
@@ -40,7 +46,11 @@ by the pooled logistic model.}
 
 \item{stratified}{Fit a stratified model?}
 
-\item{prior}{The prior used to fit the model. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}.}
+\item{prior}{The prior used to fit the model. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}. The target
+indicator, the time basis and their interactions are never regularized
+(they are added to the prior's \code{exclude}), as CohortMethod excludes the
+treatment variable. This version fits no other covariates, so the prior
+has no effect on the estimates.}
 
 \item{control}{The control object used to fit the model. See
 \code{\link[Cyclops:createControl]{Cyclops::createControl()}}.}
@@ -61,10 +71,21 @@ The pooled logistic model needs weighted clones cut on its interval grid
 (\code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}). Its default, daily intervals with a
 natural spline of time, uses the exact daily weights.
 
-The default \code{control} (Newton steps until the Karush-Kuhn-Tucker conditions hold to \code{1e-10}) fits
-the models to the precision of their reference implementations (\code{survival::coxph()} and
-\code{stats::glm()}), also on ill-scaled time bases, where Cyclops' default coordinate descent stops
-early.
+The default \code{control} (Newton steps until the relative change of the log likelihood is below
+\code{1e-10}) fits the models to the precision of their reference implementations (\code{survival::coxph()}
+and \code{stats::glm()}), also on ill-scaled time bases, where coordinate descent stops early. The
+criterion is relative, so it is met on large data (millions of weighted rows) and on models with
+quasi-separated hazards, where a criterion on the gradient can fail to be met at the optimum. If a
+fit with \code{control} fails, \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} refits it with Cyclops' default algorithm and
+convergence criterion, with a warning.
+
+The Cox and pooled logistic models without \code{armByTimeInteraction} assume an effect of the strategy
+that is constant over follow-up (proportional hazards or odds). Their risks at the horizons inherit
+this assumption, which a grace period violates: during the grace period the clones of both
+strategies follow the same course, so the true hazards are equal there. Their risks, risk
+differences and risk ratios can then be biased, also at horizons within the grace period. The
+Kaplan-Meier (\code{"km"}) risks, or the pooled logistic model with \code{armByTimeInteraction = TRUE} and an
+indicator (saturated) time basis, do not make this assumption.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

@@ -92,6 +92,14 @@ person who started on day \code{A}. The effect starts the day after initiation a
 since initiation, so the start day within a grace period changes later risk.
 }
 
+The daily initiation hazard is constant over time, so the probability of starting by day \code{G},
+\code{1 - (1 - plogis(qlogis(initiationHazard) + X \%*\% initiationCoefficients))^(G + 1)}, is not linear
+in X on the logit scale. The binary censoring model of an \code{initiateWithin(G)} strategy, a logistic
+regression on X fitted by \code{\link[=fitCensoringModels]{fitCensoringModels()}}, is therefore misspecified on these data. Its bias
+is negligible when initiation is weakly confounded or rare, but it can be detected with strong
+covariate effects on initiation and a high daily initiation hazard. The pooled logistic initiation
+hazard models of \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies are correctly specified.
+
 On one day, the outcome comes before death. The outcome, death, and the treatment start are
 recorded when they fall on or before the end of observation, which is the first of the observation
 end, death, and \code{maxDays}. Each person has one index date, one treatment era (from the start to the

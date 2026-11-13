@@ -4,16 +4,13 @@
 \alias{plotWeightDistribution}
 \title{Plot the distribution of the censoring weights over time}
 \usage{
-plotWeightDistribution(
-  weightDistribution,
-  strategyLabels = c("Target", "Comparator"),
-  fileName = NULL
-)
+plotWeightDistribution(weightDistribution, labels = NULL, fileName = NULL)
 }
 \arguments{
 \item{weightDistribution}{A tibble as created by \code{\link[=computeWeightDistribution]{computeWeightDistribution()}}.}
 
-\item{strategyLabels}{Labels of the two strategies (target first).}
+\item{labels}{The labels of strategies 1 (target) and 2 (comparator). If \code{NULL}, the
+\code{strategyLabels} attribute of \code{weightDistribution} is used.}
 
 \item{fileName}{Name of the file where the plot should be saved, for example
 'plot.png'. See \code{\link[ggplot2:ggsave]{ggplot2::ggsave()}} for supported file formats. If

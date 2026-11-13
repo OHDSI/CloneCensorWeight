@@ -57,8 +57,8 @@
 #'
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
-#'                           [fitCensoringModels()] on the same clones (same outcome and same-day
-#'                           ordering).
+#'                           [fitCensoringModels()] on the same clones (same outcome, same-day
+#'                           ordering and competing events).
 #' @param computeWeightsArgs An object of type `ComputeWeightsArgs` as created using
 #'                           [createComputeWeightsArgs()].
 #' @param outcomeTimeBasis   `NULL`, or the object of type `TimeBasis` (as created using
@@ -66,7 +66,9 @@
 #'                           these clones: the clones are then also split on its interval grid.
 #'
 #' @return
-#' The `clones` object, with two more tables:
+#' A new [CcwClones] object, in its own Andromeda (close it when done), with copies of the tables and
+#' metaData of `clones` and two more tables. `clones` itself is not changed, so the same clones can be
+#' weighted several times (for example with and without stabilization).
 #'
 #' - `segments`: `segmentId`, `cloneRowId`, `rowId`, `personSeqId`, `strategyId`, `startTime`
 #'   (exclusive), `stopTime` (inclusive), `weight` (truncated), `outcome` and `competing` (1 only on the
@@ -76,17 +78,24 @@
 #'
 #' `metaData$weights` holds whether the weights are stabilized, the truncation rule, the cap used per
 #' strategy, a summary of the untruncated weights, and `cutIntervalLength`, the interval length of the
-#' `outcomeTimeBasis` grid the clones are split on (`NA` without one). The tables are added in place,
-#' but the returned object must be used, because only it carries `metaData$weights`.
+#' `outcomeTimeBasis` grid the clones are split on (`NA` without one).
 #'
+#' @example inst/examples/clones.R
 #' @examples
-#' \dontrun{
+#' censoringModels <- fitCensoringModels(
+#'   clones = clones,
+#'   cloneCensorWeightData = data,
+#'   fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
+#' )
 #' weightedClones <- computeCensoringWeights(
 #'   clones = clones,
 #'   censoringModels = censoringModels,
-#'   computeWeightsArgs = createComputeWeightsArgs()
+#'   computeWeightsArgs = createComputeWeightsArgs(stabilized = FALSE)
 #' )
-#' }
+#' attr(weightedClones, "metaData")$weights$untruncatedSummary
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 computeCensoringWeights <- function(clones,
@@ -107,14 +116,17 @@ computeCensoringWeights <- function(clones,
   cutIntervalLength <- if (is.null(outcomeTimeBasis)) NA_integer_ else as.integer(outcomeTimeBasis$intervalLength)
 
   start <- Sys.time()
-  on.exit(.dropTables(clones, "ccwW"))
-  .writeModelTables(clones, censoringModels)
+  # The weights are computed on a copy of the clones, so the input is not changed:
+  weightedClones <- .copyCcwClones(clones)
+  completed <- FALSE
+  on.exit(if (completed) .dropTables(weightedClones, "ccwW") else close(weightedClones))
+  .writeModelTables(weightedClones, censoringModels)
   deviationFirst <- metaData$sameDayOrdering == "deviationFirst"
   offset <- if (deviationFirst) 0L else 1L
 
   # The follow-up of each clone in the outcome risk set (t scale). With deviationFirst, a clone that
   # deviates on its last day does so before any outcome that day, so that day is left out:
-  .andromedaExecute(clones, sprintf("
+  .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWClones AS
     SELECT cloneRowId,
       rowId,
@@ -126,12 +138,12 @@ computeCensoringWeights <- function(clones,
     FROM clones;", if (deviationFirst) "TRUE" else "FALSE"))
 
   # Cut times (t scale) of each clone, including its end:
-  .andromedaExecute(clones, "
+  .andromedaExecute(weightedClones, "
     CREATE TABLE ccwWEventTimes AS
     SELECT DISTINCT survivalTime AS eventTime
     FROM ccwWClones
     WHERE endReason IN ('outcome', 'death');")
-  .andromedaExecute(clones, "
+  .andromedaExecute(weightedClones, "
     CREATE TABLE ccwWCuts AS
     SELECT ccwWClones.cloneRowId,
       ccwWEventTimes.eventTime AS cutTime
@@ -158,7 +170,7 @@ computeCensoringWeights <- function(clones,
     WHERE survivalTime > 0;")
   # The end of the day after the grace periods (or of riskStart, if later):
   if (!is.na(balanceDay)) {
-    .andromedaExecute(clones, sprintf("
+    .andromedaExecute(weightedClones, sprintf("
       INSERT INTO ccwWCuts
       SELECT cloneRowId,
         GREATEST(%1$d, riskStart) - riskStart + 1 AS cutTime
@@ -169,7 +181,7 @@ computeCensoringWeights <- function(clones,
   }
   # The ends of the intervals of the outcome model's grid:
   if (!is.na(cutIntervalLength)) {
-    .andromedaExecute(clones, sprintf("
+    .andromedaExecute(weightedClones, sprintf("
       INSERT INTO ccwWCuts
       SELECT cloneRowId,
         cutTime
@@ -184,7 +196,7 @@ computeCensoringWeights <- function(clones,
   }
 
   # Segments, with the day whose survival gives the weight (binary: 1 after the switch, 0 before):
-  .andromedaExecute(clones, sprintf("
+  .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWSegments AS
     SELECT ccwWCuts.cloneRowId,
       ccwWClones.rowId,
@@ -205,15 +217,15 @@ computeCensoringWeights <- function(clones,
     INNER JOIN ccwWParams
       ON ccwWClones.strategyId = ccwWParams.strategyId;", offset))
 
-  .checkPredictionsExist(clones)
-  .computeSurvival(clones)
+  .checkPredictionsExist(weightedClones)
+  .computeSurvival(weightedClones)
 
   weightExpression <- if (computeWeightsArgs$stabilized) {
     "ccwWSurvival.numeratorSurvival / ccwWSurvival.survival"
   } else {
     "1.0 / ccwWSurvival.survival"
   }
-  .andromedaExecute(clones, sprintf("
+  .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWWeighted AS
     SELECT ccwWSegments.*,
       %s AS weight
@@ -222,7 +234,7 @@ computeCensoringWeights <- function(clones,
       ON ccwWSegments.strategyId = ccwWSurvival.strategyId
         AND ccwWSegments.rowId = ccwWSurvival.rowId
         AND ccwWSegments.evalDay = ccwWSurvival.evalDay;", weightExpression))
-  badWeights <- .andromedaSql(clones, "
+  badWeights <- .andromedaSql(weightedClones, "
     SELECT COUNT(*) AS n
     FROM ccwWWeighted
     WHERE weight IS NULL OR isinf(weight) OR isnan(weight);")$n
@@ -230,7 +242,7 @@ computeCensoringWeights <- function(clones,
     stop(sprintf("%d segment(s) have an infinite or missing weight: a clone remains uncensored where the censoring model gives it no chance of doing so (positivity violation)", badWeights))
   }
 
-  .andromedaExecute(clones, "
+  .andromedaExecute(weightedClones, "
     CREATE TABLE ccwWPersonWeights AS
     SELECT cloneRowId,
       strategyId,
@@ -240,10 +252,10 @@ computeCensoringWeights <- function(clones,
     GROUP BY cloneRowId,
       strategyId;")
 
-  caps <- .computeCaps(clones, computeWeightsArgs$truncation)
-  clones$ccwWCaps <- caps |>
+  caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation)
+  weightedClones$ccwWCaps <- caps |>
     filter(!is.na(.data$cap))
-  .andromedaExecute(clones, "
+  .andromedaExecute(weightedClones, "
     CREATE TABLE ccwWFinalSegments AS
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY ccwWWeighted.cloneRowId, ccwWWeighted.startTime) AS INTEGER) AS segmentId,
       ccwWWeighted.cloneRowId,
@@ -266,19 +278,25 @@ computeCensoringWeights <- function(clones,
     stabilized = computeWeightsArgs$stabilized,
     truncation = computeWeightsArgs$truncation$toList(),
     caps = caps,
-    untruncatedSummary = .summarizePersonWeights(clones),
+    untruncatedSummary = .summarizePersonWeights(weightedClones),
     cutIntervalLength = cutIntervalLength
   )
-  clones <- .addSegments(clones, clones$ccwWFinalSegments, clones$ccwWPersonWeights, weightsMetaData)
+  weightedClones <- .addSegments(weightedClones, weightedClones$ccwWFinalSegments, weightedClones$ccwWPersonWeights, weightsMetaData)
+  completed <- TRUE
   delta <- Sys.time() - start
   message("Computing censoring weights took ", signif(delta, 3), " ", attr(delta, "units"))
-  return(clones)
+  return(weightedClones)
 }
 
 .checkModelsMatchClones <- function(censoringModels, metaData) {
   modelsMetaData <- attr(censoringModels, "metaData")
   if (!identical(modelsMetaData$sameDayOrdering, metaData$sameDayOrdering)) {
     stop("The censoring models were fit with a different sameDayOrdering than the clones use")
+  }
+  # Death ends the risk sets differently under competingEvents = "death" and "none" (Phase1Contracts
+  # sections 5.3 and 9, amendment 2):
+  if (!identical(modelsMetaData$competingEvents, metaData$competingEvents)) {
+    stop("The censoring models were fit on clones with a different competingEvents than the clones use")
   }
   # The risk sets depend on the outcome (contract section 5.3), so models are not shared across outcomes:
   if (!identical(as.numeric(modelsMetaData$outcomeId), as.numeric(metaData$outcomeId))) {
@@ -560,12 +578,17 @@ computeCensoringWeights <- function(clones,
 #' @return
 #' A tibble with columns `strategyId`, `day`, `clones` (number under follow-up), `sumWeights`,
 #' `meanWeight`, `minWeight`, `p25Weight`, `medianWeight`, `p75Weight`, `maxWeight`, and
-#' `effectiveSampleSize` (`sum(w)^2 / sum(w^2)`).
+#' `effectiveSampleSize` (`sum(w)^2 / sum(w^2)`). The attribute `strategyLabels` holds the strategy
+#' labels.
 #'
+#' @example inst/examples/clones.R
+#' @example inst/examples/weightedClones.R
 #' @examples
-#' \dontrun{
-#' weightDistribution <- computeWeightDistribution(weightedClones)
-#' }
+#' weightDistribution <- computeWeightDistribution(weightedClones, days = c(0, 7, 8, 30))
+#' weightDistribution
+#' close(weightedClones)
+#' close(clones)
+#' close(data)
 #'
 #' @export
 computeWeightDistribution <- function(weightedClones, days = NULL) {
@@ -610,6 +633,8 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   distribution$strategyId <- as.integer(distribution$strategyId)
   distribution$day <- as.integer(distribution$day)
   distribution$clones <- as.integer(distribution$clones)
+  strategies <- attr(weightedClones, "metaData")$strategies
+  attr(distribution, "strategyLabels") <- vapply(strategies, function(strategy) as.character(strategy$label), character(1))
   return(distribution)
 }
 
@@ -620,7 +645,8 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
 #' weight (dashed line) of the clones under follow-up on each day. Requires the `ggplot2` package.
 #'
 #' @param weightDistribution A tibble as created by [computeWeightDistribution()].
-#' @param strategyLabels     Labels of the two strategies (target first).
+#' @param labels             The labels of strategies 1 (target) and 2 (comparator). If `NULL`, the
+#'                           `strategyLabels` attribute of `weightDistribution` is used.
 #' @param fileName           Name of the file where the plot should be saved, for example
 #'                           'plot.png'. See [ggplot2::ggsave()] for supported file formats. If
 #'                           `NULL`, the plot is not saved.
@@ -643,22 +669,28 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
 #'
 #' @export
 plotWeightDistribution <- function(weightDistribution,
-                                   strategyLabels = c("Target", "Comparator"),
+                                   labels = NULL,
                                    fileName = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   checkmate::assertDataFrame(weightDistribution, add = errorMessages)
   checkmate::assertNames(colnames(weightDistribution), must.include = c("strategyId", "day", "p25Weight", "medianWeight", "p75Weight", "maxWeight"), add = errorMessages)
-  checkmate::assertCharacter(strategyLabels, len = 2, any.missing = FALSE, add = errorMessages)
+  checkmate::assertCharacter(labels, len = 2, any.missing = FALSE, null.ok = TRUE, add = errorMessages)
   checkmate::assertCharacter(fileName, len = 1, null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("The ggplot2 package is required to plot the weight distribution. Please install it.")
   }
+  if (is.null(labels)) {
+    labels <- attr(weightDistribution, "strategyLabels")
+    if (is.null(labels)) {
+      labels <- c("Target", "Comparator")
+    }
+  }
 
   data <- weightDistribution
-  data$strategy <- factor(strategyLabels[data$strategyId], levels = strategyLabels)
+  data$strategy <- factor(labels[data$strategyId], levels = labels)
   colors <- c("#2a78d6", "#eb6834")
-  names(colors) <- strategyLabels
+  names(colors) <- labels
   plot <- ggplot2::ggplot(data, ggplot2::aes(x = .data$day, group = .data$strategy)) +
     ggplot2::geom_ribbon(ggplot2::aes(ymin = .data$p25Weight, ymax = .data$p75Weight, fill = .data$strategy), alpha = 0.25) +
     ggplot2::geom_line(ggplot2::aes(y = .data$medianWeight, color = .data$strategy), linewidth = 0.7) +

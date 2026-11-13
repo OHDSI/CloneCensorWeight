@@ -15,7 +15,8 @@ risk window, the first outcome, death, and the first start of each treatment.
 the last day of follow-up, and the reason follow-up ended.
 }
 
-After \code{computeCensoringWeights()} it also holds \code{segments} (weighted pieces of each clone's
-follow-up) and \code{personWeights} (weight summaries per clone). The \code{metaData} attribute holds the
+The weighted clones that \code{computeCensoringWeights()} returns (a copy in a new Andromeda) also hold
+\code{segments} (weighted pieces of each clone's follow-up) and \code{personWeights} (weight summaries per
+clone). The \code{metaData} attribute holds the
 strategies, outcome ID, treatment IDs, same-day ordering, competing events, attrition, and target ID.
 }

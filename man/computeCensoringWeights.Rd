@@ -15,8 +15,8 @@ computeCensoringWeights(
 \item{clones}{An object of type \link{CcwClones} as created by \code{createClones()}.}
 
 \item{censoringModels}{An object of class \code{CcwCensoringModels} as created by
-\code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones (same outcome and same-day
-ordering).}
+\code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones (same outcome, same-day
+ordering and competing events).}
 
 \item{computeWeightsArgs}{An object of type \code{ComputeWeightsArgs} as created using
 \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.}
@@ -26,7 +26,9 @@ ordering).}
 these clones: the clones are then also split on its interval grid.}
 }
 \value{
-The \code{clones} object, with two more tables:
+A new \link{CcwClones} object, in its own Andromeda (close it when done), with copies of the tables and
+metaData of \code{clones} and two more tables. \code{clones} itself is not changed, so the same clones can be
+weighted several times (for example with and without stabilization).
 \itemize{
 \item \code{segments}: \code{segmentId}, \code{cloneRowId}, \code{rowId}, \code{personSeqId}, \code{strategyId}, \code{startTime}
 (exclusive), \code{stopTime} (inclusive), \code{weight} (truncated), \code{outcome} and \code{competing} (1 only on the
@@ -37,8 +39,7 @@ last segment weight of each clone with segments, before truncation.
 
 \code{metaData$weights} holds whether the weights are stabilized, the truncation rule, the cap used per
 strategy, a summary of the untruncated weights, and \code{cutIntervalLength}, the interval length of the
-\code{outcomeTimeBasis} grid the clones are split on (\code{NA} without one). The tables are added in place,
-but the returned object must be used, because only it carries \code{metaData$weights}.
+\code{outcomeTimeBasis} grid the clones are split on (\code{NA} without one).
 }
 \description{
 Computes the inverse probability of censoring weights of every clone from the censoring models, and
@@ -81,12 +82,39 @@ Weights are truncated per strategy: the cap is the \code{upper} percentile (\cod
 clones' maximum weight, or the fixed value.
 }
 \examples{
-\dontrun{
+# Simulated data, its study population, and the clones of two strategies:
+data <- simulateCloneCensorWeightData(n = 200, maxDays = 60, graceEnd = 7, seed = 1)
+population <- createStudyPopulation(
+  cloneCensorWeightData = data,
+  outcomeId = 3,
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 60,
+    endAnchor = "cohort start"
+  )
+)
+clones <- createClones(
+  population = population,
+  cloneCensorWeightData = data,
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+    )
+  )
+)
+censoringModels <- fitCensoringModels(
+  clones = clones,
+  cloneCensorWeightData = data,
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE)
+)
 weightedClones <- computeCensoringWeights(
   clones = clones,
   censoringModels = censoringModels,
-  computeWeightsArgs = createComputeWeightsArgs()
+  computeWeightsArgs = createComputeWeightsArgs(stabilized = FALSE)
 )
-}
+attr(weightedClones, "metaData")$weights$untruncatedSummary
+close(weightedClones)
+close(clones)
+close(data)
 
 }

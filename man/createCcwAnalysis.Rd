@@ -51,7 +51,9 @@ An object of type \code{CcwAnalysis}.
 Create a clone-censor-weight analysis specification
 }
 \details{
-Create a set of analysis choices, to be used with \code{runCcwAnalyses()}.
+Create a set of analysis choices. In this version the specification can be saved and loaded (see
+\code{\link[=saveCcwAnalysisList]{saveCcwAnalysisList()}}); the driver that runs many analyses, \code{runCcwAnalyses()}, comes in a later
+version.
 }
 \examples{
 analysis <- createCcwAnalysis(

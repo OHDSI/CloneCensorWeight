@@ -47,9 +47,12 @@
 #' an event: it ends follow-up as the end of observation.
 #'
 #' Clones that end before `riskStart` (for example a start on day 0 in a `"neverInitiate"` strategy
-#' when `riskStart = 1`) have no follow-up and are dropped. The attrition gains two rows,
-#' `"Clones created"` and `"Clones with follow-up"`, with the target strategy counted in the target
-#' columns and the comparator strategy in the comparator columns.
+#' when `riskStart = 1`) have no follow-up and are dropped. In the attrition, the rows of the study
+#' population count every person in both the target and the comparator columns (every person is
+#' cloned into both strategies), and two rows are added, `"Clones created"` and
+#' `"Clones with follow-up"`, with the target strategy counted in the target columns and the comparator
+#' strategy in the comparator columns, so that [drawAttritionDiagram()] shows the clones without
+#' follow-up as removed from each strategy.
 #'
 #' This version supports strategies with `graceStart = 0` and without `prohibitedTreatments`.
 #'
@@ -186,7 +189,7 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
     treatmentIds = treatmentIds,
     sameDayOrdering = createClonesArgs$sameDayOrdering,
     competingEvents = createClonesArgs$competingEvents,
-    attrition = dplyr::bind_rows(populationMetaData$attrition, .getCloneCounts(work)),
+    attrition = dplyr::bind_rows(.cloneAttritionRows(populationMetaData$attrition), .getCloneCounts(work)),
     targetId = dataMetaData$targetId
   )
   return(.createCcwClones(work$persons, work$clones, metaData))
@@ -356,6 +359,15 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
     ORDER BY rowId,
       strategyId;"
   return(sprintf(sql, paste(unlist(eventOrder), collapse = "\n          "), deviationOffset))
+}
+
+# The population attrition (CohortMethod counts everyone in the target columns) with the target counts
+# also in the comparator columns, because every person is cloned into both strategies. The steps of
+# CohortMethod::drawAttritionDiagram() (previous minus current row) then never remove a negative number.
+.cloneAttritionRows <- function(attrition) {
+  attrition$comparatorPersons <- attrition$targetPersons
+  attrition$comparatorExposures <- attrition$targetExposures
+  return(attrition)
 }
 
 # Attrition rows for the clones: clones created, and clones with follow-up (endDay >= riskStart). The
