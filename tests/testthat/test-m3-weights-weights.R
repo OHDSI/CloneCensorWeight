@@ -375,7 +375,7 @@ test_that("Weighting the same clones twice leaves the clones and the first weigh
   on.exit(close(first), add = TRUE)
   firstSegments <- collectSegments(first)
   args <- createFitOutcomeModelArgs(modelType = "logistic", horizons = 10, timeBasis = createTimeBasis("linear", intervalLength = 1))
-  firstModel <- suppressMessages(fitOutcomeModel(first, args))
+  firstModel <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(first, args)))
 
   second <- suppressMessages(computeCensoringWeights(clones, models, noTruncation()))
   on.exit(close(second), add = TRUE)
@@ -387,7 +387,7 @@ test_that("Weighting the same clones twice leaves the clones and the first weigh
   expect_true(attr(first, "metaData")$weights$stabilized)
   expect_equal(attr(first, "metaData")$weights$cutIntervalLength, 1L)
   expect_false(attr(second, "metaData")$weights$stabilized)
-  expect_equal(suppressMessages(fitOutcomeModel(first, args))$estimates, firstModel$estimates)
+  expect_equal(withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(first, args)))$estimates, firstModel$estimates)
 
   # Unweighted clones are rejected by the functions that need weights, naming computeCensoringWeights():
   expect_error(fitOutcomeModel(clones, args), "computeCensoringWeights\\(\\)")
@@ -503,16 +503,19 @@ test_that("computeWeightDistribution summarizes the weights of clones under foll
     "strategyId", "day", "clones", "sumWeights", "meanWeight", "minWeight", "p25Weight",
     "medianWeight", "p75Weight", "maxWeight", "effectiveSampleSize"
   ))
+  # The clones under follow-up on each day are those with a segment that contains it, and their weight
+  # is the exact (stabilized, truncated) W(d) of the Cox models, also inside segments (Phase1Contracts
+  # section 11.7; see test-m3-weights-distribution.R):
   for (i in seq_len(nrow(distribution))) {
     t <- distribution$day[i] - 1 + 1
     w <- segments$weight[segments$strategyId == distribution$strategyId[i] & segments$startTime < t & t <= segments$stopTime]
     expect_equal(distribution$clones[i], length(w))
-    expect_equal(distribution$sumWeights[i], sum(w))
-    expect_equal(distribution$medianWeight[i], median(w))
-    expect_equal(distribution$p25Weight[i], unname(quantile(w, 0.25)))
-    expect_equal(distribution$maxWeight[i], max(w))
-    expect_equal(distribution$effectiveSampleSize[i], sum(w)^2 / sum(w^2))
   }
+  cloneDays <- refDayWeights(models, collectClones(clones), c(1, 5, 8, 20), "eventsFirst")
+  caps <- attr(weighted, "metaData")$weights$caps
+  w <- pmin(cloneDays$weight * cloneDays$numerator, caps$cap[match(cloneDays$strategyId, caps$strategyId)])
+  expected <- refWeightDistribution(cloneDays, w)
+  expect_equal(as.data.frame(distribution), expected, tolerance = 1e-10, ignore_attr = "strategyLabels")
   expect_equal(nrow(distribution), 8)
   expect_equal(attr(distribution, "strategyLabels"), vapply(attr(clones, "metaData")$strategies, function(strategy) strategy$label, character(1)))
 

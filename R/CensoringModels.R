@@ -71,6 +71,13 @@
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
 #'
+#' Records of day 0 can follow the treatment decision of that day (for example the diagnoses of the
+#' visit at which a drug is prescribed). So when a strategy allows initiation on day 0 (an
+#' `"initiateWithin"` strategy with `graceStart = 0`), the function warns (once) if the models use
+#' covariates whose windows end on day 0 or later: those of analyses with `endDay >= 0` in
+#' `cloneCensorWeightData$analysisRef`, as with FeatureExtraction's default `endDays = 0`. Extract the
+#' covariates with `endDays = -1` instead.
+#'
 #' @param clones                 An object of type [CcwClones] as created by `createClones()`.
 #' @param cloneCensorWeightData  An object of type [CloneCensorWeightData] holding the baseline
 #'                               covariates of the persons in `clones`.
@@ -151,6 +158,7 @@ fitCensoringModels <- function(clones,
       stop("Not yet supported in this version: censoring models for strategies with graceStart > 0 or prohibitedTreatments")
     }
   }
+  .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
   sameDayOrdering <- metaData$sameDayOrdering
   persons <- clones$persons |>
     collect()
@@ -305,6 +313,54 @@ fitCensoringModels <- function(clones,
 }
 
 # Covariates ---------------------------------------------------------------------------------------
+
+# Warns, once, when a strategy allows initiation on day 0 ("initiateWithin" with graceStart = 0) while
+# the censoring models use covariates whose window ends on day 0 or later (`endDay >= 0` in analysisRef,
+# as with FeatureExtraction's default endDays = 0): records of day 0 may follow the treatment decision
+# of that day (Phase1Contracts section 11.6). Analyses without a window (endDay NA, such as demographics)
+# are not a concern.
+.warnDay0CovariateWindows <- function(strategies, cloneCensorWeightData, fitCensoringModelsArgs) {
+  day0 <- vapply(strategies, function(strategy) strategy$type == "initiateWithin" && strategy$graceStart == 0, logical(1))
+  if (!fitCensoringModelsArgs$useCovariates || !any(day0)) {
+    return(invisible(NULL))
+  }
+  covariateRef <- cloneCensorWeightData$covariateRef
+  if (length(fitCensoringModelsArgs$includeCovariateIds) != 0) {
+    covariateRef <- covariateRef |>
+      filter(.data$covariateId %in% !!fitCensoringModelsArgs$includeCovariateIds)
+  }
+  if (length(fitCensoringModelsArgs$excludeCovariateIds) != 0) {
+    covariateRef <- covariateRef |>
+      filter(!.data$covariateId %in% !!fitCensoringModelsArgs$excludeCovariateIds)
+  }
+  analysisIds <- covariateRef |>
+    dplyr::distinct(.data$analysisId) |>
+    pull()
+  if (length(analysisIds) == 0) {
+    return(invisible(NULL))
+  }
+  windows <- cloneCensorWeightData$analysisRef |>
+    filter(.data$analysisId %in% !!analysisIds, !is.na(.data$endDay), .data$endDay >= 0) |>
+    dplyr::arrange(.data$analysisId) |>
+    collect()
+  if (nrow(windows) == 0) {
+    return(invisible(NULL))
+  }
+  ids <- which(day0)
+  labels <- vapply(strategies[ids], function(strategy) strategy$label, character(1))
+  analyses <- sprintf("%s (endDay = %d)", windows$analysisName, as.integer(windows$endDay))
+  if (length(analyses) > 5) {
+    analyses <- c(analyses[1:5], sprintf("%d more", length(analyses) - 5))
+  }
+  warning(sprintf(
+    "%s %s allow%s initiation on day 0, but the covariate windows of analyses %s end on day 0 or later, so the censoring models can use records of day 0 that may follow the treatment decision. Extract the covariates with windows that end before day 0, for example with endDays = -1 in FeatureExtraction::createCovariateSettings()",
+    if (length(ids) == 1) "Strategy" else "Strategies",
+    paste(sprintf("%d (%s)", ids, labels), collapse = " and "),
+    if (length(ids) == 1) "s" else "",
+    paste(analyses, collapse = ", ")
+  ), call. = FALSE)
+  invisible(NULL)
+}
 
 # Returns a CovariateData (Andromeda) with the tidied (normalized, without redundant or infrequent
 # covariates) baseline covariates of the risk set, as CohortMethod::createPs does, or NULL when

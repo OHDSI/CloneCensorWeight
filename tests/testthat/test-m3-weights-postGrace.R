@@ -210,7 +210,7 @@ createDay0Data <- function(n = 4000, seed = 1) {
     covariates = data.frame(rowId = which(x == 1), covariateId = 1001, covariateValue = 1),
     covariateRef = data.frame(covariateId = 1001, covariateName = "X", analysisId = 1, conceptId = 0),
     analysisRef = data.frame(
-      analysisId = 1, analysisName = "X", domainId = "Demographics", startDay = 0, endDay = 0,
+      analysisId = 1, analysisName = "X", domainId = "Demographics", startDay = NA, endDay = NA,
       isBinary = "Y", missingMeansZero = "Y"
     ),
     metaData = list(targetId = 1, treatmentIds = c(treatment = 2), outcomeIds = 3)

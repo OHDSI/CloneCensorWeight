@@ -320,9 +320,11 @@ TreatmentStrategy <- R6Class(
 #'                                          the index date (`endDays = 0`), so the covariates include
 #'                                          records of day 0, the first day on which a strategy can
 #'                                          start the treatment: for example drugs started and
-#'                                          diagnoses recorded on the index date. Exclude the treatment
-#'                                          from the covariates: its concepts with their descendants
-#'                                          (`excludedCovariateConceptIds` with
+#'                                          diagnoses recorded on the index date. [fitCensoringModels()]
+#'                                          then warns when a strategy allows initiation on day 0; use
+#'                                          `endDays = -1` to end the windows the day before. Exclude
+#'                                          the treatment from the covariates: its concepts with their
+#'                                          descendants (`excludedCovariateConceptIds` with
 #'                                          `addDescendantsToExclude = TRUE`) and the drug classes that
 #'                                          contain it, such as its ATC groups, which are ancestors of
 #'                                          the ingredient rather than descendants. Otherwise the

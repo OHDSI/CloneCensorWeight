@@ -54,7 +54,12 @@ number of replicates.}
 An object of class \code{CcwOutcomeModel} (see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}) with \code{varianceEstimator = "bootstrap"}: the full-data estimates with their bootstrap standard errors, limits and p-values,
 the full-data coefficients with their bootstrap covariance (\code{vcov}), the counts of the full-data
 clones, and \code{metaData$bootstrap} (the settings, the number of replicates, the number of failed
-replicates, the number of finite replicates of each estimate, and the fixed prior variances). For the
+replicates, the number of finite replicates of each estimate, the fixed prior variances, and
+\code{replicateShift}, a tibble with, for the hazard ratio and each risk difference, \code{estimand}, the number
+of finite \code{replicates}, the numbers \code{above} and \code{below} the estimate, the sign test p-value
+\code{signTestP}, \code{medianShift} (the median replicate minus the estimate, in bootstrap standard deviations,
+on the log scale for the hazard ratio), and \code{shifted} (whether the criterion above is met; \code{NA} with
+fewer than 20 finite replicates)). For the
 pooled logistic model with a natural spline or orthogonal polynomial time basis, whose knots or
 polynomial coefficients are recomputed from the data of each replicate, the time-basis coefficients
 (and the intercepts, and with an orthogonal polynomial and the interaction also the target
@@ -84,9 +89,10 @@ its interval grid (\code{computeCensoringWeights(outcomeTimeBasis = )}).
 In the replicates, the censoring models are fitted with \code{errorOnHighCorrelation = FALSE}: the check
 for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
 already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
-replicates are not shown; those of a failed replicate are reported with its failure. The progress
-messages of every replicate (including those of CohortMethod and FeatureExtraction) are shown; wrap
-the call in \code{\link[=suppressMessages]{suppressMessages()}} to hide them.
+replicates are not shown; those of a failed replicate are reported with its failure, except those
+that the analysis of the full data has already given (such as warnings about the design). The
+progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are
+shown; wrap the call in \code{\link[=suppressMessages]{suppressMessages()}} to hide them.
 
 A replicate fails when the analysis stops with an error (for example because a censoring model
 cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome
@@ -104,6 +110,17 @@ its \code{"perc"} limits, the (R + 1) 0.025 and (R + 1) 0.975 order statistics o
 interpolated on the normal quantile scale (the smallest or largest replicate when R < 39); with
 \code{"normal"} its \code{"norm"} limits, the bias-corrected \verb{2 t0 - mean(t) -+ 1.96 sd(t)}. The p-value tests
 no effect with the estimate divided by its bootstrap standard error.
+
+The driver warns when the replicates sit predominantly on one side of the full-data estimate of the
+hazard ratio (on the log scale) or of a risk difference: then the replicates do not vary around the
+estimate as its sampling distribution would, and the limits may not cover it. One known cause is
+censoring models with many covariates and a penalty, which the duplicated persons of each replicate
+let overfit at the full-data prior variance, moving the replicates toward the unweighted estimate.
+The criterion, assessed for an estimate with at least 20 finite replicates, is a two-sided sign test
+of the numbers of replicates above and below the estimate (ties left out) with p < 0.01, or a median
+replicate more than 0.5 bootstrap standard deviations from the estimate. Without a shift, it still
+flags about 8\% of estimates with 20 replicates, 1\% with 50, and fewer than 1\% with 100 or more.
+\code{metaData$bootstrap$replicateShift} holds the statistics for these estimands.
 }
 \examples{
 \dontrun{

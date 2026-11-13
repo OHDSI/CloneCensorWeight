@@ -113,7 +113,7 @@ test_that("The weighted pipeline recovers the true risks that the unweighted ana
       expect_lt(max(abs(balance$afterMatchingStdDiff)), max(abs(balance$beforeMatchingStdDiff)) / 2)
       expect_lt(max(abs(balance$afterMatchingStdDiff)), 0.1)
 
-      outcomeModels <- lapply(outcomeArgs, function(args) suppressMessages(fitOutcomeModel(weighted, args)))
+      outcomeModels <- lapply(outcomeArgs, function(args) withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weighted, args))))
       for (modelType in names(outcomeModels)) {
         estimates <- outcomeModels[[modelType]]$estimates
         for (h in horizons) {

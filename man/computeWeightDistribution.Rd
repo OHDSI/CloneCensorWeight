@@ -10,8 +10,8 @@ computeWeightDistribution(weightedClones, days = NULL)
 \item{weightedClones}{An object of type \link{CcwClones} as returned by \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}.}
 
 \item{days}{The days (since index) at which to summarize the weights. If \code{NULL}, the
-last days of all segments (the days on which a weight can change or follow-up
-ends).}
+last days of all segments (the event days, the days on which follow-up ends,
+and the days after which \code{\link[=computeCensoringWeights]{computeCensoringWeights()}} splits the clones).}
 }
 \value{
 A tibble with columns \code{strategyId}, \code{day}, \code{clones} (number under follow-up), \code{sumWeights},
@@ -21,8 +21,11 @@ labels.
 }
 \description{
 For each strategy and day (since index), summarizes the weights of the clones under follow-up on
-that day: the weight of a clone on day \code{d} is the weight of its segment that contains
-\code{t = d - riskStart + 1}. Weights are those used by the outcome models (after truncation).
+that day (those with a segment that contains \code{t = d - riskStart + 1}). The weight of a clone on day
+\code{d} is its weight \code{W(d)} (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}), stabilized or not as the weights of the
+clones are, and truncated at the strategy's cap. It is evaluated from the censoring models stored in
+the weighted clones, with the same code that computes the segment weights, so it is exact on every
+day, also on the days inside a segment, whose weight is that of its last day (for example \code{W(0) = 1} on day 0, inside the first segment of a \code{"notInitiateWithin"} clone).
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

@@ -70,12 +70,14 @@ createM3Data <- function(fixture) {
     analysisId = c(1, 2, 3),
     conceptId = 0
   )
+  # Baseline covariates, with windows that end before the treatment decision of day 0 (endDay = 0 would
+  # make fitCensoringModels() warn, Phase1Contracts section 11.6):
   analysisRef <- data.frame(
     analysisId = c(1, 2, 3),
     analysisName = paste("Analysis", 1:3),
     domainId = "Condition",
     startDay = -365,
-    endDay = 0,
+    endDay = -1,
     isBinary = "Y",
     missingMeansZero = "Y"
   )
@@ -349,4 +351,101 @@ collectClones <- function(clones) {
   x <- x[order(x$cloneRowId), ]
   rownames(x) <- NULL
   return(x)
+}
+
+# W(d) of the person `rowId` on the days `days`, written out from its strategy's fitted censoring model
+# `model` (contract sections 5.3, 5.4 and 11.2), unstabilized (`weight`), with the stabilization numerator
+# (`numerator`): binary, 1 up to the cut day (G, or G - 1 with deviationFirst) and 1 / pi after it, with
+# numerator pi-bar; hazard, 1 / S(e | X) with e = min(d - 1, H) (min(d, H) with deviationFirst) and
+# numerator S-bar(e), where S is the product of 1 - expit(baseline + linear predictor) over the logistic
+# intervals ending on or before day e, or exp(-Lambda0(e + 1) exp(linear predictor)) for Cox (S(-1) = 1);
+# and, for notInitiateWithin with the binary post-grace model, 1 / (1 - pi) of the binary model at G with
+# numerator 1 - pi-bar once e = G. No covariate-by-time interactions.
+refDayWeight <- function(model, rowId, days, sameDayOrdering) {
+  deviationFirst <- sameDayOrdering == "deviationFirst"
+  if (model$kind == "binary") {
+    pi <- model$predictions$propensityScore[model$predictions$rowId == rowId]
+    after <- days > model$horizon - deviationFirst
+    if (!any(after)) {
+      return(list(weight = rep(1, length(days)), numerator = rep(1, length(days))))
+    }
+    return(list(weight = ifelse(after, 1 / pi, 1), numerator = ifelse(after, model$numerator$propensityScore, 1)))
+  }
+  e <- pmin(days - !deviationFirst, model$horizon)
+  linearPredictor <- model$predictions$linearPredictor[model$predictions$rowId == rowId]
+  if (length(linearPredictor) == 0) {
+    linearPredictor <- NA_real_
+  }
+  survival <- function(day, linearPredictor, numerator) {
+    if (day < 0) {
+      return(1)
+    }
+    if (model$modelType == "cox") {
+      hazard <- if (numerator) model$numerator$baselineHazard else model$baselineHazard
+      cumHazard <- sum(diff(c(0, hazard$cumHazard))[hazard$time <= day + 1])
+      return(exp(-cumHazard * exp(if (numerator) 0 else linearPredictor)))
+    }
+    intervals <- if (numerator) model$numerator$intervals else model$intervals
+    complete <- model$intervals$endDay <= day
+    eta <- intervals$baseline[complete] + if (numerator) 0 else linearPredictor
+    return(prod(1 - stats::plogis(eta)))
+  }
+  weight <- 1 / vapply(e, survival, numeric(1), linearPredictor = linearPredictor, numerator = FALSE)
+  numerator <- vapply(e, survival, numeric(1), linearPredictor = 0, numerator = TRUE)
+  if (!is.null(model$postGrace)) {
+    after <- e == model$horizon
+    pi <- model$postGrace$predictions$propensityScore[model$postGrace$predictions$rowId == rowId]
+    if (any(after)) {
+      weight[after] <- 1 / (1 - pi)
+      numerator[after] <- 1 - model$postGrace$numerator$propensityScore
+    }
+  }
+  return(list(weight = weight, numerator = numerator))
+}
+
+# W(d) of every clone (a data frame with the columns of contract section 5.2) on each day of `days` on
+# which it is under follow-up (in the outcome risk set, see refOutcomeFollowUp()): a data frame
+# cloneRowId, strategyId, day, weight (unstabilized) and numerator, from refDayWeight().
+refDayWeights <- function(models, clones, days, sameDayOrdering) {
+  followUp <- refOutcomeFollowUp(clones, sameDayOrdering)
+  rows <- list()
+  for (i in seq_len(nrow(followUp))) {
+    clone <- followUp[i, ]
+    cloneDays <- days[days >= clone$riskStart & days <= clone$riskStart + clone$survivalTime - 1]
+    if (length(cloneDays) == 0) {
+      next
+    }
+    w <- refDayWeight(models[[clone$strategyId]], clone$rowId, cloneDays, sameDayOrdering)
+    rows[[length(rows) + 1]] <- data.frame(
+      cloneRowId = clone$cloneRowId,
+      strategyId = clone$strategyId,
+      day = cloneDays,
+      weight = w$weight,
+      numerator = w$numerator
+    )
+  }
+  return(do.call(rbind, rows))
+}
+
+# The summary computeWeightDistribution() reports, per strategy and day, of the weights `w` of the
+# clone days `cloneDays` (from refDayWeights()).
+refWeightDistribution <- function(cloneDays, w) {
+  groups <- split(w, list(cloneDays$strategyId, cloneDays$day), drop = TRUE)
+  keys <- do.call(rbind, strsplit(names(groups), ".", fixed = TRUE))
+  distribution <- data.frame(
+    strategyId = as.integer(keys[, 1]),
+    day = as.integer(keys[, 2]),
+    clones = vapply(groups, length, integer(1)),
+    sumWeights = vapply(groups, sum, numeric(1)),
+    meanWeight = vapply(groups, mean, numeric(1)),
+    minWeight = vapply(groups, min, numeric(1)),
+    p25Weight = vapply(groups, function(x) unname(stats::quantile(x, 0.25)), numeric(1)),
+    medianWeight = vapply(groups, stats::median, numeric(1)),
+    p75Weight = vapply(groups, function(x) unname(stats::quantile(x, 0.75)), numeric(1)),
+    maxWeight = vapply(groups, max, numeric(1)),
+    effectiveSampleSize = vapply(groups, function(x) sum(x)^2 / sum(x^2), numeric(1))
+  )
+  distribution <- distribution[order(distribution$strategyId, distribution$day), ]
+  rownames(distribution) <- NULL
+  return(distribution)
 }

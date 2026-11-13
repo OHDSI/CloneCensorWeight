@@ -116,6 +116,13 @@ in this version the hazard models are always fitted to their whole risk set.
 
 With \code{useCovariates = FALSE} the models have only an intercept and time, so they equal their
 numerator models.
+
+Records of day 0 can follow the treatment decision of that day (for example the diagnoses of the
+visit at which a drug is prescribed). So when a strategy allows initiation on day 0 (an
+\code{"initiateWithin"} strategy with \code{graceStart = 0}), the function warns (once) if the models use
+covariates whose windows end on day 0 or later: those of analyses with \code{endDay >= 0} in
+\code{cloneCensorWeightData$analysisRef}, as with FeatureExtraction's default \code{endDays = 0}. Extract the
+covariates with \code{endDays = -1} instead.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

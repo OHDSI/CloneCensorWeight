@@ -44,7 +44,7 @@ bootstrapSettings <- function(modelType = "km",
 }
 
 runBootstrap <- function(data, settings, ...) {
-  return(suppressMessages(do.call(bootstrapCcwAnalysis, c(list(cloneCensorWeightData = data, outcomeId = 3), settings, list(...)))))
+  return(withoutGracePeriodWarnings(suppressMessages(do.call(bootstrapCcwAnalysis, c(list(cloneCensorWeightData = data, outcomeId = 3), settings, list(...))))))
 }
 
 # The analysis of a data set step by step, as a user would run it; returns the outcome model.
@@ -57,7 +57,7 @@ runAnalysisByHand <- function(data, settings, fixedPriorVariances = NULL) {
   weighted <- computeCensoringWeights(clones, models, settings$computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)
   args <- settings$fitOutcomeModelArgs
   args$varianceEstimator <- "robust"
-  return(fitOutcomeModel(weighted, args))
+  return(withoutGracePeriodWarnings(fitOutcomeModel(weighted, args)))
 }
 
 # A new CloneCensorWeightData with person i (in increasing personSeqId) copied counts[i] times, built

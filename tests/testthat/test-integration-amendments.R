@@ -278,7 +278,7 @@ test_that("The pooled logistic model on daily weighted clones equals glm on hand
     weightedClones <- createM4WeightedClones(fixture, 1)
     horizons <- riskStart + c(9, 24)
     # The default time basis (natural spline with 4 df of daily intervals) and the default control:
-    model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons)))
+    model <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons))))
     rows <- handIntervalRows(fixture, 1)
     basis <- splines::ns(rows$k, df = 4)
     noDeath <- rows$death == 0
@@ -300,9 +300,9 @@ test_that("The pooled logistic model on daily weighted clones equals glm on hand
 
     # Intervals of 3 days: each row takes the weight of the clone's last day in the interval.
     weightedClones <- createM4WeightedClones(fixture, 3)
-    model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(
+    model <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(
       modelType = "logistic", horizons = riskStart - 1 + c(9, 24), timeBasis = createTimeBasis("linear", intervalLength = 3), armByTimeInteraction = TRUE
-    )))
+    ))))
     rows <- handIntervalRows(fixture, 3)
     noDeath <- rows$death == 0
     design <- cbind(1, rows$x, rows$k, rows$x * rows$k)
@@ -397,7 +397,7 @@ test_that("The default outcome-model control agrees with the references to 1e-8 
     for (timeBasis in list(createTimeBasis("naturalSpline", intervalLength = 1, df = 4), createTimeBasis("polynomial", intervalLength = 1, degree = 3, raw = TRUE))) {
       interaction <- timeBasis$type == "polynomial"
       weightedClones <- createM4WeightedClones(fixture, 1)
-      model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = 20, timeBasis = timeBasis, armByTimeInteraction = interaction)))
+      model <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = 20, timeBasis = timeBasis, armByTimeInteraction = interaction))))
       close(weightedClones)
       basis <- if (interaction) cbind(rows$k, rows$k^2, rows$k^3) else unclass(splines::ns(rows$k, df = 4))
       design <- cbind(1, rows$x, basis)
@@ -580,7 +580,7 @@ test_that("The default control fits a quasi-separated death model, whose risks e
     expect_equal(sort(unique(rows$k[rows$death == 1])), c(1, 2, 10))
     weightedClones <- createM4WeightedClones(fixture, 1)
     horizons <- riskStart + c(7, 14)
-    expect_silent(model <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons))))
+    expect_silent(model <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons)))))
     close(weightedClones)
     basis <- splines::ns(rows$k, df = 4)
     noDeath <- rows$death == 0

@@ -48,7 +48,7 @@ collectMsmSegments <- function(weightedClones) {
 }
 
 fitMsm <- function(weightedClones, ...) {
-  return(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(...))))
+  return(withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(...)))))
 }
 
 msmCoxControl <- function() survival::coxph.control(eps = 1e-12, toler.chol = 1e-14, iter.max = 100)

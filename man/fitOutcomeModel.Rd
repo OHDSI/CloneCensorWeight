@@ -105,7 +105,12 @@ period, so with a grace period use \code{armByTimeInteraction = TRUE}. With a sm
 the default natural spline, the risks can remain biased even then, because each strategy's hazard
 can change abruptly after the grace period, and with intervals longer than a day, clones that end
 inside an interval count as at risk for the whole interval (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}). The
-\code{"km"} risks, and so the \code{"cox"} risks, do not make these assumptions.
+\code{"km"} risks, and so the \code{"cox"} risks, do not make these assumptions. With a strategy whose grace
+period ends on or after \code{riskStart}, \code{"logistic"} warns when the time basis is smooth (natural
+spline, polynomial or linear), and when no interval ends at the end of the grace period, the end of
+day \code{G} (\code{t = G - riskStart + 1}; day \code{G - 1} with \code{sameDayOrdering = "deviationFirst"}), where the
+clones of an \code{"initiateWithin(G)"} strategy that have not started are censored. An indicator basis on
+a grid with an interval ending there, with \code{armByTimeInteraction = TRUE}, avoids both.
 
 The models are fitted with Cyclops using \code{fitOutcomeModelArgs$control}; a fit that fails is refitted
 with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot
@@ -163,10 +168,16 @@ outcomeModel <- fitOutcomeModel(
 )
 outcomeModel
 confint(outcomeModel)
-# The pooled logistic model with the default daily natural spline basis:
+# The pooled logistic model with a daily indicator basis and strategy-by-time interactions, which
+# follow the change in the hazards at the end of the grace period:
 logisticModel <- fitOutcomeModel(
   weightedClones = weightedClones,
-  fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "logistic", horizons = c(30, 60))
+  fitOutcomeModelArgs = createFitOutcomeModelArgs(
+    modelType = "logistic",
+    horizons = c(30, 60),
+    timeBasis = createTimeBasis(type = "indicator", intervalLength = 1),
+    armByTimeInteraction = TRUE
+  )
 )
 coef(logisticModel)
 close(weightedClones)

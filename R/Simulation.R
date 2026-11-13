@@ -322,7 +322,9 @@
 #' end, death, and `maxDays`. Each person has one index date, one treatment era (from the start to the
 #' end of observation), and at most one outcome. The covariates are stored in FeatureExtraction's sparse
 #' format: binary covariates (analysis ID 1) only where they are 1, normal covariates (analysis ID 2)
-#' for every person, with covariate ID `1000 * j + analysisId` for covariate j.
+#' for every person, with covariate ID `1000 * j + analysisId` for covariate j. They are baseline
+#' covariates, so their analyses have a window that ends on day -1 (`endDay` in `analysisRef`), before
+#' the treatment decision of day 0 (see [fitCensoringModels()]).
 #'
 #' The target cohort ID is 1, the treatment cohort ID is 2 (role `"treatment"`), and the outcome ID
 #' is 3. All arguments except `n` and `seed` are stored in `metaData$simulationSettings`, which is the
@@ -458,7 +460,7 @@ simulateCloneCensorWeightData <- function(n = 5000,
     analysisName = c("SimulatedBinary", "SimulatedNormal"),
     domainId = "Simulated",
     startDay = -365,
-    endDay = 0,
+    endDay = -1,
     isBinary = c("Y", "N"),
     missingMeansZero = c("Y", "N")
   )

@@ -99,9 +99,10 @@
 #'
 #' `metaData$weights` holds whether the weights are stabilized, the truncation rule, `caps` (a tibble
 #' with, per strategy, the `cap` used, `NA` without truncation, and `truncatedShare`, the share of the
-#' strategy's segments whose weight was truncated), a summary of the untruncated weights, and
+#' strategy's segments whose weight was truncated), a summary of the untruncated weights,
 #' `cutIntervalLength`, the interval length of the `outcomeTimeBasis` grid the clones are split on
-#' (`NA` without one).
+#' (`NA` without one), and `censoringModels`, from which [computeWeightDistribution()] evaluates the
+#' weight of any day.
 #'
 #' @example inst/examples/clones.R
 #' @examples
@@ -218,7 +219,7 @@ computeCensoringWeights <- function(clones,
       SELECT cloneRowId, cutTime FROM ccwWCuts;", cutIntervalLength))
   }
 
-  # Segments, with the day whose survival gives the weight (binary: 1 after the switch, 0 before):
+  # Segments, with the day whose survival gives the weight of their last day:
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWSegments AS
     SELECT ccwWCuts.cloneRowId,
@@ -229,25 +230,16 @@ computeCensoringWeights <- function(clones,
       ccwWCuts.cutTime AS stopTime,
       CASE WHEN ccwWCuts.cutTime = ccwWClones.survivalTime AND ccwWClones.endReason = 'outcome' THEN 1 ELSE 0 END AS outcome,
       CASE WHEN ccwWCuts.cutTime = ccwWClones.survivalTime AND ccwWClones.endReason = 'death' THEN 1 ELSE 0 END AS competing,
-      CASE
-        WHEN ccwWParams.kind = 'binary' THEN
-          CASE WHEN ccwWCuts.cutTime + ccwWClones.riskStart - 1 > ccwWParams.cutDay THEN 1 ELSE 0 END
-        ELSE LEAST(ccwWCuts.cutTime + ccwWClones.riskStart - 1 - %d, ccwWParams.windowEnd)
-      END AS evalDay
+      %s AS evalDay
     FROM ccwWCuts
     INNER JOIN ccwWClones
       ON ccwWCuts.cloneRowId = ccwWClones.cloneRowId
     INNER JOIN ccwWParams
-      ON ccwWClones.strategyId = ccwWParams.strategyId;", offset))
+      ON ccwWClones.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwWCuts.cutTime + ccwWClones.riskStart - 1", offset)))
 
-  .checkPredictionsExist(weightedClones)
-  .computeSurvival(weightedClones)
+  .checkPredictionsExist(weightedClones, "ccwWSegments")
+  .computeSurvival(weightedClones, "ccwWSegments")
 
-  weightExpression <- if (computeWeightsArgs$stabilized) {
-    "ccwWSurvival.numeratorSurvival / ccwWSurvival.survival"
-  } else {
-    "1.0 / ccwWSurvival.survival"
-  }
   # The numerator is stored whether or not the weights are stabilized, so the outcome models can use
   # either weight (Phase1Contracts section 11.1):
   .andromedaExecute(weightedClones, sprintf("
@@ -259,7 +251,7 @@ computeCensoringWeights <- function(clones,
     INNER JOIN ccwWSurvival
       ON ccwWSegments.strategyId = ccwWSurvival.strategyId
         AND ccwWSegments.rowId = ccwWSurvival.rowId
-        AND ccwWSegments.evalDay = ccwWSurvival.evalDay;", weightExpression))
+        AND ccwWSegments.evalDay = ccwWSurvival.evalDay;", .weightSql(computeWeightsArgs$stabilized)))
   badWeights <- .andromedaSql(weightedClones, "
     SELECT COUNT(*) AS n
     FROM ccwWWeighted
@@ -289,7 +281,7 @@ computeCensoringWeights <- function(clones,
       ON ccwWWeighted.strategyId = ccwWCaps.strategyId
     GROUP BY ccwWWeighted.strategyId;")
   caps$truncatedShare <- as.numeric(truncated$truncatedShare[match(caps$strategyId, truncated$strategyId)])
-  .andromedaExecute(weightedClones, "
+  .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWFinalSegments AS
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY ccwWWeighted.cloneRowId, ccwWWeighted.startTime) AS INTEGER) AS segmentId,
       ccwWWeighted.cloneRowId,
@@ -298,23 +290,22 @@ computeCensoringWeights <- function(clones,
       ccwWWeighted.strategyId,
       CAST(ccwWWeighted.startTime AS DOUBLE) AS startTime,
       CAST(ccwWWeighted.stopTime AS DOUBLE) AS stopTime,
-      CASE
-        WHEN ccwWCaps.cap IS NOT NULL AND ccwWWeighted.weight > ccwWCaps.cap THEN ccwWCaps.cap
-        ELSE ccwWWeighted.weight
-      END AS weight,
+      %s AS weight,
       ccwWWeighted.stabilizationNumerator,
       CAST(ccwWWeighted.outcome AS INTEGER) AS outcome,
       CAST(ccwWWeighted.competing AS INTEGER) AS competing
     FROM ccwWWeighted
     LEFT JOIN ccwWCaps
-      ON ccwWWeighted.strategyId = ccwWCaps.strategyId;")
+      ON ccwWWeighted.strategyId = ccwWCaps.strategyId;", .truncatedWeightSql("ccwWWeighted.weight")))
 
   weightsMetaData <- list(
     stabilized = computeWeightsArgs$stabilized,
     truncation = computeWeightsArgs$truncation$toList(),
     caps = caps,
     untruncatedSummary = .summarizePersonWeights(weightedClones),
-    cutIntervalLength = cutIntervalLength
+    cutIntervalLength = cutIntervalLength,
+    # So computeWeightDistribution() can evaluate the weight of any day (Phase1Contracts section 11.7):
+    censoringModels = censoringModels
   )
   weightedClones <- .addSegments(weightedClones, weightedClones$ccwWFinalSegments, weightedClones$ccwWPersonWeights, weightsMetaData)
   completed <- TRUE
@@ -468,34 +459,60 @@ computeCensoringWeights <- function(clones,
   invisible(NULL)
 }
 
-# Stops when a segment's weight needs the prediction of a person outside the model's risk set (models
-# fit on other clones). Persons outside the risk set need none: their segments use S(-1) = 1 or, for
-# the binary model, the days up to the switch. So the COALESCE in .computeSurvival never changes a
-# weight.
-.checkPredictionsExist <- function(clones) {
-  missing <- .andromedaSql(clones, "
+# The day whose survival gives the weight W(d) of the day `day` (an SQL expression of days since index),
+# from the strategy's row of ccwWParams: for binary models 1 after the switch and 0 before (see
+# .computeSurvival()), and for hazard models d - `offset` (d - 1 with "eventsFirst", d with
+# "deviationFirst"), capped at the end of the window in which the weight varies.
+.evalDaySql <- function(day, offset) {
+  return(sprintf("
+      CASE
+        WHEN ccwWParams.kind = 'binary' THEN
+          CASE WHEN %1$s > ccwWParams.cutDay THEN 1 ELSE 0 END
+        ELSE LEAST(%1$s - %2$d, ccwWParams.windowEnd)
+      END", day, offset))
+}
+
+# The weight from the survival in ccwWSurvival (see .computeSurvival()), stabilized or not.
+.weightSql <- function(stabilized) {
+  if (stabilized) {
+    return("ccwWSurvival.numeratorSurvival / ccwWSurvival.survival")
+  }
+  return("1.0 / ccwWSurvival.survival")
+}
+
+# The weight `weight` (an SQL expression) truncated at the strategy's cap in ccwWCaps (no row: no cap).
+.truncatedWeightSql <- function(weight) {
+  return(sprintf("CASE WHEN ccwWCaps.cap IS NOT NULL AND %1$s > ccwWCaps.cap THEN ccwWCaps.cap ELSE %1$s END", weight))
+}
+
+# Stops when a weight needs the prediction of a person outside the model's risk set (models fit on
+# other clones). `table` holds the strategyId, rowId and evalDay of the weights. Persons outside the
+# risk set need none: their segments use S(-1) = 1 or, for the binary model, the days up to the switch.
+# So the COALESCE in .computeSurvival never changes a weight.
+.checkPredictionsExist <- function(clones, table) {
+  missing <- .andromedaSql(clones, sprintf("
     SELECT COUNT(*) AS n
-    FROM ccwWSegments
+    FROM %1$s
     INNER JOIN ccwWParams
-      ON ccwWSegments.strategyId = ccwWParams.strategyId
+      ON %1$s.strategyId = ccwWParams.strategyId
     LEFT JOIN ccwWValues
-      ON ccwWSegments.strategyId = ccwWValues.strategyId
-        AND ccwWSegments.rowId = ccwWValues.rowId
+      ON %1$s.strategyId = ccwWValues.strategyId
+        AND %1$s.rowId = ccwWValues.rowId
     WHERE ccwWValues.rowId IS NULL
-      AND CASE WHEN ccwWParams.kind = 'binary' THEN ccwWSegments.evalDay = 1 ELSE ccwWSegments.evalDay >= 0 END;")$n
+      AND CASE WHEN ccwWParams.kind = 'binary' THEN %1$s.evalDay = 1 ELSE %1$s.evalDay >= 0 END;", table))$n
   # The weights after G of notInitiateWithin with postGraceModel = "binary" (evalDay = G) need the binary
   # model at G:
-  missing <- missing + .andromedaSql(clones, "
+  missing <- missing + .andromedaSql(clones, sprintf("
     SELECT COUNT(*) AS n
-    FROM ccwWSegments
+    FROM %1$s
     INNER JOIN ccwWParams
-      ON ccwWSegments.strategyId = ccwWParams.strategyId
+      ON %1$s.strategyId = ccwWParams.strategyId
     LEFT JOIN ccwWPostGrace
-      ON ccwWSegments.strategyId = ccwWPostGrace.strategyId
-        AND ccwWSegments.rowId = ccwWPostGrace.rowId
+      ON %1$s.strategyId = ccwWPostGrace.strategyId
+        AND %1$s.rowId = ccwWPostGrace.rowId
     WHERE ccwWPostGrace.rowId IS NULL
       AND ccwWParams.postGrace
-      AND ccwWSegments.evalDay = ccwWParams.windowEnd;")$n
+      AND %1$s.evalDay = ccwWParams.windowEnd;", table))$n
   if (missing > 0) {
     stop(sprintf("%d segment(s) need the censoring model's prediction for a person outside its risk set. Were the censoring models fit on these clones?", missing))
   }
@@ -507,23 +524,24 @@ computeCensoringWeights <- function(clones,
   return(sprintf("-(CASE WHEN %1$s > 30 THEN %1$s ELSE LN(1 + EXP(%1$s)) END)", eta))
 }
 
-# Fills ccwWSurvival (strategyId, rowId, evalDay, survival, numeratorSurvival): for binary models the
-# probability of starting by G after the switch (1 before), and for hazard models S(evalDay | X).
-.computeSurvival <- function(clones) {
-  .andromedaExecute(clones, "
+# Fills ccwWSurvival (strategyId, rowId, evalDay, survival, numeratorSurvival) for the distinct
+# strategyId, rowId and evalDay of `table`: for binary models the probability of starting by G after the
+# switch (1 before), and for hazard models S(evalDay | X).
+.computeSurvival <- function(clones, table) {
+  .andromedaExecute(clones, sprintf("
     CREATE TABLE ccwWNeeded AS
-    SELECT DISTINCT ccwWSegments.strategyId,
-      ccwWSegments.rowId,
-      ccwWSegments.evalDay,
+    SELECT DISTINCT %1$s.strategyId,
+      %1$s.rowId,
+      %1$s.evalDay,
       ccwWParams.modelType,
       CASE
         WHEN ccwWParams.modelType <> 'logistic' THEN NULL
-        WHEN ccwWSegments.evalDay >= ccwWParams.horizon THEN ccwWParams.nIntervals - 1
-        ELSE CAST(FLOOR((ccwWSegments.evalDay + 1) / ccwWParams.intervalLength) AS INTEGER) - 1
+        WHEN %1$s.evalDay >= ccwWParams.horizon THEN ccwWParams.nIntervals - 1
+        ELSE CAST(FLOOR((%1$s.evalDay + 1) / ccwWParams.intervalLength) AS INTEGER) - 1
       END AS lastInterval
-    FROM ccwWSegments
+    FROM %1$s
     INNER JOIN ccwWParams
-      ON ccwWSegments.strategyId = ccwWParams.strategyId;")
+      ON %1$s.strategyId = ccwWParams.strategyId;", table))
   .andromedaExecute(clones, "
     CREATE TABLE ccwWSurvival (
       strategyId INTEGER,
@@ -700,13 +718,17 @@ computeCensoringWeights <- function(clones,
 #'
 #' @description
 #' For each strategy and day (since index), summarizes the weights of the clones under follow-up on
-#' that day: the weight of a clone on day `d` is the weight of its segment that contains
-#' `t = d - riskStart + 1`. Weights are those used by the outcome models (after truncation).
+#' that day (those with a segment that contains `t = d - riskStart + 1`). The weight of a clone on day
+#' `d` is its weight `W(d)` (see [computeCensoringWeights()]), stabilized or not as the weights of the
+#' clones are, and truncated at the strategy's cap. It is evaluated from the censoring models stored in
+#' the weighted clones, with the same code that computes the segment weights, so it is exact on every
+#' day, also on the days inside a segment, whose weight is that of its last day (for example `W(0) =
+#' 1` on day 0, inside the first segment of a `"notInitiateWithin"` clone).
 #'
 #' @param weightedClones An object of type [CcwClones] as returned by [computeCensoringWeights()].
 #' @param days           The days (since index) at which to summarize the weights. If `NULL`, the
-#'                       last days of all segments (the days on which a weight can change or follow-up
-#'                       ends).
+#'                       last days of all segments (the event days, the days on which follow-up ends,
+#'                       and the days after which [computeCensoringWeights()] splits the clones).
 #'
 #' @return
 #' A tibble with columns `strategyId`, `day`, `clones` (number under follow-up), `sumWeights`,
@@ -729,8 +751,16 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   .assertCcwClones(weightedClones, weighted = TRUE, add = errorMessages)
   checkmate::assertIntegerish(days, any.missing = FALSE, null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
+  metaData <- attr(weightedClones, "metaData")
+  censoringModels <- metaData$weights$censoringModels
+  if (is.null(censoringModels)) {
+    stop("The weighted clones do not hold the censoring models of their weights: use the weighted clones returned by computeCensoringWeights()")
+  }
 
-  on.exit(.dropTables(weightedClones, "ccwD"))
+  on.exit({
+    .dropTables(weightedClones, "ccwD")
+    .dropTables(weightedClones, "ccwW")
+  })
   if (is.null(days)) {
     .andromedaExecute(weightedClones, "
       CREATE TABLE ccwDDays AS
@@ -741,32 +771,61 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   } else {
     weightedClones$ccwDDays <- tibble(day = as.integer(unique(days)))
   }
-  distribution <- .andromedaSql(weightedClones, "
+  # The clones under follow-up on each day, with the day whose survival gives their weight, evaluated
+  # as in computeCensoringWeights():
+  .writeModelTables(weightedClones, censoringModels)
+  offset <- if (metaData$sameDayOrdering == "deviationFirst") 0L else 1L
+  .andromedaExecute(weightedClones, sprintf("
+    CREATE TABLE ccwDCloneDays AS
     SELECT segments.strategyId,
+      segments.rowId,
       ccwDDays.day,
-      COUNT(*) AS clones,
-      SUM(segments.weight) AS sumWeights,
-      AVG(segments.weight) AS meanWeight,
-      MIN(segments.weight) AS minWeight,
-      quantile_cont(segments.weight, 0.25) AS p25Weight,
-      quantile_cont(segments.weight, 0.5) AS medianWeight,
-      quantile_cont(segments.weight, 0.75) AS p75Weight,
-      MAX(segments.weight) AS maxWeight,
-      POWER(SUM(segments.weight), 2) / SUM(POWER(segments.weight, 2)) AS effectiveSampleSize
+      %s AS evalDay
     FROM segments
     INNER JOIN clones
       ON segments.cloneRowId = clones.cloneRowId
     INNER JOIN ccwDDays
       ON segments.startTime < ccwDDays.day - clones.riskStart + 1
         AND ccwDDays.day - clones.riskStart + 1 <= segments.stopTime
-    GROUP BY segments.strategyId,
-      ccwDDays.day
-    ORDER BY segments.strategyId,
-      ccwDDays.day;")
+    INNER JOIN ccwWParams
+      ON segments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
+  .checkPredictionsExist(weightedClones, "ccwDCloneDays")
+  .computeSurvival(weightedClones, "ccwDCloneDays")
+  weightedClones$ccwWCaps <- metaData$weights$caps |>
+    filter(!is.na(.data$cap)) |>
+    select("strategyId", "cap")
+  distribution <- .andromedaSql(weightedClones, sprintf("
+    SELECT strategyId,
+      day,
+      COUNT(*) AS clones,
+      SUM(weight) AS sumWeights,
+      AVG(weight) AS meanWeight,
+      MIN(weight) AS minWeight,
+      quantile_cont(weight, 0.25) AS p25Weight,
+      quantile_cont(weight, 0.5) AS medianWeight,
+      quantile_cont(weight, 0.75) AS p75Weight,
+      MAX(weight) AS maxWeight,
+      POWER(SUM(weight), 2) / SUM(POWER(weight, 2)) AS effectiveSampleSize
+    FROM (
+      SELECT ccwDCloneDays.strategyId,
+        ccwDCloneDays.day,
+        %s AS weight
+      FROM ccwDCloneDays
+      INNER JOIN ccwWSurvival
+        ON ccwDCloneDays.strategyId = ccwWSurvival.strategyId
+          AND ccwDCloneDays.rowId = ccwWSurvival.rowId
+          AND ccwDCloneDays.evalDay = ccwWSurvival.evalDay
+      LEFT JOIN ccwWCaps
+        ON ccwDCloneDays.strategyId = ccwWCaps.strategyId
+    ) cloneDayWeights
+    GROUP BY strategyId,
+      day
+    ORDER BY strategyId,
+      day;", .truncatedWeightSql(.weightSql(metaData$weights$stabilized))))
   distribution$strategyId <- as.integer(distribution$strategyId)
   distribution$day <- as.integer(distribution$day)
   distribution$clones <- as.integer(distribution$clones)
-  strategies <- attr(weightedClones, "metaData")$strategies
+  strategies <- metaData$strategies
   attr(distribution, "strategyLabels") <- vapply(strategies, function(strategy) as.character(strategy$label), character(1))
   return(distribution)
 }

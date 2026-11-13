@@ -787,14 +787,14 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
       timeBasis = createTimeBasis(type, intervalLength = 3, df = 3, degree = 2, raw = FALSE),
       armByTimeInteraction = isTRUE(setting$interaction), control = m4Control
     )
-    weighted <- .fitOutcomeModelPoint(weightedClones, args, personCounts = personCounts)
-    copied <- .fitOutcomeModelPoint(copyWeightedClones, args)
+    weighted <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(weightedClones, args, personCounts = personCounts))
+    copied <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(copyWeightedClones, args))
     expect_false(anyNA(weighted$estimates$estimate[!grepl("^rr", weighted$estimates$estimand)]))
     expect_equal(weighted$estimates, copied$estimates, tolerance = 1e-7)
     expect_equal(weighted$coefficients, copied$coefficients, tolerance = 1e-7)
     expect_equal(colnames(weighted$estimates), c("estimand", "estimate", "logEstimate"))
     # The same from segments collected once:
-    fromData <- .fitOutcomeModelPoint(NULL, args, personCounts = personCounts, outcomeData = outcomeData)
+    fromData <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(NULL, args, personCounts = personCounts, outcomeData = outcomeData))
     expect_equal(fromData, weighted)
   }
   expect_error(.fitOutcomeModelPoint(weightedClones, args, personCounts = data.frame(personSeqId = 1, count = 0.5)), "count")
@@ -806,8 +806,8 @@ test_that(".fitOutcomeModelPoint equals the point estimates of fitOutcomeModel",
   on.exit(close(weightedClones))
   for (modelType in c("cox", "logistic", "km")) {
     args <- createFitOutcomeModelArgs(modelType = modelType, horizons = c(5, 14), timeBasis = createTimeBasis("linear", intervalLength = 3), control = m4Control)
-    model <- suppressMessages(fitOutcomeModel(weightedClones, args))
-    point <- .fitOutcomeModelPoint(weightedClones, args)
+    model <- withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, args)))
+    point <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(weightedClones, args))
     expect_equal(point$estimates, model$estimates[, c("estimand", "estimate", "logEstimate")])
     expect_equal(point$coefficients, model$coefficients)
   }

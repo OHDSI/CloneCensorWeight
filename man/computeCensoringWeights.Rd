@@ -41,9 +41,10 @@ last segment weight of each clone with segments, before truncation.
 
 \code{metaData$weights} holds whether the weights are stabilized, the truncation rule, \code{caps} (a tibble
 with, per strategy, the \code{cap} used, \code{NA} without truncation, and \code{truncatedShare}, the share of the
-strategy's segments whose weight was truncated), a summary of the untruncated weights, and
+strategy's segments whose weight was truncated), a summary of the untruncated weights,
 \code{cutIntervalLength}, the interval length of the \code{outcomeTimeBasis} grid the clones are split on
-(\code{NA} without one).
+(\code{NA} without one), and \code{censoringModels}, from which \code{\link[=computeWeightDistribution]{computeWeightDistribution()}} evaluates the
+weight of any day.
 }
 \description{
 Computes the inverse probability of censoring weights of every clone from the censoring models, and

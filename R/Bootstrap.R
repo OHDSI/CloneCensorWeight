@@ -37,9 +37,10 @@
 #' In the replicates, the censoring models are fitted with `errorOnHighCorrelation = FALSE`: the check
 #' for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
 #' already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
-#' replicates are not shown; those of a failed replicate are reported with its failure. The progress
-#' messages of every replicate (including those of CohortMethod and FeatureExtraction) are shown; wrap
-#' the call in [suppressMessages()] to hide them.
+#' replicates are not shown; those of a failed replicate are reported with its failure, except those
+#' that the analysis of the full data has already given (such as warnings about the design). The
+#' progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are
+#' shown; wrap the call in [suppressMessages()] to hide them.
 #'
 #' A replicate fails when the analysis stops with an error (for example because a censoring model
 #' cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome
@@ -57,6 +58,17 @@
 #' interpolated on the normal quantile scale (the smallest or largest replicate when R < 39); with
 #' `"normal"` its `"norm"` limits, the bias-corrected `2 t0 - mean(t) -+ 1.96 sd(t)`. The p-value tests
 #' no effect with the estimate divided by its bootstrap standard error.
+#'
+#' The driver warns when the replicates sit predominantly on one side of the full-data estimate of the
+#' hazard ratio (on the log scale) or of a risk difference: then the replicates do not vary around the
+#' estimate as its sampling distribution would, and the limits may not cover it. One known cause is
+#' censoring models with many covariates and a penalty, which the duplicated persons of each replicate
+#' let overfit at the full-data prior variance, moving the replicates toward the unweighted estimate.
+#' The criterion, assessed for an estimate with at least 20 finite replicates, is a two-sided sign test
+#' of the numbers of replicates above and below the estimate (ties left out) with p < 0.01, or a median
+#' replicate more than 0.5 bootstrap standard deviations from the estimate. Without a shift, it still
+#' flags about 8% of estimates with 20 replicates, 1% with 50, and fewer than 1% with 100 or more.
+#' `metaData$bootstrap$replicateShift` holds the statistics for these estimands.
 #'
 #' @param cloneCensorWeightData     An object of type [CloneCensorWeightData].
 #' @param outcomeId                 The ID of the outcome.
@@ -86,7 +98,12 @@
 #' "bootstrap"`: the full-data estimates with their bootstrap standard errors, limits and p-values,
 #' the full-data coefficients with their bootstrap covariance (`vcov`), the counts of the full-data
 #' clones, and `metaData$bootstrap` (the settings, the number of replicates, the number of failed
-#' replicates, the number of finite replicates of each estimate, and the fixed prior variances). For the
+#' replicates, the number of finite replicates of each estimate, the fixed prior variances, and
+#' `replicateShift`, a tibble with, for the hazard ratio and each risk difference, `estimand`, the number
+#' of finite `replicates`, the numbers `above` and `below` the estimate, the sign test p-value
+#' `signTestP`, `medianShift` (the median replicate minus the estimate, in bootstrap standard deviations,
+#' on the log scale for the hazard ratio), and `shifted` (whether the criterion above is met; `NA` with
+#' fewer than 20 finite replicates)). For the
 #' pooled logistic model with a natural spline or orthogonal polynomial time basis, whose knots or
 #' polynomial coefficients are recomputed from the data of each replicate, the time-basis coefficients
 #' (and the intercepts, and with an orthogonal polynomial and the interaction also the target
@@ -177,7 +194,10 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
 
   start <- Sys.time()
   message("Fitting the analysis on the full data")
-  full <- .runBootstrapAnalysis(
+  # Its warnings (for example about the design) are shown, and left out of the failure reasons of
+  # replicates, which repeat them:
+  fullWarnings <- character(0)
+  full <- withCallingHandlers(.runBootstrapAnalysis(
     cloneCensorWeightData = cloneCensorWeightData,
     outcomeId = outcomeId,
     createStudyPopulationArgs = createStudyPopulationArgs,
@@ -186,7 +206,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     computeWeightsArgs = computeWeightsArgs,
     fitOutcomeModelArgs = fitOutcomeModelArgs,
     censoringModels = censoringModels
-  )
+  ), warning = function(w) {
+    fullWarnings <<- c(fullWarnings, conditionMessage(w))
+  })
   fixedPriorVariances <- NULL
   if (bootstrapArgs$fixHyperparameters) {
     variances <- lapply(full$censoringModels, function(model) model$priorVariance)
@@ -231,7 +253,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
         error = function(e) conditionMessage(e)
       ),
       warning = function(w) {
-        replicateWarnings <<- c(replicateWarnings, conditionMessage(w))
+        if (!conditionMessage(w) %in% fullWarnings) {
+          replicateWarnings <<- c(replicateWarnings, conditionMessage(w))
+        }
         invokeRestart("muffleWarning")
       }
     )
@@ -270,6 +294,23 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     ))
   }
 
+  replicateShift <- .bootstrapReplicateShift(full$estimates, replicates)
+  shifted <- replicateShift[replicateShift$shifted %in% TRUE, ]
+  if (nrow(shifted) > 0) {
+    medianShift <- ifelse(
+      is.na(shifted$medianShift),
+      "",
+      sprintf("; median replicate %.2f bootstrap SD %s it", abs(shifted$medianShift), ifelse(shifted$medianShift >= 0, "above", "below"))
+    )
+    warning(sprintf(
+      "The bootstrap replicates sit predominantly on one side of the full-data estimate of %s, so the bootstrap limits may not cover the estimate. A known cause is censoring models with many covariates and a penalty, which the duplicated persons of each replicate let overfit at the full-data prior variance. Check the replicates (replicates and metaData$bootstrap$replicateShift) before using the bootstrap limits",
+      paste(sprintf(
+        "%s (%d replicates above it and %d below, sign test p = %.2g%s)",
+        shifted$estimand, shifted$above, shifted$below, shifted$signTestP, medianShift
+      ), collapse = "; ")
+    ), call. = FALSE)
+  }
+
   vcov <- NULL
   if (!is.null(coefficientReplicates)) {
     vcov <- stats::cov(coefficientReplicates, use = "pairwise.complete.obs")
@@ -299,7 +340,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
         seed = bootstrapArgs$seed,
         ci = bootstrapArgs$ci,
         fixHyperparameters = bootstrapArgs$fixHyperparameters,
-        fixedPriorVariances = fixedPriorVariances
+        fixedPriorVariances = fixedPriorVariances,
+        replicateShift = replicateShift
       )
     ),
     replicates = replicates
@@ -462,6 +504,52 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
         p = if (isDifference) 2 * stats::pnorm(-abs(estimate / se)) else NA_real_
       )
     }
+  }
+  return(dplyr::bind_rows(rows))
+}
+
+# Whether the replicates sit predominantly on one side of the full-data estimate (Phase1Contracts section
+# 11.6), for the primary estimands of `t0` (estimand, estimate): the hazard ratio (on the log scale) and
+# the risk differences at the horizons. For each, from its finite replicates: the numbers above and below
+# the estimate (ties left out), the two-sided sign test p-value of those counts, the median replicate
+# minus the estimate in bootstrap standard deviations (NA when the replicates do not vary), and
+# `shifted`, TRUE when the sign test p < 0.01 or the median is more than 0.5 standard deviations from
+# the estimate, assessed only with at least 20 finite replicates (NA otherwise).
+.bootstrapReplicateShift <- function(t0, replicates) {
+  estimands <- t0$estimand[grepl("^(hr|rd_[0-9]+)$", t0$estimand)]
+  rows <- list()
+  for (estimand in estimands) {
+    estimate <- t0$estimate[t0$estimand == estimand]
+    t <- replicates[, estimand]
+    if (estimand == "hr") {
+      estimate <- log(estimate)
+      t <- log(t)
+    }
+    t <- t[is.finite(t)]
+    above <- sum(t > estimate)
+    below <- sum(t < estimate)
+    signTestP <- if (is.finite(estimate) && above + below > 0) stats::binom.test(above, above + below)$p.value else NA_real_
+    sd <- if (length(t) >= 2) stats::sd(t) else NA_real_
+    medianShift <- if (is.finite(estimate) && !is.na(sd) && sd > 0) (stats::median(t) - estimate) / sd else NA_real_
+    shifted <- NA
+    if (length(t) >= 20 && is.finite(estimate)) {
+      shifted <- isTRUE(signTestP < 0.01) || isTRUE(abs(medianShift) > 0.5)
+    }
+    rows[[length(rows) + 1]] <- tibble(
+      estimand = estimand,
+      replicates = length(t),
+      above = above,
+      below = below,
+      signTestP = signTestP,
+      medianShift = medianShift,
+      shifted = shifted
+    )
+  }
+  if (length(rows) == 0) {
+    return(tibble(
+      estimand = character(0), replicates = integer(0), above = integer(0), below = integer(0),
+      signTestP = numeric(0), medianShift = numeric(0), shifted = logical(0)
+    ))
   }
   return(dplyr::bind_rows(rows))
 }

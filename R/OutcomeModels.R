@@ -79,7 +79,12 @@
 #' the default natural spline, the risks can remain biased even then, because each strategy's hazard
 #' can change abruptly after the grace period, and with intervals longer than a day, clones that end
 #' inside an interval count as at risk for the whole interval (see [createFitOutcomeModelArgs()]). The
-#' `"km"` risks, and so the `"cox"` risks, do not make these assumptions.
+#' `"km"` risks, and so the `"cox"` risks, do not make these assumptions. With a strategy whose grace
+#' period ends on or after `riskStart`, `"logistic"` warns when the time basis is smooth (natural
+#' spline, polynomial or linear), and when no interval ends at the end of the grace period, the end of
+#' day `G` (`t = G - riskStart + 1`; day `G - 1` with `sameDayOrdering = "deviationFirst"`), where the
+#' clones of an `"initiateWithin(G)"` strategy that have not started are censored. An indicator basis on
+#' a grid with an interval ending there, with `armByTimeInteraction = TRUE`, avoids both.
 #'
 #' The models are fitted with Cyclops using `fitOutcomeModelArgs$control`; a fit that fails is refitted
 #' with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot
@@ -142,10 +147,16 @@
 #' )
 #' outcomeModel
 #' confint(outcomeModel)
-#' # The pooled logistic model with the default daily natural spline basis:
+#' # The pooled logistic model with a daily indicator basis and strategy-by-time interactions, which
+#' # follow the change in the hazards at the end of the grace period:
 #' logisticModel <- fitOutcomeModel(
 #'   weightedClones = weightedClones,
-#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "logistic", horizons = c(30, 60))
+#'   fitOutcomeModelArgs = createFitOutcomeModelArgs(
+#'     modelType = "logistic",
+#'     horizons = c(30, 60),
+#'     timeBasis = createTimeBasis(type = "indicator", intervalLength = 1),
+#'     armByTimeInteraction = TRUE
+#'   )
 #' )
 #' coef(logisticModel)
 #' close(weightedClones)
@@ -253,6 +264,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     riskStart = riskStart,
     competingEvents = metaData$competingEvents,
     strategies = metaData$strategies,
+    sameDayOrdering = metaData$sameDayOrdering,
     cutIntervalLength = metaData$weights$cutIntervalLength,
     stabilized = metaData$weights$stabilized
   ))
@@ -741,6 +753,43 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return(as.vector(risks))
 }
 
+# Warnings for a pooled logistic outcome model with a grace period (Phase1Contracts section 11.6). At the
+# end of the grace period of a strategy (the end of day G, or of day G - 1 with "deviationFirst", the
+# last day of follow-up of the clones that deviate on day G), the clones of an "initiateWithin(G)"
+# strategy that have not started are censored, and the hazards of both strategies can change abruptly.
+# A row counts its clone as at risk for the whole interval, so on a grid with no interval ending there
+# the censored clones dilute the hazard of the rest of that interval; and a smooth time basis cannot
+# follow the change. Grace periods that end before riskStart are left out.
+.warnPooledGracePeriod <- function(data, timeBasis) {
+  ends <- list()
+  for (strategyId in seq_along(data$strategies)) {
+    strategy <- data$strategies[[strategyId]]
+    if (is.null(strategy$graceEnd)) {
+      next
+    }
+    endDay <- strategy$graceEnd - if (identical(data$sameDayOrdering, "deviationFirst")) 1 else 0
+    t <- endDay - data$riskStart + 1
+    if (t >= 1) {
+      ends[[length(ends) + 1]] <- list(description = sprintf("strategy %d (%s) at the end of day %d (t = %d)", strategyId, strategy$label, endDay, t), t = t)
+    }
+  }
+  intervalLength <- timeBasis$intervalLength
+  offGrid <- Filter(function(end) end$t %% intervalLength != 0, ends)
+  if (length(offGrid) > 0) {
+    warning(sprintf(
+      "No interval of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d) ends where the grace period censors clones: %s. A clone counts as at risk for the whole interval it is censored in, which dilutes that interval's hazard and biases the risks. Use an intervalLength that divides t (for example 1): an indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      intervalLength, data$riskStart, paste(vapply(offGrid, function(end) end$description, character(1)), collapse = "; ")
+    ), call. = FALSE)
+  }
+  if (length(ends) > 0 && timeBasis$type != "indicator") {
+    warning(sprintf(
+      "The pooled logistic outcome model's smooth time basis (%s) cannot follow the change in the hazards at the end of the grace period: %s, so its risks can be biased. Use an indicator time basis (createTimeBasis(type = \"indicator\")) on a grid with an interval ending there, with armByTimeInteraction = TRUE, which reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      timeBasis$type, paste(vapply(ends, function(end) end$description, character(1)), collapse = "; ")
+    ), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
 .fitLogisticMsm <- function(data, fitOutcomeModelArgs, competing, variance) {
   timeBasis <- fitOutcomeModelArgs$timeBasis
   intervalLength <- timeBasis$intervalLength
@@ -759,6 +808,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       if (is.null(data$cutIntervalLength) || is.na(data$cutIntervalLength)) "no interval grid" else sprintf("intervals of %d days", data$cutIntervalLength)
     ))
   }
+  .warnPooledGracePeriod(data, timeBasis)
   rows <- .expandToIntervals(data$segments, intervalLength)
   rows <- rows[rows$weight > 0, ]
   basis <- .timeBasisColumns(timeBasis, rows$interval, rows$count)

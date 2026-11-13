@@ -257,8 +257,9 @@ test_that("Full pipeline vs ccwr on lungcancer (reported, not gated)", {
       analysisId = seq_along(covariateIds),
       analysisName = colnames(covariateMatrix),
       domainId = "Demographics",
-      startDay = 0,
-      endDay = 0,
+      # Baseline characteristics, without a window (Phase1Contracts section 11.6):
+      startDay = NA,
+      endDay = NA,
       isBinary = ifelse(colnames(covariateMatrix) %in% c("female", "stage2", "emergency"), "Y", "N"),
       missingMeansZero = "Y"
     ),

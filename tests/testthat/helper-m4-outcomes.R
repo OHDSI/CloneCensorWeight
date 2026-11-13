@@ -189,6 +189,17 @@ createM4WeightedClones <- function(fixture, cutIntervalLength = NA_integer_) {
   return(.addSegments(ccwClones, segments, fixture$personWeights, weightsMetaData))
 }
 
+# Evaluates `expr` without the warnings of a pooled logistic outcome model with a grace period (a smooth
+# time basis, or a grid with no interval ending at the end of the grace period; Phase1Contracts section
+# 11.6), for tests of other properties of such models. test-integration-warnings.R tests the warnings.
+withoutGracePeriodWarnings <- function(expr) {
+  return(withCallingHandlers(expr, warning = function(w) {
+    if (grepl("^(No interval of the pooled logistic outcome model's grid|The pooled logistic outcome model's smooth time basis)", conditionMessage(w))) {
+      invokeRestart("muffleWarning")
+    }
+  }))
+}
+
 # Fits the outcome model on a fixture (closing the Andromeda object). The pooled logistic model gets
 # segments split on its interval grid.
 fitM4 <- function(fixture, ...) {
@@ -196,7 +207,7 @@ fitM4 <- function(fixture, ...) {
   cutIntervalLength <- if (args$modelType == "logistic") args$timeBasis$intervalLength else NA_integer_
   weightedClones <- createM4WeightedClones(fixture, cutIntervalLength)
   on.exit(close(weightedClones))
-  return(suppressMessages(fitOutcomeModel(weightedClones, args)))
+  return(withoutGracePeriodWarnings(suppressMessages(fitOutcomeModel(weightedClones, args))))
 }
 
 # Newton steps with a tight standardized-gradient criterion (coordinate descent converges slowly on
