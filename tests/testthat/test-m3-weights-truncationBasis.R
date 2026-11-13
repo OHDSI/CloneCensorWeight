@@ -63,8 +63,8 @@ test_that("Percentile truncation over the clones whose weight varies truncates a
   expect_gt(varying$caps$cap[1], allClones$caps$cap[1])
   expect_gt(varying$caps$truncatedShare[1], 0)
   expect_lt(varying$caps$truncatedShare[1], allClones$caps$truncatedShare[1])
-  # The fixed rule reports its share too:
-  weighted <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("fixed", 2))))
+  # The fixed rule reports its share too (the same cap on the other scale, set explicitly so it does not warn):
+  weighted <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("fixed", 2, otherScaleUpper = 2))))
   caps <- attr(weighted, "metaData")$weights$caps
   close(weighted)
   expect_equal(caps$cap, c(2, 2))
@@ -89,7 +89,7 @@ test_that("The truncated share does not depend on how the clones are cut", {
   on.exit(close(clones), add = TRUE)
   models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))))
   for (stabilized in c(FALSE, TRUE)) {
-    for (truncation in list(createWeightTruncation("fixed", 1.5), createWeightTruncation("percentile", 0.9))) {
+    for (truncation in list(createWeightTruncation("fixed", 1.5, otherScaleUpper = 1.5), createWeightTruncation("percentile", 0.9))) {
       args <- createComputeWeightsArgs(stabilized = stabilized, truncation = truncation)
       coarse <- suppressMessages(computeCensoringWeights(clones, models, args))
       daily <- suppressMessages(computeCensoringWeights(clones, models, args, outcomeTimeBasis = createTimeBasis(intervalLength = 1)))

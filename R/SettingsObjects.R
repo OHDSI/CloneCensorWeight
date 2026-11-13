@@ -58,6 +58,9 @@ AbstractSerializableSettings <- R6Class(
         stop("Must provide either typedList, untypedList, or json argument to constructor")
       }
       self$fromList(args, requireTyping)
+      if (requireTyping) {
+        .messageFilledFields(self, names(args))
+      }
       self$validate()
     },
     toList = function() {
@@ -86,6 +89,26 @@ AbstractSerializableSettings <- R6Class(
     }
   )
 )
+
+# Settings loaded from a list or JSON without some fields (saved by an earlier version) take the current
+# class-level defaults of those fields, which can differ from the behaviour of the version that saved
+# them, so say which fields were filled.
+.messageFilledFields <- function(settings, savedNames) {
+  fields <- Filter(function(name) {
+    value <- settings[[name]]
+    !is.function(value) && !is(value, "environment") && !is.null(value)
+  }, setdiff(ls(settings), c(".__enclos_env__", savedNames)))
+  if (length(fields) > 0) {
+    values <- vapply(fields, function(name) paste(format(settings[[name]]), collapse = ", "), character(1))
+    message(sprintf(
+      "%s saved without %s: filled with the current default%s %s, which can differ from the behaviour of the version that saved them (see NEWS)",
+      class(settings)[1],
+      paste(fields, collapse = ", "),
+      if (length(fields) > 1) "s" else "",
+      paste(sprintf("%s = %s", fields, values), collapse = ", ")
+    ))
+  }
+}
 
 .dateCheck <- function(date) {
   if (date != "") {
@@ -758,23 +781,36 @@ FitCensoringModelsArgs <- R6Class(
 #' scale whichever scale they are on. With `truncateMsmWeights = FALSE`, the weights on the other scale
 #' are formed from the truncated weights and are not bounded by any cap.
 #'
+#' A percentile cap adapts to each scale, but a fixed cap does not: unstabilized weights are larger than
+#' stabilized ones (by the inverse of the stabilization numerator, the share of persons still following
+#' the strategy), so a cap meant for stabilized weights truncates far more of the unstabilized weights,
+#' which are the default weights of the Cox and pooled logistic outcome models. For `"fixed"`,
+#' `otherScaleUpper` sets the cap on the other scale; by default (`NULL`) it is `upper`, the same number
+#' on both scales, and [computeCensoringWeights()] warns when it truncates a much larger share of the
+#' clones on the other scale than on the scale of `stabilized`.
+#'
 #' @param type  The truncation rule: `"none"`, `"percentile"`, or `"fixed"`.
 #' @param upper For `"percentile"`, the percentile in (0, 1). For `"fixed"`, the cap (greater than 1).
 #'              Ignored for `"none"`.
 #' @param basis For `"percentile"`, the clones over which the percentile is taken: `"varying"` or
 #'              `"allClones"` (see details). Ignored for other types.
+#' @param otherScaleUpper For `"fixed"`, the cap (greater than 1) on the other scale (unstabilized when
+#'              `stabilized = TRUE` in [createComputeWeightsArgs()]), used with `truncateMsmWeights =
+#'              TRUE`. If `NULL`, `upper` (see details). Ignored for other types.
 #'
 #' @return
 #' An object of type `WeightTruncation`.
 #'
 #' @examples
 #' truncation <- createWeightTruncation(type = "fixed", upper = 20)
+#' truncation <- createWeightTruncation(type = "fixed", upper = 5, otherScaleUpper = 50)
 #' truncation <- createWeightTruncation(type = "percentile", upper = 0.99, basis = "allClones")
 #'
 #' @export
 createWeightTruncation <- function(type = "percentile",
                                    upper = 0.99,
-                                   basis = "varying") {
+                                   basis = "varying",
+                                   otherScaleUpper = NULL) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -790,10 +826,12 @@ WeightTruncation <- R6Class(
     upper = NULL,
     # Default, so settings saved before this field existed load:
     basis = "varying",
+    otherScaleUpper = NULL,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertChoice(self$type, c("none", "percentile", "fixed"), add = errorMessages)
       checkmate::assertNumber(self$upper, null.ok = TRUE, add = errorMessages)
+      checkmate::assertNumber(self$otherScaleUpper, lower = 1, finite = TRUE, null.ok = TRUE, add = errorMessages)
       checkmate::assertChoice(self$basis, c("varying", "allClones"), add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
       if (self$type == "percentile" && (is.null(self$upper) || self$upper <= 0 || self$upper >= 1)) {
@@ -821,7 +859,9 @@ WeightTruncation <- R6Class(
 #' on its scale. `truncateMsmWeights` sets how the weights on the other scale are truncated:
 #'
 #' - `TRUE` (the default): the same rule (type, `upper` and basis) is applied separately to the weights
-#'   on the other scale, with a cap computed on that scale from the untruncated weights on that scale.
+#'   on the other scale, with a cap computed on that scale from the untruncated weights on that scale (a
+#'   fixed cap is the same number on both scales unless `otherScaleUpper` is set in
+#'   [createWeightTruncation()], see there).
 #'   So the weights of the Cox and pooled logistic models are capped on their own scale whatever
 #'   `stabilized` and `msmWeights` are. The two scales can truncate different segments.
 #' - `FALSE`: the weights on the other scale are formed from the truncated `weight` (divided or

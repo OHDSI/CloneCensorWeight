@@ -41,7 +41,9 @@ stabilized otherwise).
 on its scale. \code{truncateMsmWeights} sets how the weights on the other scale are truncated:
 \itemize{
 \item \code{TRUE} (the default): the same rule (type, \code{upper} and basis) is applied separately to the weights
-on the other scale, with a cap computed on that scale from the untruncated weights on that scale.
+on the other scale, with a cap computed on that scale from the untruncated weights on that scale (a
+fixed cap is the same number on both scales unless \code{otherScaleUpper} is set in
+\code{\link[=createWeightTruncation]{createWeightTruncation()}}, see there).
 So the weights of the Cox and pooled logistic models are capped on their own scale whatever
 \code{stabilized} and \code{msmWeights} are. The two scales can truncate different segments.
 \item \code{FALSE}: the weights on the other scale are formed from the truncated \code{weight} (divided or

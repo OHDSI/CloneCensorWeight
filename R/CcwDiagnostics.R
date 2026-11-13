@@ -43,12 +43,21 @@
 #' when starting has no effect. The rates are therefore also compared within groups of the predicted
 #' probability of starting by `G`, `1 - S(G | X)` from an initiation hazard model of the same
 #' treatment in `censoringModels` (of a `"notInitiateWithin(G)"` or `"neverInitiate"` strategy). The
-#' summary is the Mantel-Haenszel rate ratio (initiated vs not initiated) over the groups,
-#' with the Greenland-Robins variance, or the crude rate ratio when there is no such model. The flag
-#' is raised when the rate ratio of the events that end follow-up (outcome or death) differs from 1 at
-#' level `alpha`. Then `postGraceModel = "hazard"` is the valid choice. A flag can also come from
-#' confounding that the groups do not remove, and the absence of a flag does not prove the assumption
-#' when there are few events: read the rate ratio and its interval, not only the flag.
+#' summary is the Mantel-Haenszel rate ratio (initiated vs not initiated) over the strata, with the
+#' Greenland-Robins variance. With `stratifyByDay = TRUE` (the default) the strata are the groups
+#' crossed with the day of the grace period, so initiated and not-initiated person-time are compared on
+#' the same day. Initiated person-time falls later in the grace period than not-initiated person-time,
+#' so without the day strata a baseline risk that changes over the grace period (for example a risk
+#' that is highest just after the index date) shows as a difference between them when starting has no
+#' effect. `stratifyByDay = FALSE` compares them within the groups only. Without such a model the groups
+#' are left out (one group). The flag is raised when the rate ratio of the events that end follow-up
+#' (outcome or death) differs from 1 at level `alpha`. Then `"binary"` is likely biased, and
+#' `postGraceModel = "hazard"` is the valid choice. A flag can also come from confounding that the
+#' groups do not remove (or, with `stratifyByDay = FALSE`, from a time trend in the baseline risk), and
+#' the absence of a flag does not prove the assumption when there are few events: read the rate ratio
+#' and its interval, not only the flag. `postGraceModel` concerns the `"notInitiateWithin"`
+#' strategies; the check of an `"initiateWithin"` strategy of the same treatment and `G` uses the same
+#' person-time.
 #'
 #' @param clones          An object of type [CcwClones] as created by `createClones()` (or the
 #'                        weighted clones returned by [computeCensoringWeights()]).
@@ -56,6 +65,7 @@
 #'                        [fitCensoringModels()] on the same clones, which gives the groups.
 #' @param numberOfGroups  The number of groups (quantiles) of the predicted probability of starting.
 #' @param alpha           The level of the test behind the flag.
+#' @param stratifyByDay   Also stratify the Mantel-Haenszel rate ratio by the day of the grace period?
 #'
 #' @return
 #' A tibble of class `CcwGracePeriodSelection` with columns `strategyId`, `grouping` (`"overall"` or
@@ -64,8 +74,9 @@
 #' person-day `initiatedOutcomeRate`, `notInitiatedOutcomeRate`, `initiatedDeathRate`,
 #' `notInitiatedDeathRate`, and `rateRatio`, the ratio of the rates of the outcome or death. The
 #' attribute `summary` holds, per strategy and event (`"outcomeOrDeath"`, `"outcome"`, `"death"`),
-#' whether the rate ratio is `stratified` over the groups, `rateRatio`, `lb95`, `ub95`, `p` and `flag`;
-#' `strategyLabels` holds the strategy labels.
+#' whether the rate ratio is `stratified` over the groups, whether it is stratified `byDay`,
+#' `rateRatio`, `lb95`, `ub95`, `p` and `flag`; `strategyLabels` and `strategyTypes` hold the strategy
+#' labels and types.
 #'
 #' @example inst/examples/clones.R
 #' @examples
@@ -82,12 +93,13 @@
 #' close(data)
 #'
 #' @export
-computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOfGroups = 10, alpha = 0.05) {
+computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOfGroups = 10, alpha = 0.05, stratifyByDay = TRUE) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   checkmate::assertClass(censoringModels, "CcwCensoringModels", null.ok = TRUE, add = errorMessages)
   checkmate::assertInt(numberOfGroups, lower = 1, add = errorMessages)
   checkmate::assertNumber(alpha, lower = 0, upper = 1, add = errorMessages)
+  checkmate::assertFlag(stratifyByDay, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(clones, "metaData")
   if (!is.null(censoringModels)) {
@@ -107,7 +119,10 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
     }
     graceEnd <- as.integer(strategy$graceEnd)
     treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
-    personTime <- .getGracePeriodPersonTime(persons, treatmentDay, graceEnd, eventsFirst)
+    # With "eventsFirst" no person-time of day 0 is initiated, so day 0 is left out: it would compare the
+    # day-0 events of all persons with none.
+    firstDay <- if (eventsFirst) 1L else 0L
+    personTime <- .getGracePeriodPersonTime(persons, treatmentDay, graceEnd, firstDay)
     if (nrow(personTime) == 0) {
       next
     }
@@ -123,18 +138,23 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
     )
     rows[[length(rows) + 1]] <- dplyr::mutate(strategyRows, strategyId = as.integer(strategyId), .before = 1)
     stratified <- any(hasPrediction)
-    byGroup <- if (stratified) strategyRows[strategyRows$grouping == "prediction", ] else strategyRows[strategyRows$grouping == "overall", ]
+    strata <- if (stratified) {
+      .selectionStrata(personTime[hasPrediction, ], groups[hasPrediction], firstDay, graceEnd, stratifyByDay)
+    } else {
+      .selectionStrata(personTime, rep(1L, nrow(personTime)), firstDay, graceEnd, stratifyByDay)
+    }
     events <- list(
-      outcomeOrDeath = list(a = byGroup$initiatedOutcomes + byGroup$initiatedDeaths, b = byGroup$notInitiatedOutcomes + byGroup$notInitiatedDeaths),
-      outcome = list(a = byGroup$initiatedOutcomes, b = byGroup$notInitiatedOutcomes),
-      death = list(a = byGroup$initiatedDeaths, b = byGroup$notInitiatedDeaths)
+      outcomeOrDeath = list(a = strata$initiatedOutcomes + strata$initiatedDeaths, b = strata$notInitiatedOutcomes + strata$notInitiatedDeaths),
+      outcome = list(a = strata$initiatedOutcomes, b = strata$notInitiatedOutcomes),
+      death = list(a = strata$initiatedDeaths, b = strata$notInitiatedDeaths)
     )
     for (event in names(events)) {
-      ratio <- .mantelHaenszelRateRatio(events[[event]]$a, events[[event]]$b, byGroup$initiatedDays, byGroup$notInitiatedDays)
+      ratio <- .mantelHaenszelRateRatio(events[[event]]$a, events[[event]]$b, strata$initiatedDays, strata$notInitiatedDays)
       summaries[[length(summaries) + 1]] <- tibble(
         strategyId = as.integer(strategyId),
         event = event,
         stratified = stratified,
+        byDay = stratifyByDay,
         rateRatio = ratio$rateRatio,
         lb95 = ratio$lb95,
         ub95 = ratio$ub95,
@@ -145,10 +165,11 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
   }
   selection <- dplyr::bind_rows(c(list(.emptySelectionRows()), rows))
   attr(selection, "summary") <- dplyr::bind_rows(c(
-    list(tibble(strategyId = integer(0), event = character(0), stratified = logical(0), rateRatio = numeric(0), lb95 = numeric(0), ub95 = numeric(0), p = numeric(0), flag = logical(0))),
+    list(tibble(strategyId = integer(0), event = character(0), stratified = logical(0), byDay = logical(0), rateRatio = numeric(0), lb95 = numeric(0), ub95 = numeric(0), p = numeric(0), flag = logical(0))),
     summaries
   ))
   attr(selection, "strategyLabels") <- vapply(strategies, function(strategy) as.character(strategy$label), character(1))
+  attr(selection, "strategyTypes") <- vapply(strategies, function(strategy) as.character(strategy$type), character(1))
   class(selection) <- c("CcwGracePeriodSelection", class(selection))
   return(selection)
 }
@@ -157,15 +178,13 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
 # riskEnd, the outcome or death): the days not
 # initiated and initiated, whether the person initiated while followed, and the event that ended follow-up
 # in the grace period, with whether it fell in initiated person-time.
-.getGracePeriodPersonTime <- function(persons, treatmentDay, graceEnd, eventsFirst) {
+.getGracePeriodPersonTime <- function(persons, treatmentDay, graceEnd, firstDay) {
+  eventsFirst <- firstDay == 1L
   eventDay <- pmin(persons$outcomeDay, persons$deathDay, na.rm = TRUE)
   lastDay <- pmin(graceEnd, persons$riskEnd, eventDay, na.rm = TRUE)
   # The first day of initiated person-time: an event on the day of initiation comes first with
   # "eventsFirst".
   initiatedFrom <- ifelse(is.na(treatmentDay), graceEnd + 1L, treatmentDay + if (eventsFirst) 1L else 0L)
-  # With "eventsFirst" no person-time of day 0 is initiated, so day 0 is left out: it would compare the
-  # day-0 events of all persons with none.
-  firstDay <- if (eventsFirst) 1L else 0L
   hasEvent <- !is.na(eventDay) & eventDay <= lastDay
   isOutcome <- hasEvent & !is.na(persons$outcomeDay) & persons$outcomeDay == eventDay
   initiatedEvent <- hasEvent & eventDay >= initiatedFrom
@@ -177,7 +196,10 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
     initiatedOutcome = isOutcome & initiatedEvent,
     notInitiatedOutcome = isOutcome & !initiatedEvent,
     initiatedDeath = hasEvent & !isOutcome & initiatedEvent,
-    notInitiatedDeath = hasEvent & !isOutcome & !initiatedEvent
+    notInitiatedDeath = hasEvent & !isOutcome & !initiatedEvent,
+    # The first initiated day and the last day followed, for the day strata:
+    initiatedFrom = as.integer(initiatedFrom),
+    lastDay = as.integer(lastDay)
   )
   return(personTime[lastDay >= firstDay, ])
 }
@@ -222,6 +244,41 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
   return(rows)
 }
 
+# Per stratum (group, crossed with the day of the grace period when `byDay`): the initiated and
+# not-initiated person-days and their outcomes and deaths. With "eventsFirst" no person-time of day 0
+# is initiated, so day 0 (firstDay = 1) is left out.
+.selectionStrata <- function(personTime, groups, firstDay, graceEnd, byDay) {
+  groupLevels <- sort(unique(groups))
+  group <- match(groups, groupLevels)
+  nGroups <- length(groupLevels)
+  nDays <- graceEnd - firstDay + 1L
+  # Day index 1..nDays, plus one row for the day after the last:
+  key <- function(g, day) (g - 1L) * (nDays + 1L) + (day - firstDay + 1L)
+  size <- nGroups * (nDays + 1L)
+  countDays <- function(start, end) {
+    valid <- end >= start
+    change <- tabulate(key(group[valid], start[valid]), size) - tabulate(key(group[valid], end[valid] + 1L), size)
+    counts <- apply(matrix(change, nDays + 1L, nGroups), 2, cumsum)
+    return(matrix(counts, nDays + 1L, nGroups)[seq_len(nDays), , drop = FALSE])
+  }
+  countEvents <- function(event) {
+    counts <- tabulate(key(group[event], personTime$lastDay[event]), size)
+    return(matrix(counts, nDays + 1L, nGroups)[seq_len(nDays), , drop = FALSE])
+  }
+  notInitiatedEnd <- pmin(personTime$lastDay, personTime$initiatedFrom - 1L)
+  strata <- list(
+    initiatedDays = countDays(pmax(personTime$initiatedFrom, firstDay), personTime$lastDay),
+    notInitiatedDays = countDays(rep(firstDay, nrow(personTime)), notInitiatedEnd),
+    initiatedOutcomes = countEvents(personTime$initiatedOutcome),
+    notInitiatedOutcomes = countEvents(personTime$notInitiatedOutcome),
+    initiatedDeaths = countEvents(personTime$initiatedDeath),
+    notInitiatedDeaths = countEvents(personTime$notInitiatedDeath)
+  )
+  # Sum over days within each group:
+  collapse <- if (byDay) as.vector else colSums
+  return(lapply(strata, function(counts) as.numeric(collapse(counts))))
+}
+
 .emptySelectionRows <- function() {
   return(tibble(
     strategyId = integer(0), grouping = character(0), group = integer(0), persons = integer(0), initiators = integer(0),
@@ -264,16 +321,25 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
   if (nrow(summary) == 0) {
     return(invisible(NULL))
   }
+  types <- attr(selection, "strategyTypes")
   writeLines("Grace-period selection check (rate ratio of outcome or death, initiated vs not initiated person-time):")
   for (i in seq_len(nrow(summary))) {
     row <- summary[i, ]
+    strata <- c(if (row$stratified) "group", if (isTRUE(row$byDay)) "day")
+    flag <- ""
+    if (isTRUE(row$flag)) {
+      flag <- " FLAG: initiated and not-initiated person-time differ in risk"
+      if (is.null(types) || types[row$strategyId] == "notInitiateWithin") {
+        flag <- paste0(flag, "; postGraceModel = \"binary\" is likely biased, \"hazard\" is valid")
+      }
+    }
     writeLines(sprintf(
       "  Strategy %d: %s %.2f (%.2f-%.2f), p = %s%s",
       row$strategyId,
-      if (row$stratified) "stratified" else "crude",
+      if (length(strata) == 0) "crude" else paste("stratified by", paste(strata, collapse = " and ")),
       row$rateRatio, row$lb95, row$ub95,
       format.pval(row$p, digits = 2),
-      if (isTRUE(row$flag)) " FLAG: starting changes the grace-period risk, so postGraceModel = \"binary\" is biased; use \"hazard\"" else ""
+      flag
     ))
   }
   invisible(NULL)
@@ -836,7 +902,8 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #' @details
 #' By default the variants change one choice at a time from the specified settings, to each of its
 #' other values: `postGraceModel` and `covariateTimeInteraction` (pooled logistic hazard model only) of
-#' [createFitCensoringModelsArgs()] (only when a strategy uses them), `truncateMsmWeights` and the
+#' [createFitCensoringModelsArgs()] (only when a strategy uses them), `truncateMsmWeights` (with
+#' truncation, not for `modelType = "km"`, which does not use the weights on the MSM scale) and the
 #' truncation `basis` of [createComputeWeightsArgs()] (with percentile truncation), and `msmWeights` of
 #' [createFitOutcomeModelArgs()] (not for `modelType = "km"`). Pass `variants` for other combinations.
 #'
@@ -956,7 +1023,8 @@ computeCcwSensitivity <- function(clones,
     }
   }
   truncation <- computeWeightsArgs$truncation
-  if (truncation$type != "none") {
+  # The Kaplan-Meier analysis does not use the weights on the MSM scale:
+  if (truncation$type != "none" && fitOutcomeModelArgs$modelType != "km") {
     add("computeWeightsArgs", "truncateMsmWeights", !computeWeightsArgs$truncateMsmWeights)
   }
   if (truncation$type == "percentile") {

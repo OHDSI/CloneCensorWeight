@@ -49,7 +49,8 @@ them.
 \details{
 By default the variants change one choice at a time from the specified settings, to each of its
 other values: \code{postGraceModel} and \code{covariateTimeInteraction} (pooled logistic hazard model only) of
-\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses them), \code{truncateMsmWeights} and the
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses them), \code{truncateMsmWeights} (with
+truncation, not for \code{modelType = "km"}, which does not use the weights on the MSM scale) and the
 truncation \code{basis} of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (with percentile truncation), and \code{msmWeights} of
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} (not for \code{modelType = "km"}). Pass \code{variants} for other combinations.
 }

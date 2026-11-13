@@ -203,10 +203,10 @@ test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (c
     untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(hazardModelType = hazardModelType, postGraceModel = "binary")$toJson(), simplifyDataFrame = FALSE)
     untypedList$postGraceModel <- NULL
     untypedList$covariateTimeInteraction <- NULL
-    old <- FitCensoringModelsArgs$new(untypedList = untypedList)
+    expect_message(old <- FitCensoringModelsArgs$new(untypedList = untypedList), "saved without covariateTimeInteraction, postGraceModel")
     expect_equal(old$postGraceModel, "hazard")
     expect_equal(old$covariateTimeInteraction, if (hazardModelType == "cox") "none" else "day0")
-    old <- FitCensoringModelsArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))
+    expect_message(old <- FitCensoringModelsArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA)), sprintf("covariateTimeInteraction = %s", if (hazardModelType == "cox") "none" else "day0"))
     expect_equal(old$covariateTimeInteraction, if (hazardModelType == "cox") "none" else "day0")
   }
 })
@@ -219,7 +219,11 @@ test_that("WeightTruncation basis (contract section 11.5)", {
   expect_error(createWeightTruncation(basis = "all"), "basis")
   untypedList <- jsonlite::fromJSON(createWeightTruncation(basis = "allClones")$toJson(), simplifyDataFrame = FALSE)
   untypedList$basis <- NULL
-  expect_equal(WeightTruncation$new(untypedList = untypedList)$basis, "varying")
+  expect_message(expect_equal(WeightTruncation$new(untypedList = untypedList)$basis, "varying"), "basis = varying")
+  # otherScaleUpper (review of section 12): the cap of a fixed rule on the other scale
+  expectRoundTrip(createWeightTruncation(type = "fixed", upper = 5, otherScaleUpper = 50), WeightTruncation)
+  expect_null(createWeightTruncation(type = "fixed", upper = 5)$otherScaleUpper)
+  expect_error(createWeightTruncation(type = "fixed", upper = 5, otherScaleUpper = 0.5), "otherScaleUpper")
 })
 
 test_that("WeightTruncation and ComputeWeightsArgs round trip and validation", {
@@ -245,7 +249,10 @@ test_that("WeightTruncation and ComputeWeightsArgs round trip and validation", {
   expect_error(createComputeWeightsArgs(truncateMsmWeights = NA), "truncateMsmWeights")
   untypedList <- jsonlite::fromJSON(createComputeWeightsArgs(truncateMsmWeights = FALSE)$toJson(), simplifyDataFrame = FALSE)
   untypedList$truncateMsmWeights <- NULL
-  expect_true(ComputeWeightsArgs$new(untypedList = untypedList)$truncateMsmWeights)
+  expect_message(expect_true(ComputeWeightsArgs$new(untypedList = untypedList)$truncateMsmWeights), "ComputeWeightsArgs saved without truncateMsmWeights: filled with the current default truncateMsmWeights = TRUE")
+  # Complete settings load without a message:
+  expect_no_message(ComputeWeightsArgs$new(json = createComputeWeightsArgs()$toJson()))
+  expect_no_message(FitCensoringModelsArgs$new(json = createFitCensoringModelsArgs()$toJson()))
 })
 
 test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
@@ -284,8 +291,8 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   # Settings saved before msmWeights existed load with the default:
   untypedList <- jsonlite::fromJSON(createFitOutcomeModelArgs(msmWeights = "stabilized")$toJson(), simplifyDataFrame = FALSE)
   untypedList$msmWeights <- NULL
-  expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$msmWeights, "unstabilized")
-  expect_equal(FitOutcomeModelArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))$msmWeights, "unstabilized")
+  expect_message(expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$msmWeights, "unstabilized"), "msmWeights = unstabilized")
+  expect_message(expect_equal(FitOutcomeModelArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))$msmWeights, "unstabilized"), "msmWeights")
   expect_error(createFitOutcomeModelArgs(msmWeights = "truncated"), "msmWeights")
   expect_error(createFitOutcomeModelArgs(msmWeights = TRUE), "msmWeights")
   expect_error(createFitOutcomeModelArgs(useCovariates = TRUE), "Not yet supported")

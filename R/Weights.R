@@ -292,6 +292,19 @@ computeCensoringWeights <- function(clones,
     weightedClones$ccwWOtherCaps <- otherCaps |>
       filter(!is.na(.data$cap))
     caps$otherScaleTruncatedShare <- .computeTruncatedShares(weightedClones, caps$strategyId, "ccwWOtherCaps", "maxOtherScaleWeight")
+    truncation <- computeWeightsArgs$truncation
+    if (truncation$type == "fixed" && is.null(truncation$otherScaleUpper) &&
+      any(caps$otherScaleTruncatedShare > 2 * caps$truncatedShare + 0.01, na.rm = TRUE)) {
+      warning(sprintf(
+        "The fixed cap %s truncates a share %s of the clones (per strategy) on the %s scale (used by the Cox and pooled logistic outcome models with msmWeights = \"%s\") but %s on the %s scale. Set otherScaleUpper in createWeightTruncation() to choose the cap on that scale, or truncateMsmWeights = FALSE",
+        format(truncation$upper),
+        paste(sprintf("%.3g", caps$otherScaleTruncatedShare), collapse = ", "),
+        if (computeWeightsArgs$stabilized) "unstabilized" else "stabilized",
+        if (computeWeightsArgs$stabilized) "unstabilized" else "stabilized",
+        paste(sprintf("%.3g", caps$truncatedShare), collapse = ", "),
+        if (computeWeightsArgs$stabilized) "stabilized" else "unstabilized"
+      ), call. = FALSE)
+    }
     otherScaleWeight <- .truncatedWeightSql("ccwWWeighted.otherScaleWeight", "ccwWOtherCaps")
   } else {
     caps$otherScaleCap <- NA_real_
@@ -692,7 +705,8 @@ computeCensoringWeights <- function(clones,
     return(tibble(strategyId = as.integer(strategyIds), cap = NA_real_))
   }
   if (truncation$type == "fixed") {
-    return(tibble(strategyId = as.integer(strategyIds), cap = as.numeric(truncation$upper)))
+    cap <- if (column == "maxOtherScaleWeight" && !is.null(truncation$otherScaleUpper)) truncation$otherScaleUpper else truncation$upper
+    return(tibble(strategyId = as.integer(strategyIds), cap = as.numeric(cap)))
   }
   caps <- .andromedaSql(clones, sprintf("
     SELECT strategyId,

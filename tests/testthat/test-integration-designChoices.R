@@ -237,7 +237,6 @@ test_that("The grace-period selection check counts initiated and not-initiated p
   for (sameDayOrdering in names(expected)) {
     clones <- buildM3Clones(persons, m3Strategies(graceEnd = 2), sameDayOrdering)
     selection <- computeGracePeriodSelection(clones)
-    close(clones)
     expect_s3_class(selection, "CcwGracePeriodSelection")
     expect_equal(selection$grouping, c("overall", "overall"))
     row <- unlist(selection[1, names(expected[[sameDayOrdering]])])
@@ -247,7 +246,18 @@ test_that("The grace-period selection check counts initiated and not-initiated p
     expect_equal(selection$rateRatio[1], rateRatio, info = sameDayOrdering)
     summary <- attr(selection, "summary")
     expect_false(any(summary$stratified))
-    expect_equal(summary$rateRatio[summary$strategyId == 1 & summary$event == "outcomeOrDeath"], rateRatio, info = sameDayOrdering)
+    expect_true(all(summary$byDay))
+    # Without the day strata the summary is the crude rate ratio:
+    crude <- attr(computeGracePeriodSelection(clones, stratifyByDay = FALSE), "summary")
+    expect_false(any(crude$byDay))
+    expect_equal(crude$rateRatio[crude$strategyId == 1 & crude$event == "outcomeOrDeath"], rateRatio, info = sameDayOrdering)
+    close(clones)
+    if (sameDayOrdering == "eventsFirst") {
+      # By day: day 1 has initiated days 2 (persons 1, 8) and not-initiated days 7 with 2 events (3, 9);
+      # day 2 has initiated days 3 (1, 2, 8) with 1 event (8) and not-initiated days 4 with 1 event (7).
+      # Mantel-Haenszel: (0 + 1 * 4 / 7) / (2 * 2 / 9 + 1 * 3 / 7) = 36 / 55.
+      expect_equal(summary$rateRatio[summary$strategyId == 1 & summary$event == "outcomeOrDeath"], 36 / 55)
+    }
   }
   # The Mantel-Haenszel rate ratio of two strata with equal rates within strata is 1, while the crude
   # one is not:
@@ -296,6 +306,48 @@ test_that("bStrong: the selection check flags, binary is biased and hazard is no
   expect_lt(results$bStrong$ub95, 0.5)
   expect_false(results$null$flag)
   expect_true(results$null$lb95 < 1 && results$null$ub95 > 1)
+})
+
+test_that("A baseline risk that changes over the grace period does not raise the selection flag with day strata", {
+  # The null DGP (starting has no effect) with a falling baseline outcome risk: 75% of the outcomes after
+  # day 3 removed at random, whoever started. Initiated person-time falls later in the grace period, so
+  # without the day strata it has the lower risk (review of section 12: rate ratio 0.63, p = 1e-109 at
+  # n = 50,000).
+  data <- selectionData(0)
+  outcomes <- data$outcomes |>
+    collect()
+  set.seed(1)
+  data$outcomes <- outcomes[!(outcomes$daysToEvent > 3 & runif(nrow(outcomes)) < 0.75), ]
+  clones <- designClones(data)
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  models <- suppressMessages(fitCensoringModels(clones, data, designArgs(prior = Cyclops::createPrior("none"))))
+  pick <- function(selection) {
+    summary <- attr(selection, "summary")
+    return(summary[summary$strategyId == 2 & summary$event == "outcomeOrDeath", ])
+  }
+  byDay <- pick(computeGracePeriodSelection(clones, models))
+  expect_true(byDay$byDay)
+  expect_false(byDay$flag)
+  expect_true(byDay$lb95 < 1 && byDay$ub95 > 1)
+  byGroup <- pick(computeGracePeriodSelection(clones, models, stratifyByDay = FALSE))
+  expect_true(byGroup$flag)
+  expect_lt(byGroup$ub95, 0.8)
+})
+
+test_that("The selection flag advises on postGraceModel only for notInitiateWithin strategies", {
+  selection <- dplyr::tibble(strategyId = 1:2)
+  attr(selection, "summary") <- dplyr::tibble(
+    strategyId = 1:2, event = "outcomeOrDeath", stratified = TRUE, byDay = TRUE,
+    rateRatio = 0.3, lb95 = 0.25, ub95 = 0.35, p = 1e-20, flag = TRUE
+  )
+  attr(selection, "strategyTypes") <- c("initiateWithin", "notInitiateWithin")
+  output <- capture.output(.printSelectionFlags(selection))
+  expect_match(output[2], "Strategy 1: stratified by group and day 0.30.*FLAG")
+  expect_no_match(output[2], "postGraceModel")
+  expect_match(output[3], "Strategy 2: .*FLAG.*postGraceModel = \"binary\" is likely biased")
 })
 
 test_that("Positivity summarizes the predicted probabilities of every model", {
@@ -398,6 +450,50 @@ test_that("The weight summary matches the daily weights on both scales, before a
   expect_equal(unique(defaults$dayBand)[1:2], c("0-7", "8"))
   skip_if_not_installed("ggplot2")
   expect_s3_class(plotWeightSummary(defaults), "ggplot")
+})
+
+test_that("A fixed cap on the other scale is the same number unless otherScaleUpper is set, with a warning", {
+  data <- simulateCloneCensorWeightData(n = 2000, maxDays = 60, graceEnd = 7, seed = 3, initiationHazard = 0.02)
+  clones <- designClones(data)
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  models <- suppressMessages(fitCensoringModels(clones, data, designArgs()))
+  untruncated <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("none"))))
+  u <- collectSegments(untruncated)
+  close(untruncated)
+  # The same cap 5 on both scales truncates many more unstabilized weights, and warns:
+  expect_warning(
+    same <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("fixed", 5)))),
+    "otherScaleUpper"
+  )
+  caps <- attr(same, "metaData")$weights$caps
+  expect_equal(caps$otherScaleCap, c(5, 5))
+  expect_gt(max(caps$otherScaleTruncatedShare - caps$truncatedShare), 0.01)
+  s <- collectSegments(same)
+  close(same)
+  expect_equal(s$otherScaleWeight, pmin(u$otherScaleWeight, 5))
+  expect_equal(s$weight, pmin(u$weight, 5))
+  # otherScaleUpper sets the cap on the other scale only:
+  expect_no_warning(
+    own <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(truncation = createWeightTruncation("fixed", 5, otherScaleUpper = 50))))
+  )
+  caps <- attr(own, "metaData")$weights$caps
+  expect_equal(caps$cap, c(5, 5))
+  expect_equal(caps$otherScaleCap, c(50, 50))
+  s <- collectSegments(own)
+  close(own)
+  expect_equal(s$otherScaleWeight, pmin(u$otherScaleWeight, 50))
+  expect_equal(s$weight, pmin(u$weight, 5))
+})
+
+test_that("The default sensitivity variants leave out truncateMsmWeights for Kaplan-Meier", {
+  variants <- function(modelType) {
+    names(.defaultSensitivityVariants(designStrategies(), designArgs(), createComputeWeightsArgs(), createFitOutcomeModelArgs(modelType = modelType)))
+  }
+  expect_false("truncateMsmWeights = FALSE" %in% variants("km"))
+  expect_true("truncateMsmWeights = FALSE" %in% variants("cox"))
 })
 
 test_that("The sensitivity analysis refits every default variant and custom ones", {

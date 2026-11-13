@@ -22,6 +22,18 @@ new defaults):
   initiation hazard model by default (`postGraceModel = "hazard"`). `postGraceModel = "binary"` uses the
   binary model at the end of the grace period, which is biased when starting the treatment changes the
   risk during the grace period.
+* Settings saved without a field that has since been added (for example `truncateMsmWeights`,
+  `postGraceModel`, `covariateTimeInteraction` or `msmWeights`) load with its current default, as listed
+  above, and loading them prints a message naming the fields filled in this way. To reproduce an
+  earlier analysis, set those fields to the earlier behaviour.
+* The grace-period selection check (`computeGracePeriodSelection()`) compares initiated and
+  not-initiated person-time on the same day of the grace period by default (`stratifyByDay = TRUE`), so
+  a baseline risk that changes over the grace period does not raise the flag. `stratifyByDay = FALSE`
+  compares them within groups of the predicted probability of starting only.
+* A fixed truncation cap is applied as the same number on both weight scales with
+  `truncateMsmWeights = TRUE`; `createWeightTruncation(otherScaleUpper = )` sets the cap on the other
+  scale, and `computeCensoringWeights()` warns when the same cap truncates a much larger share on the
+  other scale.
 * Percentile truncation is taken over the clones whose weight varies
   (`createWeightTruncation(basis = "varying")`). `basis = "allClones"` reproduces the earlier caps.
   `metaData$weights$caps` reports the cap and the share of clones truncated per strategy.

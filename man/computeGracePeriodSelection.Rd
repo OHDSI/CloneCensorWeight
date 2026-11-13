@@ -8,7 +8,8 @@ computeGracePeriodSelection(
   clones,
   censoringModels = NULL,
   numberOfGroups = 10,
-  alpha = 0.05
+  alpha = 0.05,
+  stratifyByDay = TRUE
 )
 }
 \arguments{
@@ -21,6 +22,8 @@ weighted clones returned by \code{\link[=computeCensoringWeights]{computeCensori
 \item{numberOfGroups}{The number of groups (quantiles) of the predicted probability of starting.}
 
 \item{alpha}{The level of the test behind the flag.}
+
+\item{stratifyByDay}{Also stratify the Mantel-Haenszel rate ratio by the day of the grace period?}
 }
 \value{
 A tibble of class \code{CcwGracePeriodSelection} with columns \code{strategyId}, \code{grouping} (\code{"overall"} or
@@ -29,8 +32,9 @@ A tibble of class \code{CcwGracePeriodSelection} with columns \code{strategyId},
 person-day \code{initiatedOutcomeRate}, \code{notInitiatedOutcomeRate}, \code{initiatedDeathRate},
 \code{notInitiatedDeathRate}, and \code{rateRatio}, the ratio of the rates of the outcome or death. The
 attribute \code{summary} holds, per strategy and event (\code{"outcomeOrDeath"}, \code{"outcome"}, \code{"death"}),
-whether the rate ratio is \code{stratified} over the groups, \code{rateRatio}, \code{lb95}, \code{ub95}, \code{p} and \code{flag};
-\code{strategyLabels} holds the strategy labels.
+whether the rate ratio is \code{stratified} over the groups, whether it is stratified \code{byDay},
+\code{rateRatio}, \code{lb95}, \code{ub95}, \code{p} and \code{flag}; \code{strategyLabels} and \code{strategyTypes} hold the strategy
+labels and types.
 }
 \description{
 Compares, for each strategy with a grace period (days \verb{0..G}), the rates of the outcome and of death
@@ -55,12 +59,21 @@ Persons who start differ from those who do not in their covariates, so the crude
 when starting has no effect. The rates are therefore also compared within groups of the predicted
 probability of starting by \code{G}, \code{1 - S(G | X)} from an initiation hazard model of the same
 treatment in \code{censoringModels} (of a \code{"notInitiateWithin(G)"} or \code{"neverInitiate"} strategy). The
-summary is the Mantel-Haenszel rate ratio (initiated vs not initiated) over the groups,
-with the Greenland-Robins variance, or the crude rate ratio when there is no such model. The flag
-is raised when the rate ratio of the events that end follow-up (outcome or death) differs from 1 at
-level \code{alpha}. Then \code{postGraceModel = "hazard"} is the valid choice. A flag can also come from
-confounding that the groups do not remove, and the absence of a flag does not prove the assumption
-when there are few events: read the rate ratio and its interval, not only the flag.
+summary is the Mantel-Haenszel rate ratio (initiated vs not initiated) over the strata, with the
+Greenland-Robins variance. With \code{stratifyByDay = TRUE} (the default) the strata are the groups
+crossed with the day of the grace period, so initiated and not-initiated person-time are compared on
+the same day. Initiated person-time falls later in the grace period than not-initiated person-time,
+so without the day strata a baseline risk that changes over the grace period (for example a risk
+that is highest just after the index date) shows as a difference between them when starting has no
+effect. \code{stratifyByDay = FALSE} compares them within the groups only. Without such a model the groups
+are left out (one group). The flag is raised when the rate ratio of the events that end follow-up
+(outcome or death) differs from 1 at level \code{alpha}. Then \code{"binary"} is likely biased, and
+\code{postGraceModel = "hazard"} is the valid choice. A flag can also come from confounding that the
+groups do not remove (or, with \code{stratifyByDay = FALSE}, from a time trend in the baseline risk), and
+the absence of a flag does not prove the assumption when there are few events: read the rate ratio
+and its interval, not only the flag. \code{postGraceModel} concerns the \code{"notInitiateWithin"}
+strategies; the check of an \code{"initiateWithin"} strategy of the same treatment and \code{G} uses the same
+person-time.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

@@ -4,7 +4,12 @@
 \alias{createWeightTruncation}
 \title{Create a weight truncation rule}
 \usage{
-createWeightTruncation(type = "percentile", upper = 0.99, basis = "varying")
+createWeightTruncation(
+  type = "percentile",
+  upper = 0.99,
+  basis = "varying",
+  otherScaleUpper = NULL
+)
 }
 \arguments{
 \item{type}{The truncation rule: \code{"none"}, \code{"percentile"}, or \code{"fixed"}.}
@@ -14,6 +19,9 @@ Ignored for \code{"none"}.}
 
 \item{basis}{For \code{"percentile"}, the clones over which the percentile is taken: \code{"varying"} or
 \code{"allClones"} (see details). Ignored for other types.}
+
+\item{otherScaleUpper}{For \code{"fixed"}, the cap (greater than 1) on the other scale (unstabilized when
+\code{stabilized = TRUE} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}), used with \code{truncateMsmWeights = TRUE}. If \code{NULL}, \code{upper} (see details). Ignored for other types.}
 }
 \value{
 An object of type \code{WeightTruncation}.
@@ -47,9 +55,18 @@ over the clones' maximum weights on that scale. So the weights of the Cox and po
 outcome models (\code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}) are bounded by a cap of their own
 scale whichever scale they are on. With \code{truncateMsmWeights = FALSE}, the weights on the other scale
 are formed from the truncated weights and are not bounded by any cap.
+
+A percentile cap adapts to each scale, but a fixed cap does not: unstabilized weights are larger than
+stabilized ones (by the inverse of the stabilization numerator, the share of persons still following
+the strategy), so a cap meant for stabilized weights truncates far more of the unstabilized weights,
+which are the default weights of the Cox and pooled logistic outcome models. For \code{"fixed"},
+\code{otherScaleUpper} sets the cap on the other scale; by default (\code{NULL}) it is \code{upper}, the same number
+on both scales, and \code{\link[=computeCensoringWeights]{computeCensoringWeights()}} warns when it truncates a much larger share of the
+clones on the other scale than on the scale of \code{stabilized}.
 }
 \examples{
 truncation <- createWeightTruncation(type = "fixed", upper = 20)
+truncation <- createWeightTruncation(type = "fixed", upper = 5, otherScaleUpper = 50)
 truncation <- createWeightTruncation(type = "percentile", upper = 0.99, basis = "allClones")
 
 }
