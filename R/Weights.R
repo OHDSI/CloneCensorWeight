@@ -55,6 +55,16 @@
 #' Weights are truncated per strategy: the cap is the `upper` percentile (`quantile` type 7) of the
 #' clones' maximum weight, or the fixed value.
 #'
+#' Every segment also stores its stabilization numerator (the quantity from the numerator model that
+#' stabilizes its weight), whether or not the weights are stabilized, so that the outcome models can
+#' use either weight (see `msmWeights` in [createFitOutcomeModelArgs()]): the other weight is `weight /
+#' stabilizationNumerator` (stabilized weights) or `weight * stabilizationNumerator` (unstabilized
+#' weights). Truncation applies to `weight`, and the other weight is formed from the truncated
+#' `weight`, so the same segments are truncated under both weights: the other weight's cap on a
+#' segment is the cap divided (or multiplied) by the segment's numerator. Within a strategy, the
+#' clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
+#' Aalen-Johansen estimates are the same with either weight.
+#'
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
 #'                           [fitCensoringModels()] on the same clones (same outcome, same-day
@@ -71,8 +81,10 @@
 #' weighted several times (for example with and without stabilization).
 #'
 #' - `segments`: `segmentId`, `cloneRowId`, `rowId`, `personSeqId`, `strategyId`, `startTime`
-#'   (exclusive), `stopTime` (inclusive), `weight` (truncated), `outcome` and `competing` (1 only on the
-#'   clone's last segment when it ends with the outcome or death).
+#'   (exclusive), `stopTime` (inclusive), `weight` (truncated; stabilized when
+#'   `computeWeightsArgs$stabilized`), `stabilizationNumerator` (the stabilized weight is the
+#'   unstabilized one times it, see above), `outcome` and `competing` (1 only on the clone's last
+#'   segment when it ends with the outcome or death).
 #' - `personWeights`: `cloneRowId`, `strategyId`, `maxWeight` and `weightAtEnd`, the largest and the
 #'   last segment weight of each clone with segments, before truncation.
 #'
@@ -225,10 +237,13 @@ computeCensoringWeights <- function(clones,
   } else {
     "1.0 / ccwWSurvival.survival"
   }
+  # The numerator is stored whether or not the weights are stabilized, so the outcome models can use
+  # either weight (Phase1Contracts section 11.1):
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWWeighted AS
     SELECT ccwWSegments.*,
-      %s AS weight
+      %s AS weight,
+      ccwWSurvival.numeratorSurvival AS stabilizationNumerator
     FROM ccwWSegments
     INNER JOIN ccwWSurvival
       ON ccwWSegments.strategyId = ccwWSurvival.strategyId
@@ -268,6 +283,7 @@ computeCensoringWeights <- function(clones,
         WHEN ccwWCaps.cap IS NOT NULL AND ccwWWeighted.weight > ccwWCaps.cap THEN ccwWCaps.cap
         ELSE ccwWWeighted.weight
       END AS weight,
+      ccwWWeighted.stabilizationNumerator,
       CAST(ccwWWeighted.outcome AS INTEGER) AS outcome,
       CAST(ccwWWeighted.competing AS INTEGER) AS competing
     FROM ccwWWeighted

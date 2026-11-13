@@ -115,6 +115,7 @@ createM4Fixture <- function(n = 120,
       startTime = as.numeric(startTime),
       stopTime = as.numeric(stopTime),
       weight = weight,
+      stabilizationNumerator = 1,
       outcome = as.integer(last & clone$endReason == "outcome"),
       competing = as.integer(last & clone$endReason == "death")
     )

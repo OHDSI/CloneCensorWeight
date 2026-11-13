@@ -241,6 +241,7 @@ dailyWeightFixture <- function(riskStart, competingEvents, seed, n = 200, maxDay
       startTime = as.numeric(t - 1),
       stopTime = as.numeric(t),
       weight = fixture$weightAt(i, t),
+      stabilizationNumerator = 1,
       outcome = as.integer(last & clones$endReason[i] == "outcome"),
       competing = as.integer(last & clones$endReason[i] == "death")
     )
@@ -558,9 +559,11 @@ test_that("The default control fits a weighted Cox MSM on a million segments as 
 
   expect_silent(point <- .fitOutcomeModelPoint(weightedClones, createFitOutcomeModelArgs(modelType = "cox", horizons = 60)))
   segments$x <- as.integer(segments$strategyId == 1)
+  # The default msmWeights fits the Cox MSM with the unstabilized weights (contract section 11.1):
+  segments$unstabilizedWeight <- segments$weight / segments$stabilizationNumerator
   reference <- survival::coxph(
     survival::Surv(startTime, stopTime, outcome) ~ x,
-    data = segments[segments$weight > 0, ], weights = weight, ties = "breslow",
+    data = segments[segments$weight > 0, ], weights = unstabilizedWeight, ties = "breslow",
     control = survival::coxph.control(eps = 1e-12, toler.chol = 1e-14, iter.max = 50)
   )
   expect_equal(point$estimates$logEstimate[point$estimates$estimand == "hr"], unname(coef(reference)), tolerance = 1e-8)

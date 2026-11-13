@@ -246,6 +246,7 @@ m5ReferenceSegments <- function(clones, graceEnd, before, after) {
       startTime = as.numeric(startTime),
       stopTime = as.numeric(stopTime),
       weight = weight,
+      stabilizationNumerator = rep(1, length(idx)),
       outcome = as.integer(last & clones$endReason[idx] == "outcome"),
       competing = as.integer(last & clones$endReason[idx] == "death")
     ))
@@ -283,6 +284,7 @@ m5CutSegments <- function(clones, cutTimes, weights) {
       startTime = rep(as.numeric(breaks[k]), length(idx)),
       stopTime = as.numeric(stopTime),
       weight = weights[idx, k],
+      stabilizationNumerator = rep(1, length(idx)),
       outcome = as.integer(last & clones$endReason[idx] == "outcome"),
       competing = as.integer(last & clones$endReason[idx] == "death")
     )
