@@ -792,15 +792,21 @@ BootstrapArgs <- R6Class(
 #' fit with `control` fails, [fitOutcomeModel()] refits it with Cyclops' default algorithm and
 #' convergence criterion, with a warning.
 #'
-#' The Cox and pooled logistic models without `armByTimeInteraction` assume an effect of the strategy
-#' that is constant over follow-up (proportional hazards or odds). Their risks at the horizons inherit
-#' this assumption, which a grace period violates: during the grace period the clones of both
-#' strategies follow the same course, so the true hazards are equal there. Their risks, risk
-#' differences and risk ratios can then be biased, also at horizons within the grace period. The
-#' Kaplan-Meier (`"km"`) risks, or the pooled logistic model with `armByTimeInteraction = TRUE` and an
-#' indicator (saturated) time basis, do not make this assumption.
+#' The default, `"cox"`, reports the hazard ratio of the weighted Cox model together with the weighted
+#' Kaplan-Meier (or, with competing death, Aalen-Johansen) risks, risk differences and risk ratios of
+#' `"km"` on the same weighted clones. Risks from the Cox model would assume proportional hazards,
+#' which a grace period violates by design: during the grace period the clones of both strategies
+#' follow the same course, so their true hazards are equal there. Such risks are biased, also at
+#' horizons within the grace period, so they are not reported. The hazard ratio is kept because
+#' meta-analysis and empirical calibration use it.
 #'
-#' @param modelType            The outcome model: `"cox"`, `"logistic"` (pooled logistic), or `"km"`
+#' The pooled logistic (`"logistic"`) risks are model-based. Without `armByTimeInteraction` they assume
+#' an odds ratio that is constant over follow-up and are biased under a grace period for the same
+#' reason, so use `armByTimeInteraction = TRUE` with a grace period. With daily intervals, an indicator
+#' (saturated) time basis and the interaction give the weighted Kaplan-Meier or Aalen-Johansen risks.
+#'
+#' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
+#'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
 #' @param horizons             Days since index at which risks, risk differences and risk ratios are
 #'                             reported.

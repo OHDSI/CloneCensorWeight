@@ -4,10 +4,10 @@ library(testthat)
 # riskStart = 0): study population, clones, censoring models, weights, covariate balance, the three
 # outcome models, cumulative incidence and MDRR, for initiateWithin(G) vs notInitiateWithin(G) and
 # initiateWithin(G) vs neverInitiate, under both same-day orderings. The weighted Kaplan-Meier
-# (Aalen-Johansen) risks must be within 4 robust standard errors of the true risks, and the unweighted
-# analysis must not be. Initiation and the outcome both depend on the covariates, so the clones that
-# follow each strategy are selected on prognosis: starters by G have a higher outcome risk, and persons
-# who do not start a lower one.
+# (Aalen-Johansen) risks, of "km" and of the default "cox" report, must be within 4 robust standard
+# errors of the true risks, and the unweighted analysis must not be. Initiation and the outcome both
+# depend on the covariates, so the clones that follow each strategy are selected on prognosis: starters
+# by G have a higher outcome risk, and persons who do not start a lower one.
 
 test_that("The weighted pipeline recovers the true risks that the unweighted analysis misses", {
   skip_on_cran()
@@ -54,9 +54,13 @@ test_that("The weighted pipeline recovers the true risks that the unweighted ana
   expect_equal(nrow(population), 3000)
   expect_equal(unique(population$riskStart), 0)
   fitCensoringModelsArgs <- createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))
-  outcomeArgs <- lapply(c(km = "km", cox = "cox", logistic = "logistic"), function(modelType) {
-    createFitOutcomeModelArgs(modelType = modelType, horizons = horizons)
-  })
+  outcomeArgs <- list(
+    km = createFitOutcomeModelArgs(modelType = "km", horizons = horizons),
+    # The default report:
+    cox = createFitOutcomeModelArgs(horizons = horizons),
+    logistic = createFitOutcomeModelArgs(modelType = "logistic", horizons = horizons)
+  )
+  expect_equal(outcomeArgs$cox$modelType, "cox")
 
   for (comparator in names(comparators)) {
     strategies <- list(initiate, comparators[[comparator]])
@@ -128,12 +132,16 @@ test_that("The weighted pipeline recovers the true risks that the unweighted ana
       expect_lt(outcomeModels$cox$estimates$estimate[1], 1)
       expect_lt(outcomeModels$logistic$estimates$estimate[1], 1)
 
-      # The weighted Aalen-Johansen risks are within 4 robust standard errors of the truth:
-      for (strategyId in 1:2) {
-        role <- c("target", "comparator")[strategyId]
-        rows <- match(sprintf("risk_%s_%d", role, horizons), km$estimand)
-        z <- (km$estimate[rows] - truthOf(strategyId)) / km$se[rows]
-        expect_true(all(abs(z) < 4), info = paste(label, role, paste(round(z, 2), collapse = ", ")))
+      # The weighted Aalen-Johansen risks, of km and of the default cox report, are within 4 robust
+      # standard errors of the truth:
+      for (modelType in c("km", "cox")) {
+        estimates <- outcomeModels[[modelType]]$estimates
+        for (strategyId in 1:2) {
+          role <- c("target", "comparator")[strategyId]
+          rows <- match(sprintf("risk_%s_%d", role, horizons), estimates$estimand)
+          z <- (estimates$estimate[rows] - truthOf(strategyId)) / estimates$se[rows]
+          expect_true(all(abs(z) < 4), info = paste(label, modelType, role, paste(round(z, 2), collapse = ", ")))
+        }
       }
 
       curves <- computeCumulativeIncidence(weighted, horizons = horizons)

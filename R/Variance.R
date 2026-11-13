@@ -70,7 +70,6 @@
   xBar <- numeric(nTimes)
   xBar[positive] <- s1[positive] / s0[positive]
   return(list(
-    beta = beta,
     isEvent = isEvent,
     relRisk = relRisk,
     s0 = s0,
@@ -105,18 +104,18 @@
 
 # Influence of functionals of hazard increments ----------------------------------------------------
 
-# Person-level influence of sum_j a[j] * dLambda(s_j), where dLambda(s_j) = scale * dLambda0(s_j) is
-# the weighted Breslow (or Nelson-Aalen) increment of `breslow`, holding its coefficient fixed:
-# for each segment, w_k a(s) scale / S0(s) for its event, minus
-# w_k exp(beta x_k) sum_{s in (start_k, stop_k]} a(s) scale dLambda0(s) / S0(s).
+# Person-level influence of sum_j a[j] * dLambda0(s_j), where dLambda0 is the weighted Breslow (or
+# Nelson-Aalen) increment of `breslow`, holding its coefficient fixed: for each segment,
+# w_k a(s) / S0(s) for its event, minus
+# w_k exp(beta x_k) sum_{s in (start_k, stop_k]} a(s) dLambda0(s) / S0(s).
 # `a` may also be a matrix with one column per functional; the result is then a persons x functionals
 # matrix.
-.hazardInfluence <- function(segments, breslow, a, scale, nPersons) {
+.hazardInfluence <- function(segments, breslow, a, nPersons) {
   isMatrix <- is.matrix(a)
   a <- as.matrix(a)
   positive <- breslow$s0 > 0
   eventCoefficient <- matrix(0, nrow(a), ncol(a))
-  eventCoefficient[positive, ] <- a[positive, , drop = FALSE] * (scale / breslow$s0[positive])
+  eventCoefficient[positive, ] <- a[positive, , drop = FALSE] / breslow$s0[positive]
   cumRisk <- apply(rbind(0, eventCoefficient * breslow$dLambda0), 2, cumsum)
   dim(cumRisk) <- c(nrow(a) + 1, ncol(a))
   contribution <- -(segments$weight * breslow$relRisk) *
@@ -130,12 +129,6 @@
     influence[as.integer(rownames(sums)), ] <- sums
   }
   return(if (isMatrix) influence else influence[, 1])
-}
-
-# Derivative of sum_j a[j] * dLambda(s_j | x) with respect to the Cox coefficient, where
-# dLambda(s | x) = exp(beta x) dLambda0(s; beta): d dLambda(s | x) / d beta = dLambda(s | x) (x - xBar(s)).
-.hazardBetaDerivative <- function(breslow, a, x) {
-  return(sum(a * exp(breslow$beta * x) * breslow$dLambda0 * (x - breslow$xBar)))
 }
 
 # Pooled logistic sandwich -------------------------------------------------------------------------

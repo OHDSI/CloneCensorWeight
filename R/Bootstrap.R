@@ -40,11 +40,13 @@
 #' replicates are not shown; those of a failed replicate are reported with its failure.
 #'
 #' A replicate fails when the analysis stops with an error (for example because a censoring model
-#' cannot be fitted) or gives no finite estimate (for example because the outcome model cannot be
-#' fitted). Failed replicates get `NA` estimates and are counted in `metaData$bootstrap$failedReplicates`,
-#' with a warning. Replicates with a missing or infinite estimate (for example the risks of a replicate
-#' whose death model cannot be fitted) are left out of that estimate's standard error and limits, as
-#' in [boot::boot.ci()]; `metaData$bootstrap$finiteReplicates` gives the number of replicates used for
+#' cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome
+#' model cannot be fitted). Failed replicates get `NA` estimates and are counted in
+#' `metaData$bootstrap$failedReplicates`, with a warning. Replicates with a missing or infinite
+#' estimate (for example the risks of a replicate whose pooled logistic death model cannot be fitted,
+#' or the hazard ratio of a replicate whose Cox model cannot be fitted, whose Kaplan-Meier risks are
+#' still estimated) are left out of that estimate's standard error and limits, as in
+#' [boot::boot.ci()]; `metaData$bootstrap$finiteReplicates` gives the number of replicates used for
 #' each estimate, with a warning when it is smaller than the number of replicates that did not fail.
 #' Ratios (hazard, odds and risk
 #' ratios) are summarized on the log scale. The standard error is the standard deviation of the

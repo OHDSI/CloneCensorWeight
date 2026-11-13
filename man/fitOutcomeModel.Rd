@@ -22,14 +22,16 @@ An object of class \code{CcwOutcomeModel}: a list with
 \item \code{modelType} and \code{varianceEstimator};
 \item \code{estimates}: a tibble with one row per estimand (\code{"hr"} or \code{"or"} (with \code{armByTimeInteraction},
 the odds ratio where the time basis is 0; see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), and per horizon \code{h}
-\code{"risk_target_<h>"}, \code{"risk_comparator_<h>"}, \code{"rd_<h>"}, \code{"rr_<h>"}, and for \code{"km"}
+\code{"risk_target_<h>"}, \code{"risk_comparator_<h>"}, \code{"rd_<h>"}, \code{"rr_<h>"}, and for \code{"km"} and \code{"cox"}
 \code{"rmst_<h>"} (without competing events) and \code{"rmtl_<h>"}, the target minus comparator
 differences, with the per-strategy values in \code{"rmst_target_<h>"}, \code{"rmst_comparator_<h>"},
 \code{"rmtl_target_<h>"}, and \code{"rmtl_comparator_<h>"}), and columns \code{estimand}, \code{estimate},
 \code{logEstimate} and \code{seLogEstimate} (ratios), \code{se} (other estimands), \code{lb95}, \code{ub95}, and \code{p} (ratios
 and differences);
 \item \code{coefficients} and \code{vcov}: the model coefficients and their (robust or model-based) covariance
-(\code{NULL} for \code{"km"}); death-model coefficients are prefixed with \code{"death:"};
+(\code{NULL} for \code{"km"}): for \code{"cox"} the target coefficient (log hazard ratio) of the outcome model;
+for \code{"logistic"} those of the outcome model and, with competing death, of the death model,
+prefixed with \code{"death:"};
 \item \code{counts}: per strategy, the number of clones, persons, outcomes and competing events, the
 person-days, and the weighted person-days, outcomes and competing events;
 \item \code{metaData}: the strategies, outcome ID, target ID, competing events, risk start, and the
@@ -38,8 +40,8 @@ arguments.
 }
 \description{
 Fits the weighted (marginal structural) outcome model to the weighted clones, and estimates risks,
-risk differences and risk ratios at each horizon, plus the hazard ratio (\code{"cox"}), odds ratio
-(\code{"logistic"}), or restricted mean survival and lost time (\code{"km"}).
+risk differences and risk ratios at each horizon, plus the hazard ratio (\code{"cox"}, the default), the
+odds ratio (\code{"logistic"}), and the restricted mean survival and lost time (\code{"km"} and \code{"cox"}).
 }
 \details{
 The model is fitted to the clone \code{segments} (time scale \code{t = day - riskStart + 1}, intervals
@@ -47,11 +49,16 @@ The model is fitted to the clone \code{segments} (time scale \code{t = day - ris
 \code{stopTime}). The covariate is the target indicator (strategy 1). Effects are target versus
 comparator.
 \itemize{
-\item \code{"cox"}: weighted Cox regression (Cyclops \code{cox_counting}, Breslow ties), with competing events
-treated as censoring (cause-specific hazard ratio). Risks are \code{1 - exp(-Lambda(t | x))} from the
-weighted Breslow estimator when \code{competingEvents = "none"}. When \code{competingEvents = "death"} a Cox
-model of death is also fitted, and risks combine the two cause-specific Breslow hazards by
-Aalen-Johansen.
+\item \code{"cox"} (the default): the hazard ratio of a weighted Cox regression (Cyclops \code{cox_counting},
+Breslow ties), with competing events treated as censoring (cause-specific hazard ratio), and, at
+the horizons, exactly the rows of \code{"km"} on the same weighted clones: the weighted Kaplan-Meier
+(or, with competing death, Aalen-Johansen) risks, risk differences, risk ratios and restricted
+means. Risks from the Cox model itself (its Breslow baseline hazard) are not reported: they assume
+proportional hazards, which a grace period violates by design (see below), so they are biased.
+The hazard ratio is reported because meta-analysis and empirical calibration use it. It has
+caveats of its own: when the hazards are not proportional it averages the effect over follow-up
+in a way that depends on the follow-up and the censoring, and hazards among survivors have a
+built-in selection bias (Hernan 2010; Stensrud and Hernan 2020).
 \item \code{"logistic"}: weighted pooled logistic regression (Cyclops \code{lr}) on one row per clone and interval
 of \code{timeBasis$intervalLength} days that the clone enters (intervals counted from \code{riskStart}),
 with the weight that applies on the clone's last day in the interval (the weight of its last
@@ -80,25 +87,27 @@ strategy.
 Horizons are days since index and are read at \code{t = horizon - riskStart + 1}, so the risk includes
 events on the horizon day.
 
-The risks of the \code{"cox"} model, and of the \code{"logistic"} model without \code{armByTimeInteraction}, assume
-an effect of the strategy that is constant over follow-up (proportional hazards or odds). A grace
-period violates this assumption by design: the clones of both strategies follow the same course
-during the grace period. Their risks, risk differences and risk ratios can then be biased, also at
-horizons within the grace period. The \code{"km"} risks do not make this assumption.
+The \code{"logistic"} risks are model-based. Without \code{armByTimeInteraction} they assume an effect of the
+strategy that is constant over follow-up (proportional odds). A grace period violates this
+assumption by design: the clones of both strategies follow the same course during the grace period.
+Their risks, risk differences and risk ratios are then biased, also at horizons within the grace
+period, so with a grace period use \code{armByTimeInteraction = TRUE}. The \code{"km"} risks, and so the
+\code{"cox"} risks, do not make this assumption.
 
 The models are fitted with Cyclops using \code{fitOutcomeModelArgs$control}; a fit that fails is refitted
-with Cyclops' default algorithm and convergence criterion, with a warning. When the death model of
-competing death cannot be fitted, the hazard or odds ratio of the outcome model is still reported,
-and the risks are \code{NA}.
+with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot
+be fitted (for example because there are no outcomes), the hazard ratio is \code{NA} and the \code{"km"} rows
+are still reported. When the death model of the pooled logistic model with competing death cannot be
+fitted, the odds ratio is still reported, and the risks are \code{NA}.
 
 The robust variance (\code{varianceEstimator = "robust"}) is the HC0 sandwich clustered on person, so all
-clones of a person share a cluster, treating the weights as fixed. For \code{"cox"} and \code{"km"} the risk
-standard errors are infinitesimal-jackknife standard errors (for \code{"cox"}, including the estimation
-of the hazard ratio and the baseline hazards); for \code{"logistic"} they use the delta method with a
-numerical Jacobian. With \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the
-inverse of the weighted information; the \code{"cox"} risks then have no standard errors, and \code{"km"} is
-not supported. \code{varianceEstimator = "bootstrap"} is computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by
-this function.
+clones of a person share a cluster, treating the weights as fixed. For \code{"cox"} and \code{"km"} the
+standard errors of the risks, their differences and ratios, and the restricted means are the
+infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
+for \code{"logistic"} they use the delta method with a numerical Jacobian. With \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the inverse of the weighted information; the
+\code{"cox"} rows at the horizons then have no standard errors or limits (the Kaplan-Meier has no
+model-based variance), and \code{"km"} is not supported. \code{varianceEstimator = "bootstrap"} is computed by
+\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by this function.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:
@@ -153,6 +162,10 @@ close(data)
 
 }
 \references{
+Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.
+
+Stensrud MJ, Hernan MA. Why test for proportional hazards? JAMA. 2020;323:1401-1402.
+
 Young JG, Stensrud MJ, Tchetgen Tchetgen EJ, Hernan MA. A causal framework for classical statistical
 estimands in failure-time settings with competing events. Statistics in Medicine. 2020;39:1199-1236.
 }

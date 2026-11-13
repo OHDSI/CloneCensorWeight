@@ -227,9 +227,11 @@ test_that("The bootstrap runs for km, cox and logistic outcome models", {
   skip_if_not_installed("boot")
   data <- bootstrapData(seed = 3)
   on.exit(close(data))
+  results <- list()
   for (modelType in c("km", "cox", "logistic")) {
     settings <- bootstrapSettings(modelType = modelType, replicates = 2)
     result <- runBootstrap(data, settings)
+    results[[modelType]] <- result
     full <- suppressMessages(runAnalysisByHand(data, settings))
     expect_s3_class(result, "CcwOutcomeModel")
     expect_equal(result$modelType, modelType)
@@ -263,6 +265,36 @@ test_that("The bootstrap runs for km, cox and logistic outcome models", {
     expect_equal(coef(result), stats::setNames(result$estimates$estimate, result$estimates$estimand))
     expect_equal(unname(confint(result)[, 1]), result$estimates$lb95)
   }
+  # The same seed draws the same persons, so the cox bootstrap bootstraps the hazard ratio and exactly
+  # the Kaplan-Meier rows of the km bootstrap:
+  cox <- results$cox
+  km <- results$km
+  expect_equal(colnames(cox$replicates), c("hr", colnames(km$replicates)))
+  expect_false(anyNA(cox$replicates))
+  expect_identical(cox$replicates[, -1], km$replicates)
+  expect_identical(cox$estimates[-1, ], km$estimates)
+  expect_false(is.na(cox$estimates$seLogEstimate[1]))
+})
+
+test_that("A cox replicate without outcomes keeps its Kaplan-Meier rows and leaves out its hazard ratio", {
+  data <- bootstrapData(seed = 5)
+  on.exit(close(data))
+  settings <- bootstrapSettings(modelType = "cox", replicates = 2)
+  # The second replicate draws only the persons without the outcome, so its Cox model has no events:
+  cohorts <- dplyr::collect(data$cohorts)
+  withOutcome <- unique(cohorts$personSeqId[cohorts$rowId %in% dplyr::collect(data$outcomes)$rowId])
+  personSeqIds <- sort(unique(cohorts$personSeqId))
+  counts <- cbind(rep(1L, 120), as.integer(!personSeqIds %in% withOutcome))
+  expect_gt(length(withOutcome), 0)
+  warnings <- capture_warnings(result <- runBootstrap(data, settings, counts = counts))
+  expect_length(warnings, 1)
+  # Its risk ratios (0 / 0) are missing too:
+  expect_match(warnings, "missing or infinite in bootstrap replicates that did not fail.*\\(finite replicates of 2\\): hr \\(1\\), rr_8 \\(1\\), rr_15 \\(1\\)$")
+  expect_equal(result$metaData$bootstrap$failedReplicates, 0)
+  expect_true(is.na(result$replicates[2, "hr"]))
+  risks <- grepl("^risk_", colnames(result$replicates))
+  expect_equal(unname(result$replicates[2, risks]), rep(0, sum(risks)))
+  expect_false(anyNA(result$replicates[2, grepl("^(risk|rd|rmst|rmtl)", colnames(result$replicates))]))
 })
 
 test_that("With fixHyperparameters, replicates use the full-data prior variances without cross-validation", {
@@ -341,15 +373,15 @@ test_that("Coefficients whose meaning changes between replicates get no bootstra
   orthogonal <- createTimeBasis("polynomial", raw = FALSE)
   expect_equal(.replicateInvariantCoefficients(names, args(timeBasis = orthogonal)), c("target", "death:target"))
   expect_equal(.replicateInvariantCoefficients(names, args(timeBasis = orthogonal, armByTimeInteraction = TRUE)), character(0))
-  expect_equal(.replicateInvariantCoefficients(c("target", "death:target"), createFitOutcomeModelArgs(modelType = "cox")), c("target", "death:target"))
+  expect_equal(.replicateInvariantCoefficients("target", createFitOutcomeModelArgs(modelType = "cox")), "target")
 })
 
 test_that("A replicate whose outcome model cannot be fitted counts as failed", {
   data <- bootstrapData(seed = 5)
   on.exit(close(data))
-  settings <- bootstrapSettings(modelType = "cox", replicates = 2)
-  # The second replicate draws only the persons without the outcome, so its Cox outcome model has no
-  # events and gives no estimate, without an error:
+  settings <- bootstrapSettings(modelType = "logistic", replicates = 2)
+  # The second replicate draws only the persons without the outcome, so its pooled logistic outcome
+  # model has no events and gives no estimate, without an error:
   cohorts <- dplyr::collect(data$cohorts)
   withOutcome <- unique(cohorts$personSeqId[cohorts$rowId %in% dplyr::collect(data$outcomes)$rowId])
   personSeqIds <- sort(unique(cohorts$personSeqId))

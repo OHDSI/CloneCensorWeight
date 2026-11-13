@@ -26,106 +26,55 @@ test_that("Cox MSM matches coxph: log HR, robust and model-based variance", {
       expect_equal(getM4Estimate(robust, "hr"), exp(unname(coef(reference))), tolerance = 1e-6)
       expect_equal(getM4Estimate(robust, "hr", "lb95"), exp(coef(reference) - qnorm(0.975) * sqrt(vcov(reference)[1, 1]))[[1]], tolerance = 1e-6)
       expect_equal(getM4Estimate(robust, "hr", "p"), 2 * pnorm(-abs(coef(reference) / sqrt(vcov(reference)[1, 1])))[[1]], tolerance = 1e-6)
+      # Only the outcome model is fitted; competing events are censored:
+      expect_equal(names(robust$coefficients), "target")
+      expect_equal(unname(robust$vcov), unname(vcov(reference)), tolerance = 1e-6)
+      expect_equal(unname(modelBased$vcov), unname(reference$naive.var), tolerance = 1e-6)
 
       if (competingEvents == "death") {
-        # The two cause-specific Cox MSMs and their joint robust covariance equal the multi-state coxph.
+        # The cause-specific HR and its robust variance are those of the outcome transition of the
+        # multi-state coxph.
         multiState <- survival::coxph(
           survival::Surv(startTime, stopTime, state) ~ x,
           data = data, weights = weight, id = cloneRowId, cluster = personSeqId, ties = "breslow", control = coxControl()
         )
-        expect_equal(unname(robust$coefficients), unname(coef(multiState)), tolerance = 1e-6)
-        expect_equal(unname(robust$vcov), unname(vcov(multiState)), tolerance = 1e-6)
-        expect_equal(unname(diag(modelBased$vcov)), unname(diag(multiState$naive.var)), tolerance = 1e-6)
-      } else {
-        expect_equal(names(robust$coefficients), "target")
+        expect_equal(getM4Estimate(robust, "hr", "logEstimate"), unname(coef(multiState))[1], tolerance = 1e-6)
+        expect_equal(getM4Estimate(robust, "hr", "seLogEstimate"), sqrt(vcov(multiState)[1, 1]), tolerance = 1e-6)
       }
     }
   }
 })
 
-test_that("Cox MSM risks without competing events match survfit.coxph (ctype = 1, stype = 2)", {
-  skip_if_not_installed("survival")
-  horizonsByRiskStart <- list(c(0, 4, 12, 30), c(1, 5, 13, 31))
+test_that("Cox MSM rows at the horizons are exactly those of the weighted Kaplan-Meier / Aalen-Johansen", {
   for (riskStart in 0:1) {
-    horizons <- horizonsByRiskStart[[riskStart + 1]]
-    fixture <- createM4Fixture(riskStart = riskStart, competingEvents = "none")
-    data <- toSurvivalData(fixture$segments)
-    model <- fitM4(fixture, modelType = "cox", horizons = horizons)
-    # Evaluate the reference curves at our coefficient ("given identical coefficients"; the
-    # coefficient itself is checked against coxph above):
-    reference <- survival::coxph(
-      survival::Surv(startTime, stopTime, outcome) ~ x,
-      data = data, weights = weight, cluster = personSeqId, ties = "breslow",
-      init = model$coefficients[["target"]], control = survival::coxph.control(iter.max = 0)
-    )
-    curves <- survival::survfit(reference, newdata = data.frame(x = 1:0), ctype = 1, stype = 2)
-    summaryAtHorizons <- summary(curves, times = horizons - riskStart + 1, extend = TRUE)
-    for (i in seq_along(horizons)) {
-      risks <- unname(1 - summaryAtHorizons$surv[i, ])
-      expect_equal(getM4Estimate(model, sprintf("risk_target_%s", horizons[i])), risks[1], tolerance = 1e-8)
-      expect_equal(getM4Estimate(model, sprintf("risk_comparator_%s", horizons[i])), risks[2], tolerance = 1e-8)
-      expect_equal(getM4Estimate(model, sprintf("rd_%s", horizons[i])), risks[1] - risks[2], tolerance = 1e-8)
-      expect_equal(getM4Estimate(model, sprintf("rr_%s", horizons[i])), risks[1] / risks[2], tolerance = 1e-8)
-    }
-  }
-})
+    horizons <- riskStart + c(0, 4, 12, 30)
+    for (competingEvents in c("none", "death")) {
+      fixture <- createM4Fixture(riskStart = riskStart, competingEvents = competingEvents)
+      km <- fitM4(fixture, modelType = "km", horizons = horizons)
+      robust <- fitM4(fixture, modelType = "cox", horizons = horizons)
+      modelBased <- fitM4(fixture, modelType = "cox", horizons = horizons, varianceEstimator = "modelBased")
+      hrOnly <- fitM4(fixture, modelType = "cox", horizons = riskStart)
+      label <- paste(riskStart, competingEvents)
+      expect_true(any(grepl("^rmtl_", km$estimates$estimand)), label = label)
 
-test_that("Cox MSM risks with competing death match the multi-state coxph by Aalen-Johansen", {
-  skip_if_not_installed("survival")
-  for (riskStart in 0:1) {
-    horizons <- riskStart + c(0, 5, 15, 40)
-    fixture <- createM4Fixture(riskStart = riskStart, competingEvents = "death")
-    data <- toSurvivalData(fixture$segments)
-    model <- fitM4(fixture, modelType = "cox", horizons = horizons)
-    multiState <- survival::coxph(
-      survival::Surv(startTime, stopTime, state) ~ x,
-      data = data, weights = weight, id = cloneRowId, cluster = personSeqId, ties = "breslow",
-      init = unname(model$coefficients), control = survival::coxph.control(iter.max = 0)
-    )
-    # stype = 1 gives the Aalen-Johansen product of Phase1Contracts section 5.5; the survfit default
-    # (stype = 2) uses the matrix exponential of the hazard increments instead.
-    curves <- survival::survfit(multiState, newdata = data.frame(x = 1:0), stype = 1)
-    summaryAtHorizons <- summary(curves, times = horizons - riskStart + 1, extend = TRUE)
-    for (i in seq_along(horizons)) {
-      risks <- unname(summaryAtHorizons$pstate[i, , 2])
-      expect_equal(getM4Estimate(model, sprintf("risk_target_%s", horizons[i])), risks[1], tolerance = 1e-8)
-      expect_equal(getM4Estimate(model, sprintf("risk_comparator_%s", horizons[i])), risks[2], tolerance = 1e-8)
-    }
-  }
-})
+      # Robust: the km rows with their IJ standard errors, limits and p-values.
+      expect_equal(robust$estimates$estimand, c("hr", km$estimates$estimand), label = label)
+      expect_identical(robust$estimates[-1, ], km$estimates, label = label)
+      # Model-based (which km does not offer): the km point estimates without standard errors, limits or
+      # p-values.
+      expect_equal(modelBased$estimates$estimand, c("hr", km$estimates$estimand), label = label)
+      expect_identical(
+        modelBased$estimates[-1, c("estimand", "estimate", "logEstimate")],
+        km$estimates[, c("estimand", "estimate", "logEstimate")],
+        label = label
+      )
+      expect_true(all(is.na(as.matrix(modelBased$estimates[-1, c("seLogEstimate", "se", "lb95", "ub95", "p")]))), label = label)
+      expect_false(is.na(getM4Estimate(modelBased, "hr", "seLogEstimate")), label = label)
 
-test_that("Cox MSM risk standard errors equal the numerical infinitesimal jackknife", {
-  skip_if_not_installed("survival")
-  for (competingEvents in c("none", "death")) {
-    riskStart <- if (competingEvents == "none") 0 else 1
-    horizons <- riskStart + c(4, 12)
-    times <- horizons - riskStart + 1
-    fixture <- createM4Fixture(n = 50, riskStart = riskStart, competingEvents = competingEvents, sharedPersons = 6, seed = 2)
-    model <- fitM4(fixture, modelType = "cox", horizons = horizons)
-    statistic <- function(segments) {
-      data <- toSurvivalData(segments)
-      control <- survival::coxph.control(eps = 1e-14, toler.chol = 1e-15, iter.max = 100)
-      if (competingEvents == "none") {
-        fit <- survival::coxph(survival::Surv(startTime, stopTime, outcome) ~ x, data = data, weights = weight, ties = "breslow", control = control)
-        curves <- survival::survfit(fit, newdata = data.frame(x = 1:0), ctype = 1, stype = 2)
-        risks <- 1 - summary(curves, times = times, extend = TRUE)$surv
-      } else {
-        fit <- survival::coxph(survival::Surv(startTime, stopTime, state) ~ x, data = data, weights = weight, id = cloneRowId, ties = "breslow", control = control)
-        curves <- survival::survfit(fit, newdata = data.frame(x = 1:0), stype = 1)
-        risks <- summary(curves, times = times, extend = TRUE)$pstate[, , 2]
-      }
-      return(as.vector(t(risks)))
-    }
-    risks <- statistic(fixture$segments)
-    influence <- numericalPersonInfluence(fixture$segments, statistic, epsilon = 1e-4)
-    for (i in seq_along(horizons)) {
-      target <- influence[, 2 * i - 1]
-      comparator <- influence[, 2 * i]
-      expect_equal(getM4Estimate(model, sprintf("risk_target_%s", horizons[i]), "se"), sqrt(sum(target^2)), tolerance = 1e-6)
-      expect_equal(getM4Estimate(model, sprintf("risk_comparator_%s", horizons[i]), "se"), sqrt(sum(comparator^2)), tolerance = 1e-6)
-      expect_equal(getM4Estimate(model, sprintf("rd_%s", horizons[i]), "se"), sqrt(sum((target - comparator)^2)), tolerance = 1e-6)
-      logRrInfluence <- target / risks[2 * i - 1] - comparator / risks[2 * i]
-      expect_equal(getM4Estimate(model, sprintf("rr_%s", horizons[i]), "seLogEstimate"), sqrt(sum(logRrInfluence^2)), tolerance = 1e-6)
+      # The HR, its coefficient and covariance do not depend on the horizons:
+      expect_identical(robust$estimates[1, ], hrOnly$estimates[1, ], label = label)
+      expect_identical(robust$coefficients, hrOnly$coefficients, label = label)
+      expect_identical(robust$vcov, hrOnly$vcov, label = label)
     }
   }
 })
@@ -921,20 +870,15 @@ test_that("fitOutcomeModel returns the contract's object and counts", {
   }
 
   cox <- fitM4(fixture, modelType = "cox", horizons = 10)
-  expect_equal(cox$estimates$estimand, c("hr", "risk_target_10", "risk_comparator_10", "rd_10", "rr_10"))
-  expect_equal(names(cox$coefficients), c("target", "death:target"))
-  expect_equal(dimnames(cox$vcov), list(names(cox$coefficients), names(cox$coefficients)))
+  expect_equal(
+    cox$estimates$estimand,
+    c("hr", "risk_target_10", "risk_comparator_10", "rd_10", "rr_10", "rmtl_target_10", "rmtl_comparator_10", "rmtl_10")
+  )
+  expect_equal(names(cox$coefficients), "target")
+  expect_equal(dimnames(cox$vcov), list("target", "target"))
   logistic <- fitM4(fixture, modelType = "logistic", horizons = 10, timeBasis = createTimeBasis("linear", intervalLength = 5), armByTimeInteraction = TRUE)
   expect_equal(logistic$estimates$estimand[1], "or")
   expect_equal(names(logistic$coefficients)[1:4], c("(Intercept)", "target", "time", "target:time"))
-})
-
-test_that("Cox risks have no SEs with the model-based variance", {
-  fixture <- createM4Fixture(riskStart = 0, competingEvents = "none")
-  model <- fitM4(fixture, modelType = "cox", horizons = 10, varianceEstimator = "modelBased")
-  expect_false(is.na(getM4Estimate(model, "hr", "seLogEstimate")))
-  expect_true(is.na(getM4Estimate(model, "risk_target_10", "se")))
-  expect_false(is.na(getM4Estimate(model, "risk_target_10")))
 })
 
 test_that("fitOutcomeModel rejects the bootstrap and unsupported settings", {
@@ -951,14 +895,17 @@ test_that("fitOutcomeModel rejects the bootstrap and unsupported settings", {
   expect_error(fitOutcomeModel(ccwClones, createFitOutcomeModelArgs()), "segments")
 })
 
-test_that("A model without outcome events gives NA estimates with a warning", {
+test_that("A Cox model without outcome events gives an NA hazard ratio with a warning, and the km rows", {
   fixture <- createM4Fixture(n = 40, riskStart = 0, competingEvents = "none")
   fixture$segments$outcome <- 0L
   expect_warning(model <- fitM4(fixture, modelType = "cox", horizons = 10), "No outcome events")
-  expect_true(all(is.na(model$estimates$estimate)))
+  expect_true(all(is.na(unlist(model$estimates[1, -1]))))
+  expect_equal(model$coefficients, c(target = NA_real_))
+  expect_null(model$vcov)
   km <- fitM4(fixture, modelType = "km", horizons = 10)
   expect_equal(getM4Estimate(km, "risk_target_10"), 0)
   expect_equal(getM4Estimate(km, "rd_10"), 0)
+  expect_identical(model$estimates[-1, ], km$estimates)
 })
 
 test_that("print, coef and confint methods", {
@@ -966,6 +913,7 @@ test_that("print, coef and confint methods", {
   model <- fitM4(fixture, modelType = "cox", horizons = c(5, 10))
   messages <- capture_messages(output <- capture.output(print(model)))
   expect_true(any(grepl("Model type: cox", messages)))
+  expect_true(any(grepl("Risks: weighted Kaplan-Meier", messages)))
   expect_true(any(grepl("Strategy 1 \\(target\\): Initiate within 4 days", messages)))
   expect_true(any(grepl("risk_target_5", output)))
   estimates <- coef(model)

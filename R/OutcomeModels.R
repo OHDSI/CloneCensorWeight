@@ -18,8 +18,8 @@
 #'
 #' @description
 #' Fits the weighted (marginal structural) outcome model to the weighted clones, and estimates risks,
-#' risk differences and risk ratios at each horizon, plus the hazard ratio (`"cox"`), odds ratio
-#' (`"logistic"`), or restricted mean survival and lost time (`"km"`).
+#' risk differences and risk ratios at each horizon, plus the hazard ratio (`"cox"`, the default), the
+#' odds ratio (`"logistic"`), and the restricted mean survival and lost time (`"km"` and `"cox"`).
 #'
 #' @details
 #' The model is fitted to the clone `segments` (time scale `t = day - riskStart + 1`, intervals
@@ -27,11 +27,16 @@
 #' `stopTime`). The covariate is the target indicator (strategy 1). Effects are target versus
 #' comparator.
 #'
-#' - `"cox"`: weighted Cox regression (Cyclops `cox_counting`, Breslow ties), with competing events
-#'   treated as censoring (cause-specific hazard ratio). Risks are `1 - exp(-Lambda(t | x))` from the
-#'   weighted Breslow estimator when `competingEvents = "none"`. When `competingEvents = "death"` a Cox
-#'   model of death is also fitted, and risks combine the two cause-specific Breslow hazards by
-#'   Aalen-Johansen.
+#' - `"cox"` (the default): the hazard ratio of a weighted Cox regression (Cyclops `cox_counting`,
+#'   Breslow ties), with competing events treated as censoring (cause-specific hazard ratio), and, at
+#'   the horizons, exactly the rows of `"km"` on the same weighted clones: the weighted Kaplan-Meier
+#'   (or, with competing death, Aalen-Johansen) risks, risk differences, risk ratios and restricted
+#'   means. Risks from the Cox model itself (its Breslow baseline hazard) are not reported: they assume
+#'   proportional hazards, which a grace period violates by design (see below), so they are biased.
+#'   The hazard ratio is reported because meta-analysis and empirical calibration use it. It has
+#'   caveats of its own: when the hazards are not proportional it averages the effect over follow-up
+#'   in a way that depends on the follow-up and the censoring, and hazards among survivors have a
+#'   built-in selection bias (Hernan 2010; Stensrud and Hernan 2020).
 #' - `"logistic"`: weighted pooled logistic regression (Cyclops `lr`) on one row per clone and interval
 #'   of `timeBasis$intervalLength` days that the clone enters (intervals counted from `riskStart`),
 #'   with the weight that applies on the clone's last day in the interval (the weight of its last
@@ -59,25 +64,28 @@
 #' Horizons are days since index and are read at `t = horizon - riskStart + 1`, so the risk includes
 #' events on the horizon day.
 #'
-#' The risks of the `"cox"` model, and of the `"logistic"` model without `armByTimeInteraction`, assume
-#' an effect of the strategy that is constant over follow-up (proportional hazards or odds). A grace
-#' period violates this assumption by design: the clones of both strategies follow the same course
-#' during the grace period. Their risks, risk differences and risk ratios can then be biased, also at
-#' horizons within the grace period. The `"km"` risks do not make this assumption.
+#' The `"logistic"` risks are model-based. Without `armByTimeInteraction` they assume an effect of the
+#' strategy that is constant over follow-up (proportional odds). A grace period violates this
+#' assumption by design: the clones of both strategies follow the same course during the grace period.
+#' Their risks, risk differences and risk ratios are then biased, also at horizons within the grace
+#' period, so with a grace period use `armByTimeInteraction = TRUE`. The `"km"` risks, and so the
+#' `"cox"` risks, do not make this assumption.
 #'
 #' The models are fitted with Cyclops using `fitOutcomeModelArgs$control`; a fit that fails is refitted
-#' with Cyclops' default algorithm and convergence criterion, with a warning. When the death model of
-#' competing death cannot be fitted, the hazard or odds ratio of the outcome model is still reported,
-#' and the risks are `NA`.
+#' with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot
+#' be fitted (for example because there are no outcomes), the hazard ratio is `NA` and the `"km"` rows
+#' are still reported. When the death model of the pooled logistic model with competing death cannot be
+#' fitted, the odds ratio is still reported, and the risks are `NA`.
 #'
 #' The robust variance (`varianceEstimator = "robust"`) is the HC0 sandwich clustered on person, so all
-#' clones of a person share a cluster, treating the weights as fixed. For `"cox"` and `"km"` the risk
-#' standard errors are infinitesimal-jackknife standard errors (for `"cox"`, including the estimation
-#' of the hazard ratio and the baseline hazards); for `"logistic"` they use the delta method with a
-#' numerical Jacobian. With `varianceEstimator = "modelBased"` the hazard ratio or odds ratio uses the
-#' inverse of the weighted information; the `"cox"` risks then have no standard errors, and `"km"` is
-#' not supported. `varianceEstimator = "bootstrap"` is computed by [bootstrapCcwAnalysis()], not by
-#' this function.
+#' clones of a person share a cluster, treating the weights as fixed. For `"cox"` and `"km"` the
+#' standard errors of the risks, their differences and ratios, and the restricted means are the
+#' infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
+#' for `"logistic"` they use the delta method with a numerical Jacobian. With `varianceEstimator =
+#' "modelBased"` the hazard ratio or odds ratio uses the inverse of the weighted information; the
+#' `"cox"` rows at the horizons then have no standard errors or limits (the Kaplan-Meier has no
+#' model-based variance), and `"km"` is not supported. `varianceEstimator = "bootstrap"` is computed by
+#' [bootstrapCcwAnalysis()], not by this function.
 #'
 #' @param weightedClones      A `CcwClones` object with weighted segments, as created by
 #'                            `computeCensoringWeights()`.
@@ -89,20 +97,26 @@
 #' - `modelType` and `varianceEstimator`;
 #' - `estimates`: a tibble with one row per estimand (`"hr"` or `"or"` (with `armByTimeInteraction`,
 #'   the odds ratio where the time basis is 0; see [createFitOutcomeModelArgs()]), and per horizon `h`
-#'   `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`, and for `"km"`
+#'   `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`, and for `"km"` and `"cox"`
 #'   `"rmst_<h>"` (without competing events) and `"rmtl_<h>"`, the target minus comparator
 #'   differences, with the per-strategy values in `"rmst_target_<h>"`, `"rmst_comparator_<h>"`,
 #'   `"rmtl_target_<h>"`, and `"rmtl_comparator_<h>"`), and columns `estimand`, `estimate`,
 #'   `logEstimate` and `seLogEstimate` (ratios), `se` (other estimands), `lb95`, `ub95`, and `p` (ratios
 #'   and differences);
 #' - `coefficients` and `vcov`: the model coefficients and their (robust or model-based) covariance
-#'   (`NULL` for `"km"`); death-model coefficients are prefixed with `"death:"`;
+#'   (`NULL` for `"km"`): for `"cox"` the target coefficient (log hazard ratio) of the outcome model;
+#'   for `"logistic"` those of the outcome model and, with competing death, of the death model,
+#'   prefixed with `"death:"`;
 #' - `counts`: per strategy, the number of clones, persons, outcomes and competing events, the
 #'   person-days, and the weighted person-days, outcomes and competing events;
 #' - `metaData`: the strategies, outcome ID, target ID, competing events, risk start, and the
 #'   arguments.
 #'
 #' @references
+#' Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.
+#'
+#' Stensrud MJ, Hernan MA. Why test for proportional hazards? JAMA. 2020;323:1401-1402.
+#'
 #' Young JG, Stensrud MJ, Tchetgen Tchetgen EJ, Hernan MA. A causal framework for classical statistical
 #' estimands in failure-time settings with competing events. Statistics in Medicine. 2020;39:1199-1236.
 #'
@@ -299,7 +313,12 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
   variance <- if (computeVariance) fitOutcomeModelArgs$varianceEstimator else "none"
   if (fitOutcomeModelArgs$modelType == "cox") {
-    return(.fitCoxMsm(data, fitOutcomeModelArgs, competing, variance))
+    # The hazard ratio of the Cox MSM, and the rows of "km" for the horizons (Phase1Contracts section
+    # 10.5), with their IJ standard errors only under the robust variance:
+    model <- .fitCoxMsm(data, fitOutcomeModelArgs, variance)
+    km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
+    model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
+    return(model)
   }
   return(.fitLogisticMsm(data, fitOutcomeModelArgs, competing, variance))
 }
@@ -429,87 +448,32 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return(as.numeric(stats::coef(fit)[["1"]]))
 }
 
-.fitCoxMsm <- function(data, fitOutcomeModelArgs, competing, variance) {
+# The hazard ratio row of the weighted Cox MSM of the outcome, with competing events treated as
+# censoring, its coefficient, and its (robust or model-based) variance. Risks from this model are not
+# reported (see fitOutcomeModel()).
+.fitCoxMsm <- function(data, fitOutcomeModelArgs, variance) {
   segments <- data$segments[data$segments$weight > 0, ]
   times <- .eventTimes(segments)
   segments <- .indexSegments(segments, times)
-  nTimes <- length(times)
-  nPersons <- length(data$personSeqIds)
-  horizons <- fitOutcomeModelArgs$horizons
 
   beta <- .fitCyclopsCox(segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome")
-  if (is.na(beta)) {
-    return(.naEstimates("hr", horizons, coefficientNames = "target"))
-  }
-  outcome <- .breslow(segments, segments$outcome == 1, beta, nTimes)
   coefficients <- c(target = beta)
-  death <- NULL
-  deathFailed <- FALSE
-  if (competing && any(segments$competing == 1)) {
-    deathBeta <- .fitCyclopsCox(segments, segments$competing, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "death")
-    if (is.na(deathBeta)) {
-      # The hazard ratio comes from the outcome model alone; the risks need the death model too.
-      deathFailed <- TRUE
-    } else {
-      death <- .breslow(segments, segments$competing == 1, deathBeta, nTimes)
-      coefficients <- c(coefficients, `death:target` = deathBeta)
-    }
+  if (is.na(beta)) {
+    return(list(estimates = .ratioRow("hr", NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
   }
-
-  coefficientInfluence <- NULL
+  outcome <- .breslow(segments, segments$outcome == 1, beta, length(times))
   if (variance == "robust") {
-    coefficientInfluence <- cbind(.coxCoefficientInfluence(segments, outcome, nPersons))
-    if (!is.null(death)) {
-      coefficientInfluence <- cbind(coefficientInfluence, .coxCoefficientInfluence(segments, death, nPersons))
-    }
-    vcov <- crossprod(coefficientInfluence)
+    vcov <- crossprod(cbind(.coxCoefficientInfluence(segments, outcome, length(data$personSeqIds))))
   } else if (variance == "modelBased") {
-    information <- c(outcome$information, if (!is.null(death)) death$information)
-    vcov <- diag(1 / information, nrow = length(information))
+    vcov <- matrix(1 / outcome$information)
   } else {
     vcov <- NULL
   }
   if (!is.null(vcov)) {
     dimnames(vcov) <- list(names(coefficients), names(coefficients))
   }
-
-  rows <- list(.ratioRow("hr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1])))
-  if (deathFailed) {
-    return(.withoutRisks(rows, horizons, coefficients, vcov, "death:target"))
-  }
-  for (horizon in horizons) {
-    tau <- horizon - data$riskStart + 1
-    risks <- numeric(2)
-    influences <- list(NULL, NULL)
-    for (strategyId in 1:2) {
-      x <- as.integer(strategyId == 1)
-      qY <- exp(beta * x) * outcome$dLambda0
-      if (competing) {
-        qD <- if (is.null(death)) numeric(nTimes) else exp(death$beta * x) * death$dLambda0
-        functionals <- .ajFunctionals(times, qY, qD, tau)
-        risks[strategyId] <- functionals$risk
-        gradientY <- functionals$gradRiskY
-        gradientD <- functionals$gradRiskD
-      } else {
-        inWindow <- times <= tau
-        survival <- exp(-sum(qY[inWindow]))
-        risks[strategyId] <- 1 - survival
-        gradientY <- survival * inWindow
-      }
-      if (variance == "robust") {
-        influence <- .hazardInfluence(segments, outcome, gradientY, exp(beta * x), nPersons) +
-          .hazardBetaDerivative(outcome, gradientY, x) * coefficientInfluence[, 1]
-        if (!is.null(death)) {
-          influence <- influence +
-            .hazardInfluence(segments, death, gradientD, exp(death$beta * x), nPersons) +
-            .hazardBetaDerivative(death, gradientD, x) * coefficientInfluence[, 2]
-        }
-        influences[[strategyId]] <- influence
-      }
-    }
-    rows[[length(rows) + 1]] <- .riskContrastRows(horizon, risks, influences, competing)
-  }
-  return(list(estimates = dplyr::bind_rows(rows), coefficients = coefficients, vcov = vcov))
+  hr <- .ratioRow("hr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1]))
+  return(list(estimates = hr, coefficients = coefficients, vcov = vcov))
 }
 
 # The result when the outcome model was fitted but the death model failed: the ratio row(s) `rows`, NA
@@ -847,6 +811,9 @@ print.CcwOutcomeModel <- function(x, ...) {
   message(paste("Model type:", x$modelType))
   message(paste("Variance estimator:", x$varianceEstimator))
   message(paste("Competing events:", x$metaData$competingEvents))
+  if (x$modelType == "cox") {
+    message(sprintf("Risks: weighted %s", if (identical(x$metaData$competingEvents, "death")) "Aalen-Johansen" else "Kaplan-Meier"))
+  }
   for (i in seq_along(x$metaData$strategies)) {
     message(sprintf("Strategy %d (%s): %s", i, c("target", "comparator")[i], x$metaData$strategies[[i]]$label))
   }

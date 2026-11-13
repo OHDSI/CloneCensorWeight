@@ -272,18 +272,3 @@ youngCif <- function(hazardY, hazardD) {
   survival <- cumprod((1 - hazardY) * (1 - hazardD))
   return(cumsum(hazardY * (1 - hazardD) * c(1, utils::head(survival, -1))))
 }
-
-# Numerical infinitesimal-jackknife influence of a statistic of the segments: the derivative with
-# respect to multiplying all segment weights of one person by (1 + epsilon), by central differences.
-numericalPersonInfluence <- function(segments, statistic, persons = sort(unique(segments$personSeqId)), epsilon = 1e-5) {
-  influence <- matrix(0, length(persons), length(statistic(segments)))
-  for (i in seq_along(persons)) {
-    up <- segments
-    down <- segments
-    inPerson <- segments$personSeqId == persons[i]
-    up$weight[inPerson] <- up$weight[inPerson] * (1 + epsilon)
-    down$weight[inPerson] <- down$weight[inPerson] * (1 - epsilon)
-    influence[i, ] <- (statistic(up) - statistic(down)) / (2 * epsilon)
-  }
-  return(influence)
-}

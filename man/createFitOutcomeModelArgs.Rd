@@ -19,7 +19,8 @@ createFitOutcomeModelArgs(
 )
 }
 \arguments{
-\item{modelType}{The outcome model: \code{"cox"}, \code{"logistic"} (pooled logistic), or \code{"km"}
+\item{modelType}{The outcome model: \code{"cox"} (the hazard ratio of a weighted Cox model,
+with the risks of \code{"km"}), \code{"logistic"} (pooled logistic), or \code{"km"}
 (weighted Kaplan-Meier, or Aalen-Johansen with competing events).}
 
 \item{horizons}{Days since index at which risks, risk differences and risk ratios are
@@ -79,13 +80,18 @@ quasi-separated hazards, where a criterion on the gradient can fail to be met at
 fit with \code{control} fails, \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} refits it with Cyclops' default algorithm and
 convergence criterion, with a warning.
 
-The Cox and pooled logistic models without \code{armByTimeInteraction} assume an effect of the strategy
-that is constant over follow-up (proportional hazards or odds). Their risks at the horizons inherit
-this assumption, which a grace period violates: during the grace period the clones of both
-strategies follow the same course, so the true hazards are equal there. Their risks, risk
-differences and risk ratios can then be biased, also at horizons within the grace period. The
-Kaplan-Meier (\code{"km"}) risks, or the pooled logistic model with \code{armByTimeInteraction = TRUE} and an
-indicator (saturated) time basis, do not make this assumption.
+The default, \code{"cox"}, reports the hazard ratio of the weighted Cox model together with the weighted
+Kaplan-Meier (or, with competing death, Aalen-Johansen) risks, risk differences and risk ratios of
+\code{"km"} on the same weighted clones. Risks from the Cox model would assume proportional hazards,
+which a grace period violates by design: during the grace period the clones of both strategies
+follow the same course, so their true hazards are equal there. Such risks are biased, also at
+horizons within the grace period, so they are not reported. The hazard ratio is kept because
+meta-analysis and empirical calibration use it.
+
+The pooled logistic (\code{"logistic"}) risks are model-based. Without \code{armByTimeInteraction} they assume
+an odds ratio that is constant over follow-up and are biased under a grace period for the same
+reason, so use \code{armByTimeInteraction = TRUE} with a grace period. With daily intervals, an indicator
+(saturated) time basis and the interaction give the weighted Kaplan-Meier or Aalen-Johansen risks.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

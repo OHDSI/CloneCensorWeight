@@ -368,14 +368,14 @@ test_that("The default outcome-model control agrees with the references to 1e-8 
     fixture <- createM4Fixture(n = 200, riskStart = riskStart, competingEvents = "death", seed = 3, maxDays = 30, outcomeRate = 0.7)
     data <- toSurvivalData(fixture$segments)
 
-    # Cox: both cause-specific models vs the multi-state coxph.
+    # Cox: the cause-specific outcome model vs coxph.
     weightedClones <- createM4WeightedClones(fixture)
     cox <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "cox", horizons = 20)))
-    multiState <- survival::coxph(
-      survival::Surv(startTime, stopTime, state) ~ x,
-      data = data, weights = weight, id = cloneRowId, ties = "breslow", control = coxControl
+    causeSpecific <- survival::coxph(
+      survival::Surv(startTime, stopTime, outcome) ~ x,
+      data = data, weights = weight, ties = "breslow", control = coxControl
     )
-    expect_equal(unname(cox$coefficients), unname(coef(multiState)), tolerance = 1e-8)
+    expect_equal(unname(cox$coefficients), unname(coef(causeSpecific)), tolerance = 1e-8)
 
     # KM / Aalen-Johansen (no model fit) vs survfit:
     km <- suppressMessages(fitOutcomeModel(weightedClones, createFitOutcomeModelArgs(modelType = "km", horizons = riskStart + c(9, 24))))
@@ -665,18 +665,14 @@ test_that("A fit that fails with the given control is refitted with Cyclops' def
   expect_equal(model$coefficients[["target"]], unname(coef(reference)), tolerance = 1e-6)
 })
 
-test_that("When only the death model fails, the ratio is kept and the risks are NA", {
+test_that("When only the pooled logistic death model fails, the odds ratio is kept and the risks are NA", {
+  # (The Cox model fits no death model: its risks are those of the weighted Aalen-Johansen.)
   fixture <- createM4Fixture(n = 200, riskStart = 0, competingEvents = "death", seed = 3, maxDays = 15, outcomeRate = 0.7)
   full <- list(
-    cox = fitM4(fixture, modelType = "cox", horizons = c(5, 10)),
     logistic = fitM4(fixture, modelType = "logistic", horizons = c(5, 10), timeBasis = createTimeBasis("linear", intervalLength = 1))
   )
-  realCox <- .fitCyclopsCox
   realPooled <- .fitPooledModel
   local_mocked_bindings(
-    .fitCyclopsCox = function(segments, y, prior, control, label) {
-      if (label == "death") NA_real_ else realCox(segments, y, prior, control, label)
-    },
     .fitPooledModel = function(rows, y, design, prior, control, label, variance, groups = NULL) {
       if (label == "death") NULL else realPooled(rows, y, design, prior, control, label, variance, groups)
     }
