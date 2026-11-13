@@ -19,6 +19,16 @@ A tibble with one row per strategy and day, with columns \code{strategyId}, \cod
 weighted number of clones at risk), \code{atRiskCount} (the number of clones at risk), \code{events} (the
 weighted number of outcomes since the previous row), \code{risk}, \code{lb95} and \code{ub95}. The attribute
 \code{strategyLabels} holds the strategy labels.
+
+\code{atRiskWeighted} sums the weights of the segments at risk, as the \code{n.risk} of
+\code{survival::survfit()} on the segments does: each segment's weight is the weight of its last day
+(see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}). That is the clone's weight on the row's day when an outcome or
+competing event happens on that day, but not in general on other days. On the row at time zero, in
+particular, it is the sum of the weights of the clones' first segments, which can differ from the
+sum of their weights on day \code{riskStart}.
+
+Curves computed at \code{horizons} hold only those days. To plot a curve, compute it with
+\code{horizons = NULL}.
 }
 \description{
 Computes the weighted Kaplan-Meier risk (\code{competingEvents = "none"}) or the weighted Aalen-Johansen

@@ -100,6 +100,12 @@ is negligible when initiation is weakly confounded or rare, but it can be detect
 covariate effects on initiation and a high daily initiation hazard. The pooled logistic initiation
 hazard models of \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies are correctly specified.
 
+Because the daily initiation hazard is the same on every day, the probability of not starting on
+days 0 to \code{d} is \code{(1 - h)^(d + 1)} for a daily hazard \code{h}: with the default \code{initiationHazard = 0.02}, about 0.06\% for persons with X = 0 by day 365, and less for those with a higher hazard. A
+\code{"neverInitiate"} strategy, or a \code{"notInitiateWithin"} strategy with a long grace period, then has
+almost no compliant persons late in follow-up, and its weights are extreme or undefined (a
+positivity violation). For such strategies, use a lower \code{initiationHazard} or a shorter \code{maxDays}.
+
 On one day, the outcome comes before death. The outcome, death, and the treatment start are
 recorded when they fall on or before the end of observation, which is the first of the observation
 end, death, and \code{maxDays}. Each person has one index date, one treatment era (from the start to the

@@ -262,6 +262,13 @@
 #' covariate effects on initiation and a high daily initiation hazard. The pooled logistic initiation
 #' hazard models of `"notInitiateWithin"` and `"neverInitiate"` strategies are correctly specified.
 #'
+#' Because the daily initiation hazard is the same on every day, the probability of not starting on
+#' days 0 to `d` is `(1 - h)^(d + 1)` for a daily hazard `h`: with the default `initiationHazard =
+#' 0.02`, about 0.06% for persons with X = 0 by day 365, and less for those with a higher hazard. A
+#' `"neverInitiate"` strategy, or a `"notInitiateWithin"` strategy with a long grace period, then has
+#' almost no compliant persons late in follow-up, and its weights are extreme or undefined (a
+#' positivity violation). For such strategies, use a lower `initiationHazard` or a shorter `maxDays`.
+#'
 #' On one day, the outcome comes before death. The outcome, death, and the treatment start are
 #' recorded when they fall on or before the end of observation, which is the first of the observation
 #' end, death, and `maxDays`. Each person has one index date, one treatment era (from the start to the
@@ -455,6 +462,13 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #' [simulateCloneCensorWeightData()], by simulating each strategy directly on `nTruth` new persons.
 #'
 #' @details
+#' The risks are always the cumulative incidence of the outcome with death as a competing event, the
+#' estimand of an analysis with `competingEvents = "death"`. An analysis with `competingEvents =
+#' "none"` treats death as censoring, so it estimates the risk in a world without death. Its truth is
+#' given by this function with `settings$deathHazard <- 0`. Death is not weighted for, so the analysis
+#' identifies this risk only when death is non-informative censoring: in this DGP, when death does not
+#' depend on X (`deathCoefficients = 0`) or X does not change the outcome (`outcomeCoefficients = 0`).
+#'
 #' The same random numbers are used for every strategy (and for every value of `graceRegime` given the
 #' same `seed`), so contrasts between strategies are estimated more precisely than each risk. There is
 #' no loss to follow-up. Each risk is a proportion over `nTruth` independent persons, so its Monte Carlo

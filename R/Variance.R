@@ -209,6 +209,28 @@
 
 .z95 <- stats::qnorm(0.975)
 
+# Standard error from `variance`, a diagonal element (`gradient = 1`) or a quadratic form
+# t(gradient) %*% vcov %*% gradient of a covariance matrix `vcov` that is positive semi-definite by
+# construction (a sandwich or an inverse information), so non-negative in exact arithmetic. When the
+# true variance is 0, for example that of the odds ratio of an interval in which both strategies have
+# the same rows, rounding can make it slightly negative: a negative value within rounding of 0, relative
+# to the largest variance in `vcov` (times the squared size of the gradient), is taken as 0.
+.standardError <- function(variance, vcov, gradient = 1) {
+  if (!is.na(variance) && variance < 0 && -variance <= 1e-8 * sum(abs(gradient))^2 * max(abs(diag(vcov)), na.rm = TRUE)) {
+    return(0)
+  }
+  return(sqrt(variance))
+}
+
+# Two-sided p-value of a Wald test of no effect; NA when the standard error is 0 (an effect that is 0 by
+# design, whose estimate is 0 up to rounding).
+.waldP <- function(estimate, se) {
+  if (isTRUE(se == 0)) {
+    return(NA_real_)
+  }
+  return(2 * stats::pnorm(-abs(estimate / se)))
+}
+
 .estimateRow <- function(estimand, estimate, logEstimate = NA_real_, seLogEstimate = NA_real_, se = NA_real_,
                          lb95 = NA_real_, ub95 = NA_real_, p = NA_real_) {
   return(tibble(
@@ -235,7 +257,7 @@
     seLogEstimate = seLogEstimate,
     lb95 = exp(logEstimate - .z95 * seLogEstimate),
     ub95 = exp(logEstimate + .z95 * seLogEstimate),
-    p = 2 * stats::pnorm(-abs(logEstimate / seLogEstimate))
+    p = .waldP(logEstimate, seLogEstimate)
   ))
 }
 
@@ -247,7 +269,7 @@
     se = se,
     lb95 = estimate - .z95 * se,
     ub95 = estimate + .z95 * se,
-    p = 2 * stats::pnorm(-abs(estimate / se))
+    p = .waldP(estimate, se)
   ))
 }
 
@@ -319,15 +341,15 @@
   if (is.null(vcov)) {
     return(.riskContrastRows(horizon, risks, list(NULL, NULL), competing))
   }
-  variance <- function(gradient) as.numeric(t(gradient) %*% vcov %*% gradient)
+  se <- function(gradient) .standardError(as.numeric(t(gradient) %*% vcov %*% gradient), vcov, gradient)
   gradientTarget <- gradients[1, ]
   gradientComparator <- gradients[2, ]
   logRr <- log(risks[1]) - log(risks[2])
-  seLogRr <- if (is.finite(logRr)) sqrt(variance(gradientTarget / risks[1] - gradientComparator / risks[2])) else NA_real_
+  seLogRr <- if (is.finite(logRr)) se(gradientTarget / risks[1] - gradientComparator / risks[2]) else NA_real_
   return(dplyr::bind_rows(
-    .riskRow(sprintf("risk_target_%s", horizon), risks[1], sqrt(variance(gradientTarget)), competing),
-    .riskRow(sprintf("risk_comparator_%s", horizon), risks[2], sqrt(variance(gradientComparator)), competing),
-    .differenceRow(sprintf("rd_%s", horizon), risks[1] - risks[2], sqrt(variance(gradientTarget - gradientComparator))),
+    .riskRow(sprintf("risk_target_%s", horizon), risks[1], se(gradientTarget), competing),
+    .riskRow(sprintf("risk_comparator_%s", horizon), risks[2], se(gradientComparator), competing),
+    .differenceRow(sprintf("rd_%s", horizon), risks[1] - risks[2], se(gradientTarget - gradientComparator)),
     .ratioRow(sprintf("rr_%s", horizon), logRr, seLogRr)
   ))
 }

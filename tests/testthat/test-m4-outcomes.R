@@ -235,6 +235,9 @@ test_that("computeCumulativeIncidence matches survfit curves", {
         expect_equal(curve$day[1], riskStart - 1)
         expect_equal(curve$risk[1], 0)
         expect_equal(curve$atRiskCount[1], sum(fixture$clones$strategyId == strategyId))
+        # At time zero, the weighted number at risk is survfit's (the weights of the first segments):
+        nRisk0 <- summary(fit, times = 0)$n.risk
+        expect_equal(curve$atRiskWeighted[1], if (competingEvents == "none") nRisk0 else unname(nRisk0[1, 1]), tolerance = 1e-10)
         curve <- curve[-1, ]
         eventTimes <- sort(unique(strategyData$stopTime[strategyData$outcome == 1 | strategyData$competing == 1]))
         expect_equal(curve$day, eventTimes + riskStart - 1)

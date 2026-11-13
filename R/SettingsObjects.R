@@ -308,14 +308,25 @@ TreatmentStrategy <- R6Class(
 #'                                          prior to index date.
 #' @param firstOnly                         Keep only the first index date per person?
 #' @param priorUseLookback                  How many days before the index date to look for prior use
-#'                                          of the treatments.
+#'                                          of the treatments. For "no prior use ever", use a number
+#'                                          of days longer than any observation, such as `99999`.
 #' @param removeSubjectsWithPriorTreatment  Remove persons who used one of the treatments in the
 #'                                          `priorUseLookback` window before index?
 #' @param maxCohortSize                     If the eligible cohort is larger than this number it will
 #'                                          be sampled to this size. `0` means no maximum.
 #' @param covariateSettings                 An object of type `covariateSettings` as created using
 #'                                          [FeatureExtraction::createCovariateSettings()], or a list of
-#'                                          such objects.
+#'                                          such objects. FeatureExtraction's default windows end on
+#'                                          the index date (`endDays = 0`), so the covariates include
+#'                                          records of day 0, the first day on which a strategy can
+#'                                          start the treatment: for example drugs started and
+#'                                          diagnoses recorded on the index date. Exclude the treatment
+#'                                          from the covariates: its concepts with their descendants
+#'                                          (`excludedCovariateConceptIds` with
+#'                                          `addDescendantsToExclude = TRUE`) and the drug classes that
+#'                                          contain it, such as its ATC groups, which are ancestors of
+#'                                          the ingredient rather than descendants. Otherwise the
+#'                                          censoring models can stop with a high-correlation error.
 #'
 #' @return
 #' An object of type `GetDbCloneCensorWeightDataArgs`.
@@ -538,7 +549,11 @@ TimeBasis <- R6Class(
 #'                                 [createTimeBasis()], used by the pooled logistic model. The default
 #'                                 is a daily indicator basis.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
-#'                                 `"artificial"`.
+#'                                 `"artificial"` (deviation from a strategy). Censoring at the end of
+#'                                 observation is not weighted, so it is assumed to be independent of
+#'                                 the outcome. Risks are biased in data where the end of observation
+#'                                 depends on the outcome, for example when persons who die are
+#'                                 observed until death but survivors only until their last record.
 #' @param useCovariates            Use the baseline covariates in the censoring models?
 #' @param excludeCovariateIds      Exclude these covariates from the censoring models.
 #' @param includeCovariateIds      Include only these covariates in the censoring models.
@@ -782,7 +797,11 @@ BootstrapArgs <- R6Class(
 #'
 #' The pooled logistic model needs weighted clones cut on its interval grid
 #' (`computeCensoringWeights(outcomeTimeBasis = timeBasis)`). Its default, daily intervals with a
-#' natural spline of time, uses the exact daily weights.
+#' natural spline of time, uses the exact daily weights. With longer intervals, a clone whose
+#' follow-up ends inside an interval without the outcome (for example at the end of a grace period, or
+#' when it deviates) counts as at risk, without the outcome, for the whole interval, which biases that
+#' interval's hazard down. This bias is large when many clones end inside an interval, as at the end of
+#' a grace period that does not end an interval of the grid.
 #'
 #' The default `control` (Newton steps until the relative change of the log likelihood is below
 #' `1e-10`) fits the models to the precision of their reference implementations (`survival::coxph()`
@@ -804,6 +823,10 @@ BootstrapArgs <- R6Class(
 #' an odds ratio that is constant over follow-up and are biased under a grace period for the same
 #' reason, so use `armByTimeInteraction = TRUE` with a grace period. With daily intervals, an indicator
 #' (saturated) time basis and the interaction give the weighted Kaplan-Meier or Aalen-Johansen risks.
+#' A smooth time basis, such as the default natural spline, can still give biased risks with the
+#' interaction: each strategy's hazard can change abruptly after the grace period, when the clones of
+#' the two strategies start to follow different treatments, and a smooth function of time cannot follow
+#' that change.
 #'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`

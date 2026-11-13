@@ -70,7 +70,11 @@ This version requires \code{useCovariates = FALSE} and \code{stratified = FALSE}
 
 The pooled logistic model needs weighted clones cut on its interval grid
 (\code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}). Its default, daily intervals with a
-natural spline of time, uses the exact daily weights.
+natural spline of time, uses the exact daily weights. With longer intervals, a clone whose
+follow-up ends inside an interval without the outcome (for example at the end of a grace period, or
+when it deviates) counts as at risk, without the outcome, for the whole interval, which biases that
+interval's hazard down. This bias is large when many clones end inside an interval, as at the end of
+a grace period that does not end an interval of the grid.
 
 The default \code{control} (Newton steps until the relative change of the log likelihood is below
 \code{1e-10}) fits the models to the precision of their reference implementations (\code{survival::coxph()}
@@ -92,6 +96,10 @@ The pooled logistic (\code{"logistic"}) risks are model-based. Without \code{arm
 an odds ratio that is constant over follow-up and are biased under a grace period for the same
 reason, so use \code{armByTimeInteraction = TRUE} with a grace period. With daily intervals, an indicator
 (saturated) time basis and the interaction give the weighted Kaplan-Meier or Aalen-Johansen risks.
+A smooth time basis, such as the default natural spline, can still give biased risks with the
+interaction: each strategy's hazard can change abruptly after the grace period, when the clones of
+the two strategies start to follow different treatments, and a smooth function of time cannot follow
+that change.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

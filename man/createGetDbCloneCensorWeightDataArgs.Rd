@@ -30,7 +30,8 @@ prior to index date.}
 \item{firstOnly}{Keep only the first index date per person?}
 
 \item{priorUseLookback}{How many days before the index date to look for prior use
-of the treatments.}
+of the treatments. For "no prior use ever", use a number
+of days longer than any observation, such as \code{99999}.}
 
 \item{removeSubjectsWithPriorTreatment}{Remove persons who used one of the treatments in the
 \code{priorUseLookback} window before index?}
@@ -40,7 +41,17 @@ be sampled to this size. \code{0} means no maximum.}
 
 \item{covariateSettings}{An object of type \code{covariateSettings} as created using
 \code{\link[FeatureExtraction:createCovariateSettings]{FeatureExtraction::createCovariateSettings()}}, or a list of
-such objects.}
+such objects. FeatureExtraction's default windows end on
+the index date (\code{endDays = 0}), so the covariates include
+records of day 0, the first day on which a strategy can
+start the treatment: for example drugs started and
+diagnoses recorded on the index date. Exclude the treatment
+from the covariates: its concepts with their descendants
+(\code{excludedCovariateConceptIds} with
+\code{addDescendantsToExclude = TRUE}) and the drug classes that
+contain it, such as its ATC groups, which are ancestors of
+the ingredient rather than descendants. Otherwise the
+censoring models can stop with a high-correlation error.}
 }
 \value{
 An object of type \code{GetDbCloneCensorWeightDataArgs}.

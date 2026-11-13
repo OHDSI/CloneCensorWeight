@@ -239,7 +239,9 @@ createCloneCensorWeightData <- function(cohorts,
 #' Save the clone-censor-weight data to file
 #'
 #' @description
-#' Saves an object of type [CloneCensorWeightData] to a file. The object is closed afterwards.
+#' Saves an object of type [CloneCensorWeightData] to a file. The object is closed afterwards (as with
+#' [CohortMethod::saveCohortMethodData()]), so load it with [loadCloneCensorWeightData()] to use it
+#' again.
 #'
 #' @param x    An object of type [CloneCensorWeightData].
 #' @param file The name of the file where the data will be written. If the file already exists it will

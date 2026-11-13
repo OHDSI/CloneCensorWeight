@@ -7,7 +7,8 @@
 plotCumulativeIncidence(curves, labels = NULL, fileName = NULL)
 }
 \arguments{
-\item{curves}{A tibble as created by \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}}.}
+\item{curves}{A tibble as created by \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} with \code{horizons = NULL}. Curves
+computed at \code{horizons} hold only those days, and are drawn as steps between them.}
 
 \item{labels}{The labels of strategies 1 (target) and 2 (comparator). If \code{NULL}, the
 \code{strategyLabels} attribute of \code{curves} is used.}

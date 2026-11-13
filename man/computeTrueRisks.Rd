@@ -46,6 +46,12 @@ competing event) under each treatment strategy, for the data-generating process 
 \code{\link[=simulateCloneCensorWeightData]{simulateCloneCensorWeightData()}}, by simulating each strategy directly on \code{nTruth} new persons.
 }
 \details{
+The risks are always the cumulative incidence of the outcome with death as a competing event, the
+estimand of an analysis with \code{competingEvents = "death"}. An analysis with \code{competingEvents = "none"} treats death as censoring, so it estimates the risk in a world without death. Its truth is
+given by this function with \code{settings$deathHazard <- 0}. Death is not weighted for, so the analysis
+identifies this risk only when death is non-informative censoring: in this DGP, when death does not
+depend on X (\code{deathCoefficients = 0}) or X does not change the outcome (\code{outcomeCoefficients = 0}).
+
 The same random numbers are used for every strategy (and for every value of \code{graceRegime} given the
 same \code{seed}), so contrasts between strategies are estimated more precisely than each risk. There is
 no loss to follow-up. Each risk is a proportion over \code{nTruth} independent persons, so its Monte Carlo

@@ -41,7 +41,13 @@
 #'
 #' The treatment cohorts are not restricted to new users: every era of the treatment (and comparator
 #' treatment) cohort that overlaps days `-priorUseLookback` to the end of observation is stored in the
-#' `treatments` table, so that strategies can be evaluated on the first start on or after day 0.
+#' `treatments` table, so that strategies can be evaluated on the first start on or after day 0. The
+#' treatment cohorts must therefore hold every era of each person, not only the first. A cohort that
+#' keeps one era per person is accepted without a warning, but it misses the starts after index of
+#' persons with an earlier era (who then count as not starting) and their prior use. Cohort
+#' definitions often keep only the first event by default: with Capr, for example, set
+#' `entry(primaryCriteriaLimit = "All", qualifiedLimit = "All")` and
+#' `attrition(expressionLimit = "All")`.
 #' Outcomes are stored as in CohortMethod: every outcome cohort start in the index observation period,
 #' including those before the index date. `daysToDeath` is the number of days from the index date to the
 #' person's earliest death date in the CDM `death` table (`NA` if none); it is not restricted to the
@@ -52,6 +58,12 @@
 #'
 #' Either `connectionDetails` or `connection` must be provided. An open `connection` is used as is and
 #' is not closed, which allows, for example, a DuckDB database attached read-only to the connection.
+#'
+#' As in CohortMethod, the eligible cohort defaults to the table of the treatment cohorts
+#' (`targetDatabaseSchema = exposureDatabaseSchema`, `targetTable = exposureTable`), but the outcome
+#' cohorts default to the `cohort` table of the CDM schema (`outcomeDatabaseSchema =
+#' cdmDatabaseSchema`, `outcomeTable = "cohort"`). When all cohorts are in one table in another
+#' schema, also set `outcomeDatabaseSchema` and `outcomeTable` (see the second example).
 #'
 #' @param connectionDetails              An R object of type `connectionDetails` created using the
 #'                                       [DatabaseConnector::createConnectionDetails()] function. Either
@@ -108,6 +120,27 @@
 #'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs()
 #' )
 #' summary(data)
+#'
+#' # A DuckDB CDM attached read-only to an in-memory database, with all cohorts in one table of the
+#' # in-memory database (generated there beforehand), so the eligible, treatment and outcome cohort
+#' # tables are all set:
+#' connection <- DatabaseConnector::connect(dbms = "duckdb", server = ":memory:")
+#' DatabaseConnector::executeSql(connection, "ATTACH 'cdm.duckdb' AS cdm (READ_ONLY);")
+#' data <- getDbCloneCensorWeightData(
+#'   connection = connection,
+#'   cdmDatabaseSchema = "cdm.main",
+#'   targetId = 1,
+#'   treatmentId = 2,
+#'   outcomeIds = 3,
+#'   exposureDatabaseSchema = "main",
+#'   exposureTable = "my_cohorts",
+#'   outcomeDatabaseSchema = "main",
+#'   outcomeTable = "my_cohorts",
+#'   targetDatabaseSchema = "main",
+#'   targetTable = "my_cohorts",
+#'   getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs()
+#' )
+#' DatabaseConnector::disconnect(connection)
 #' }
 #'
 #' @export

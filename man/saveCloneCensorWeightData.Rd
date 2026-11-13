@@ -16,7 +16,9 @@ be overwritten.}
 Returns no output.
 }
 \description{
-Saves an object of type \link{CloneCensorWeightData} to a file. The object is closed afterwards.
+Saves an object of type \link{CloneCensorWeightData} to a file. The object is closed afterwards (as with
+\code{\link[CohortMethod:saveCohortMethodData]{CohortMethod::saveCohortMethodData()}}), so load it with \code{\link[=loadCloneCensorWeightData]{loadCloneCensorWeightData()}} to use it
+again.
 }
 \examples{
 data <- createCloneCensorWeightData(

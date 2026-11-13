@@ -84,7 +84,9 @@ its interval grid (\code{computeCensoringWeights(outcomeTimeBasis = )}).
 In the replicates, the censoring models are fitted with \code{errorOnHighCorrelation = FALSE}: the check
 for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
 already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
-replicates are not shown; those of a failed replicate are reported with its failure.
+replicates are not shown; those of a failed replicate are reported with its failure. The progress
+messages of every replicate (including those of CohortMethod and FeatureExtraction) are shown; wrap
+the call in \code{\link[=suppressMessages]{suppressMessages()}} to hide them.
 
 A replicate fails when the analysis stops with an error (for example because a censoring model
 cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome

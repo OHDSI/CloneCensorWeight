@@ -29,7 +29,11 @@ createFitCensoringModelsArgs(
 is a daily indicator basis.}
 
 \item{censoringMechanisms}{The censoring mechanisms to weight for. This version supports only
-\code{"artificial"}.}
+\code{"artificial"} (deviation from a strategy). Censoring at the end of
+observation is not weighted, so it is assumed to be independent of
+the outcome. Risks are biased in data where the end of observation
+depends on the outcome, for example when persons who die are
+observed until death but survivors only until their last record.}
 
 \item{useCovariates}{Use the baseline covariates in the censoring models?}
 

@@ -131,6 +131,16 @@
 #' weighted number of outcomes since the previous row), `risk`, `lb95` and `ub95`. The attribute
 #' `strategyLabels` holds the strategy labels.
 #'
+#' `atRiskWeighted` sums the weights of the segments at risk, as the `n.risk` of
+#' `survival::survfit()` on the segments does: each segment's weight is the weight of its last day
+#' (see [computeCensoringWeights()]). That is the clone's weight on the row's day when an outcome or
+#' competing event happens on that day, but not in general on other days. On the row at time zero, in
+#' particular, it is the sum of the weights of the clones' first segments, which can differ from the
+#' sum of their weights on day `riskStart`.
+#'
+#' Curves computed at `horizons` hold only those days. To plot a curve, compute it with
+#' `horizons = NULL`.
+#'
 #' @example inst/examples/clones.R
 #' @example inst/examples/weightedClones.R
 #' @examples
@@ -224,7 +234,8 @@ computeCumulativeIncidence <- function(weightedClones, horizons = NULL) {
 #' Plots the cumulative incidence (risk) curves of both strategies with their 95 percent confidence
 #' bands, as computed by [computeCumulativeIncidence()]. Requires the `ggplot2` package.
 #'
-#' @param curves   A tibble as created by [computeCumulativeIncidence()].
+#' @param curves   A tibble as created by [computeCumulativeIncidence()] with `horizons = NULL`. Curves
+#'                 computed at `horizons` hold only those days, and are drawn as steps between them.
 #' @param labels   The labels of strategies 1 (target) and 2 (comparator). If `NULL`, the
 #'                 `strategyLabels` attribute of `curves` is used.
 #' @param fileName Name of the file where the plot should be saved, for example 'plot.png'. See

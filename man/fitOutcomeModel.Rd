@@ -27,7 +27,10 @@ the odds ratio where the time basis is 0; see \code{\link[=createFitOutcomeModel
 differences, with the per-strategy values in \code{"rmst_target_<h>"}, \code{"rmst_comparator_<h>"},
 \code{"rmtl_target_<h>"}, and \code{"rmtl_comparator_<h>"}), and columns \code{estimand}, \code{estimate},
 \code{logEstimate} and \code{seLogEstimate} (ratios), \code{se} (other estimands), \code{lb95}, \code{ub95}, and \code{p} (ratios
-and differences);
+and differences). A contrast that is null by design has a standard error of 0 and \code{p = NA}: for
+example the \code{"or"} row with \code{armByTimeInteraction = TRUE} (the odds ratio of the first interval)
+when both strategies have the same rows in that interval, as an \code{"initiateWithin"} strategy and a
+strategy of not initiating do on day 0 with \code{"eventsFirst"};
 \item \code{coefficients} and \code{vcov}: the model coefficients and their (robust or model-based) covariance
 (\code{NULL} for \code{"km"}): for \code{"cox"} the target coefficient (log hazard ratio) of the outcome model;
 for \code{"logistic"} those of the outcome model and, with competing death, of the death model,
@@ -91,8 +94,11 @@ The \code{"logistic"} risks are model-based. Without \code{armByTimeInteraction}
 strategy that is constant over follow-up (proportional odds). A grace period violates this
 assumption by design: the clones of both strategies follow the same course during the grace period.
 Their risks, risk differences and risk ratios are then biased, also at horizons within the grace
-period, so with a grace period use \code{armByTimeInteraction = TRUE}. The \code{"km"} risks, and so the
-\code{"cox"} risks, do not make this assumption.
+period, so with a grace period use \code{armByTimeInteraction = TRUE}. With a smooth time basis, such as
+the default natural spline, the risks can remain biased even then, because each strategy's hazard
+can change abruptly after the grace period, and with intervals longer than a day, clones that end
+inside an interval count as at risk for the whole interval (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}). The
+\code{"km"} risks, and so the \code{"cox"} risks, do not make these assumptions.
 
 The models are fitted with Cyclops using \code{fitOutcomeModelArgs$control}; a fit that fails is refitted
 with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot

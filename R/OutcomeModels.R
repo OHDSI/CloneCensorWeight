@@ -68,8 +68,11 @@
 #' strategy that is constant over follow-up (proportional odds). A grace period violates this
 #' assumption by design: the clones of both strategies follow the same course during the grace period.
 #' Their risks, risk differences and risk ratios are then biased, also at horizons within the grace
-#' period, so with a grace period use `armByTimeInteraction = TRUE`. The `"km"` risks, and so the
-#' `"cox"` risks, do not make this assumption.
+#' period, so with a grace period use `armByTimeInteraction = TRUE`. With a smooth time basis, such as
+#' the default natural spline, the risks can remain biased even then, because each strategy's hazard
+#' can change abruptly after the grace period, and with intervals longer than a day, clones that end
+#' inside an interval count as at risk for the whole interval (see [createFitOutcomeModelArgs()]). The
+#' `"km"` risks, and so the `"cox"` risks, do not make these assumptions.
 #'
 #' The models are fitted with Cyclops using `fitOutcomeModelArgs$control`; a fit that fails is refitted
 #' with Cyclops' default algorithm and convergence criterion, with a warning. When the Cox model cannot
@@ -102,7 +105,10 @@
 #'   differences, with the per-strategy values in `"rmst_target_<h>"`, `"rmst_comparator_<h>"`,
 #'   `"rmtl_target_<h>"`, and `"rmtl_comparator_<h>"`), and columns `estimand`, `estimate`,
 #'   `logEstimate` and `seLogEstimate` (ratios), `se` (other estimands), `lb95`, `ub95`, and `p` (ratios
-#'   and differences);
+#'   and differences). A contrast that is null by design has a standard error of 0 and `p = NA`: for
+#'   example the `"or"` row with `armByTimeInteraction = TRUE` (the odds ratio of the first interval)
+#'   when both strategies have the same rows in that interval, as an `"initiateWithin"` strategy and a
+#'   strategy of not initiating do on day 0 with `"eventsFirst"`;
 #' - `coefficients` and `vcov`: the model coefficients and their (robust or model-based) covariance
 #'   (`NULL` for `"km"`): for `"cox"` the target coefficient (log hazard ratio) of the outcome model;
 #'   for `"logistic"` those of the outcome model and, with competing death, of the death model,
@@ -782,7 +788,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     vcov[names(theta), names(theta)] <- thetaVcov
   }
 
-  estimates <- list(.ratioRow("or", coefficients[["target"]], if (is.null(vcov)) NA_real_ else sqrt(vcov["target", "target"])))
+  estimates <- list(.ratioRow("or", coefficients[["target"]], if (is.null(vcov)) NA_real_ else .standardError(vcov["target", "target"], thetaVcov)))
   if (deathFailed) {
     return(.withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design))))
   }

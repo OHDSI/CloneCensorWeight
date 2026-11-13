@@ -158,21 +158,32 @@ fitCensoringModels <- function(clones,
       treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
       prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
       if (kind == "binary") {
-        message(sprintf("Fitting binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label))
-        riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
-        model <- .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+        description <- sprintf("binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label)
       } else {
-        message(sprintf(
-          "Fitting %s initiation hazard model through day %d for strategy %d (%s)",
+        description <- sprintf(
+          "%s initiation hazard model through day %d for strategy %d (%s)",
           fitCensoringModelsArgs$hazardModelType, horizon, strategyId, strategy$label
-        ))
-        riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
-        if (fitCensoringModelsArgs$hazardModelType == "cox") {
-          model <- .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
-        } else {
-          model <- .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior)
-        }
+        )
       }
+      message("Fitting ", description)
+      # Errors (for example CohortMethod::createPs()'s high-correlation check, which speaks of the
+      # "treatment") name the model that failed:
+      model <- tryCatch(
+        {
+          if (kind == "binary") {
+            riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+            .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+          } else {
+            riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+            if (fitCensoringModelsArgs$hazardModelType == "cox") {
+              .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+            } else {
+              .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+            }
+          }
+        },
+        error = function(e) stop(sprintf("Fitting the %s failed: %s", description, conditionMessage(e)), call. = FALSE)
+      )
       model <- c(list(kind = kind, horizon = horizon), model)
       fitted[[key]] <- model
     }
