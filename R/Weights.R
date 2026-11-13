@@ -25,15 +25,21 @@
 #'
 #' - `"initiateWithin"` (grace period ending on day `G`): `W(d) = 1` for `d <= G` and `1 / pi(X)` for
 #'   `d > G`, where `pi(X)` is the probability of starting by `G` from the binary model.
-#' - `"notInitiateWithin"`: `W(d) = 1 / S(d - 1 | X)` for `d <= G` (with `S(-1) = 1`) and
-#'   `1 / S(G | X)` for `d > G`, where `S(d | X)` is the probability of not initiating on days `0..d`.
+#' - `"notInitiateWithin"`: `W(d) = 1 / S(d - 1 | X)` for `d <= G` (with `S(-1) = 1`), where
+#'   `S(d | X)` is the probability of not initiating on days `0..d` from the initiation hazard model.
+#'   For `d > G`, `W(d) = 1 / (1 - pi(X))`, with `pi(X)` from the binary model at `G`, when the models
+#'   were fit with `postGraceModel = "binary"` (the default), and `1 / S(G | X)` with
+#'   `postGraceModel = "hazard"` (see [createFitCensoringModelsArgs()] for the assumption that makes
+#'   the two agree).
 #' - `"neverInitiate"`: `W(d) = 1 / S(d - 1 | X)`.
 #'
 #' With `"deviationFirst"`, `S(d | X)` is used in place of `S(d - 1 | X)`, and the `"initiateWithin"`
-#' weight is `1 / pi(X)` from day `G` on. A clone that deviates on day `d` then does so before any
-#' outcome on that day, so it is not at risk of the outcome on day `d`: its segments end on day
+#' weight is `1 / pi(X)` from day `G` on (and the `"notInitiateWithin"` weight `1 / (1 - pi(X))` from
+#' day `G` on, with `postGraceModel = "binary"`). A clone that deviates on day `d` then does so before
+#' any outcome on that day, so it is not at risk of the outcome on day `d`: its segments end on day
 #' `d - 1`, and a clone that deviates on its first day of follow-up has no segments. Stabilized
-#' weights multiply by the same quantity from the numerator model without covariates.
+#' weights multiply by the same quantity from the numerator model without covariates (the marginal
+#' `pi-bar` of the binary model in place of `pi(X)`, also in `1 - pi(X)`).
 #'
 #' Each clone's follow-up is split, on the survival time scale `t = day - riskStart + 1`, at the end of
 #' day `G` (day `G - 1` with `"deviationFirst"`) for `"initiateWithin"`, and, for the hazard
@@ -52,8 +58,11 @@
 #' segment is one day long. These extra splits do not change any weight at an event time, so the Cox,
 #' Kaplan-Meier and Aalen-Johansen estimates are the same with and without them.
 #'
-#' Weights are truncated per strategy: the cap is the `upper` percentile (`quantile` type 7) of the
-#' clones' maximum weight, or the fixed value.
+#' Weights are truncated per strategy: each segment weight above the cap is set to the cap. The cap
+#' is the fixed value, or the `upper` percentile (`quantile` type 7) of the clones' maximum weights,
+#' taken over the clones under follow-up on day `tau + 1` (or `riskStart`, if later), whose weight
+#' varies, with `basis = "varying"`, or over all clones of the strategy with `basis = "allClones"` (see
+#' [createWeightTruncation()]).
 #'
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
@@ -76,9 +85,11 @@
 #' - `personWeights`: `cloneRowId`, `strategyId`, `maxWeight` and `weightAtEnd`, the largest and the
 #'   last segment weight of each clone with segments, before truncation.
 #'
-#' `metaData$weights` holds whether the weights are stabilized, the truncation rule, the cap used per
-#' strategy, a summary of the untruncated weights, and `cutIntervalLength`, the interval length of the
-#' `outcomeTimeBasis` grid the clones are split on (`NA` without one).
+#' `metaData$weights` holds whether the weights are stabilized, the truncation rule, `caps` (a tibble
+#' with, per strategy, the `cap` used, `NA` without truncation, and `truncatedShare`, the share of the
+#' strategy's segments whose weight was truncated), a summary of the untruncated weights, and
+#' `cutIntervalLength`, the interval length of the `outcomeTimeBasis` grid the clones are split on
+#' (`NA` without one).
 #'
 #' @example inst/examples/clones.R
 #' @examples
@@ -252,9 +263,17 @@ computeCensoringWeights <- function(clones,
     GROUP BY cloneRowId,
       strategyId;")
 
-  caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation)
+  caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay)
   weightedClones$ccwWCaps <- caps |>
     filter(!is.na(.data$cap))
+  truncated <- .andromedaSql(weightedClones, "
+    SELECT ccwWWeighted.strategyId,
+      AVG(CASE WHEN ccwWCaps.cap IS NOT NULL AND ccwWWeighted.weight > ccwWCaps.cap THEN 1.0 ELSE 0.0 END) AS truncatedShare
+    FROM ccwWWeighted
+    LEFT JOIN ccwWCaps
+      ON ccwWWeighted.strategyId = ccwWCaps.strategyId
+    GROUP BY ccwWWeighted.strategyId;")
+  caps$truncatedShare <- as.numeric(truncated$truncatedShare[match(caps$strategyId, truncated$strategyId)])
   .andromedaExecute(weightedClones, "
     CREATE TABLE ccwWFinalSegments AS
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY ccwWWeighted.cloneRowId, ccwWWeighted.startTime) AS INTEGER) AS segmentId,
@@ -341,9 +360,13 @@ computeCensoringWeights <- function(clones,
   values <- list()
   coxBaseline <- list()
   intervals <- list()
+  postGraceValues <- list()
+  interactionValues <- list()
+  interactionBasis <- list()
   for (model in censoringModels) {
     strategyId <- as.integer(model$strategyId)
     isLogistic <- model$modelType == "logistic"
+    hasPostGrace <- !is.null(model$postGrace)
     params[[strategyId]] <- tibble(
       strategyId = strategyId,
       kind = model$kind,
@@ -353,12 +376,33 @@ computeCensoringWeights <- function(clones,
       cutDay = NA_integer_,
       numerator = if (model$kind == "binary") as.numeric(model$numerator$propensityScore) else NA_real_,
       intervalLength = if (isLogistic) as.integer(model$timeBasis$intervalLength) else NA_integer_,
-      nIntervals = if (isLogistic) as.integer(model$timeBasis$nIntervals) else NA_integer_
+      nIntervals = if (isLogistic) as.integer(model$timeBasis$nIntervals) else NA_integer_,
+      postGrace = hasPostGrace,
+      postGraceNumerator = if (hasPostGrace) as.numeric(model$postGrace$numerator$propensityScore) else NA_real_
     )
     if (model$kind == "binary") {
       values[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$predictions$rowId, value = model$predictions$propensityScore)
     } else {
       values[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$predictions$rowId, value = model$predictions$linearPredictor)
+    }
+    if (hasPostGrace) {
+      postGraceValues[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$postGrace$predictions$rowId, value = model$postGrace$predictions$propensityScore)
+    }
+    interactions <- model$interactions
+    if (isLogistic && !is.null(interactions) && nrow(interactions$predictions) > 0) {
+      interactionValues[[strategyId]] <- tibble(
+        strategyId = strategyId,
+        rowId = interactions$predictions$rowId,
+        columnIndex = interactions$predictions$columnIndex,
+        value = interactions$predictions$value
+      )
+      interactionBasis[[strategyId]] <- tibble(
+        strategyId = strategyId,
+        k = rep(as.integer(model$intervals$k), ncol(interactions$basis)),
+        columnIndex = rep(seq_len(ncol(interactions$basis)), each = nrow(interactions$basis)),
+        zValue = as.vector(interactions$basis)
+      ) |>
+        filter(.data$zValue != 0)
     }
     if (model$modelType == "cox") {
       days <- seq(-1L, model$horizon)
@@ -393,6 +437,18 @@ computeCensoringWeights <- function(clones,
     list(tibble(strategyId = integer(0), k = integer(0), baseline = numeric(0), numeratorBaseline = numeric(0))),
     intervals
   ))
+  clones$ccwWPostGrace <- dplyr::bind_rows(c(
+    list(tibble(strategyId = integer(0), rowId = integer(0), value = numeric(0))),
+    postGraceValues
+  ))
+  clones$ccwWInteractionValues <- dplyr::bind_rows(c(
+    list(tibble(strategyId = integer(0), rowId = integer(0), columnIndex = integer(0), value = numeric(0))),
+    interactionValues
+  ))
+  clones$ccwWInteractionBasis <- dplyr::bind_rows(c(
+    list(tibble(strategyId = integer(0), k = integer(0), columnIndex = integer(0), zValue = numeric(0))),
+    interactionBasis
+  ))
   invisible(NULL)
 }
 
@@ -411,6 +467,19 @@ computeCensoringWeights <- function(clones,
         AND ccwWSegments.rowId = ccwWValues.rowId
     WHERE ccwWValues.rowId IS NULL
       AND CASE WHEN ccwWParams.kind = 'binary' THEN ccwWSegments.evalDay = 1 ELSE ccwWSegments.evalDay >= 0 END;")$n
+  # The weights after G of notInitiateWithin with postGraceModel = "binary" (evalDay = G) need the binary
+  # model at G:
+  missing <- missing + .andromedaSql(clones, "
+    SELECT COUNT(*) AS n
+    FROM ccwWSegments
+    INNER JOIN ccwWParams
+      ON ccwWSegments.strategyId = ccwWParams.strategyId
+    LEFT JOIN ccwWPostGrace
+      ON ccwWSegments.strategyId = ccwWPostGrace.strategyId
+        AND ccwWSegments.rowId = ccwWPostGrace.rowId
+    WHERE ccwWPostGrace.rowId IS NULL
+      AND ccwWParams.postGrace
+      AND ccwWSegments.evalDay = ccwWParams.windowEnd;")$n
   if (missing > 0) {
     stop(sprintf("%d segment(s) need the censoring model's prediction for a person outside its risk set. Were the censoring models fit on these clones?", missing))
   }
@@ -476,7 +545,22 @@ computeCensoringWeights <- function(clones,
       ON ccwWNeeded.strategyId = ccwWValues.strategyId
         AND ccwWNeeded.rowId = ccwWValues.rowId
     WHERE ccwWNeeded.modelType = 'cox';")
-  # Logistic: cumulative log survival over the intervals, per person, up to the last interval needed.
+  # Logistic: the covariate-by-time interaction part of the linear predictor per person and interval
+  # (covariateTimeInteraction), and the cumulative log survival over the intervals, per person, up to
+  # the last interval needed.
+  .andromedaExecute(clones, "
+    CREATE TABLE ccwWInteractionTerms AS
+    SELECT ccwWInteractionValues.strategyId,
+      ccwWInteractionValues.rowId,
+      ccwWInteractionBasis.k,
+      SUM(ccwWInteractionValues.value * ccwWInteractionBasis.zValue) AS value
+    FROM ccwWInteractionValues
+    INNER JOIN ccwWInteractionBasis
+      ON ccwWInteractionValues.strategyId = ccwWInteractionBasis.strategyId
+        AND ccwWInteractionValues.columnIndex = ccwWInteractionBasis.columnIndex
+    GROUP BY ccwWInteractionValues.strategyId,
+      ccwWInteractionValues.rowId,
+      ccwWInteractionBasis.k;")
   .andromedaExecute(clones, sprintf("
     CREATE TABLE ccwWCumulative AS
     SELECT persons.strategyId,
@@ -497,7 +581,11 @@ computeCensoringWeights <- function(clones,
         AND ccwWIntervals.k <= persons.maxInterval
     LEFT JOIN ccwWValues
       ON persons.strategyId = ccwWValues.strategyId
-        AND persons.rowId = ccwWValues.rowId;", .logOneMinusExpitSql("(ccwWIntervals.baseline + COALESCE(ccwWValues.value, 0))")))
+        AND persons.rowId = ccwWValues.rowId
+    LEFT JOIN ccwWInteractionTerms
+      ON persons.strategyId = ccwWInteractionTerms.strategyId
+        AND persons.rowId = ccwWInteractionTerms.rowId
+        AND ccwWIntervals.k = ccwWInteractionTerms.k;", .logOneMinusExpitSql("(ccwWIntervals.baseline + COALESCE(ccwWValues.value, 0) + COALESCE(ccwWInteractionTerms.value, 0))")))
   .andromedaExecute(clones, sprintf("
     CREATE TABLE ccwWNumeratorCumulative AS
     SELECT strategyId,
@@ -520,11 +608,27 @@ computeCensoringWeights <- function(clones,
       ON ccwWNeeded.strategyId = ccwWNumeratorCumulative.strategyId
         AND ccwWNeeded.lastInterval = ccwWNumeratorCumulative.k
     WHERE ccwWNeeded.modelType = 'logistic';")
+  # notInitiateWithin with postGraceModel = "binary": from the day the weight no longer changes
+  # (evalDay = G: day G + 1 with eventsFirst, day G with deviationFirst), 1 - pi(X) from the binary model
+  # at G replaces S(G | X), and 1 - pi-bar replaces the numerator's S-bar(G):
+  .andromedaExecute(clones, "
+    UPDATE ccwWSurvival
+    SET survival = 1 - ccwWPostGrace.value,
+      numeratorSurvival = 1 - ccwWParams.postGraceNumerator
+    FROM ccwWParams, ccwWPostGrace
+    WHERE ccwWSurvival.strategyId = ccwWParams.strategyId
+      AND ccwWParams.postGrace
+      AND ccwWSurvival.evalDay = ccwWParams.windowEnd
+      AND ccwWSurvival.strategyId = ccwWPostGrace.strategyId
+      AND ccwWSurvival.rowId = ccwWPostGrace.rowId;")
   invisible(NULL)
 }
 
-# The truncation cap per strategy (NA: no truncation).
-.computeCaps <- function(clones, truncation) {
+# The truncation cap per strategy (NA: no truncation). A percentile with basis = "varying" is taken
+# over the clones under follow-up on day `balanceDay` (or riskStart, if later), falling back to all
+# clones without a grace period (balanceDay NA) or for a strategy with no such clone; with
+# basis = "allClones", over all clones.
+.computeCaps <- function(clones, truncation, balanceDay) {
   strategyIds <- .andromedaSql(clones, "SELECT DISTINCT strategyId FROM ccwWPersonWeights ORDER BY strategyId;")$strategyId
   if (truncation$type == "none") {
     return(tibble(strategyId = as.integer(strategyIds), cap = NA_real_))
@@ -538,7 +642,20 @@ computeCensoringWeights <- function(clones,
     FROM ccwWPersonWeights
     GROUP BY strategyId
     ORDER BY strategyId;", truncation$upper))
-  return(tibble(strategyId = as.integer(caps$strategyId), cap = as.numeric(caps$cap)))
+  caps <- tibble(strategyId = as.integer(caps$strategyId), cap = as.numeric(caps$cap))
+  if (truncation$basis == "varying" && !is.na(balanceDay)) {
+    varyingCaps <- .andromedaSql(clones, sprintf("
+      SELECT ccwWPersonWeights.strategyId,
+        quantile_cont(ccwWPersonWeights.maxWeight, %.17g) AS cap
+      FROM ccwWPersonWeights
+      INNER JOIN ccwWClones
+        ON ccwWPersonWeights.cloneRowId = ccwWClones.cloneRowId
+      WHERE GREATEST(%d, ccwWClones.riskStart) - ccwWClones.riskStart + 1 <= ccwWClones.survivalTime
+      GROUP BY ccwWPersonWeights.strategyId;", truncation$upper, balanceDay))
+    idx <- match(caps$strategyId, varyingCaps$strategyId)
+    caps$cap[!is.na(idx)] <- as.numeric(varyingCaps$cap[idx[!is.na(idx)]])
+  }
+  return(caps)
 }
 
 .summarizePersonWeights <- function(clones) {

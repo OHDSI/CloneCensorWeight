@@ -319,7 +319,8 @@ test_that("Truncation caps weights per strategy at a percentile of the clones' m
   expect_equal(metaData$untruncatedSummary$maxMaxWeight, as.vector(tapply(personWeights$maxWeight, personWeights$strategyId, max)))
   expect_true(checkmate::testTRUE(.checkCcwClones(untruncated, weighted = TRUE)))
 
-  percentile <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(stabilized = FALSE, truncation = createWeightTruncation("percentile", 0.9))))
+  # The original rule (basis = "allClones"); basis = "varying" is tested in test-m3-weights-truncationBasis.R:
+  percentile <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(stabilized = FALSE, truncation = createWeightTruncation("percentile", 0.9, basis = "allClones"))))
   caps <- tapply(personWeights$maxWeight, personWeights$strategyId, quantile, probs = 0.9, type = 7)
   expect_equal(attr(percentile, "metaData")$weights$caps$cap, as.vector(caps))
   truncated <- collectSegments(percentile)

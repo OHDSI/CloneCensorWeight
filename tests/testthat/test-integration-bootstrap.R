@@ -311,7 +311,10 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
   clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))
   fullModels <- suppressMessages(fitCensoringModels(clones, data, settings$fitCensoringModelsArgs))
   close(clones)
-  variances <- list("1" = fullModels[[1]]$priorVariance, "2" = fullModels[[2]]$priorVariance)
+  # With postGraceModel = "binary" (contract section 11.2), strategy 2 also has the binary model of its
+  # weights after the grace period, shared with strategy 1:
+  variances <- list("1" = fullModels[[1]]$priorVariance, "2" = fullModels[[2]]$priorVariance, "2.postGrace" = fullModels[[2]]$postGrace$priorVariance)
+  expect_equal(variances[["2.postGrace"]], variances[["1"]])
   expect_false(anyNA(unlist(variances)))
   expect_true(all(fullModels[[1]]$coefficients[-1] != 0))
 
@@ -328,7 +331,7 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
   expect_length(calls, 2)
   for (call in calls) {
     expect_equal(call$fixed, variances)
-    expect_equal(unname(unlist(call$fitted)), unname(unlist(variances)))
+    expect_equal(unname(unlist(call$fitted)), unname(unlist(variances[c("1", "2")])))
   }
 
   calls <- list()

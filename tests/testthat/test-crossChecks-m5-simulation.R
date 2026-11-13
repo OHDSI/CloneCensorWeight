@@ -13,6 +13,11 @@ crossCheckDag <- function(settings) {
     return(bquote(.(stats::qlogis(hazard)) + .(coefficients[1]) * X1 + .(coefficients[2]) * X2))
   }
   etaInitiation <- eta(settings$initiationHazard, settings$initiationCoefficients)
+  # The day-0 initiation parameters (NULL: as on the other days):
+  etaInitiationDay0 <- eta(
+    if (is.null(settings$initiationHazardDay0)) settings$initiationHazard else settings$initiationHazardDay0,
+    if (is.null(settings$initiationCoefficientsDay0)) settings$initiationCoefficients else settings$initiationCoefficientsDay0
+  )
   etaOutcome <- eta(settings$outcomeHazard, settings$outcomeCoefficients)
   etaDeath <- eta(settings$deathHazard, settings$deathCoefficients)
   tau <- settings$treatmentEffect
@@ -27,7 +32,7 @@ crossCheckDag <- function(settings) {
   for (t in 0:maxDays) {
     if (t == 0) {
       outcomeProb <- bquote(plogis(.(etaOutcome)))
-      initiationProb <- bquote(plogis(.(etaInitiation)))
+      initiationProb <- bquote(plogis(.(etaInitiationDay0)))
     } else {
       if (settings$dgp == "a") {
         effect <- if (t > g) bquote(.(tau) * A[.(g)]) else 0
@@ -126,4 +131,52 @@ test_that("the natural course of simulateCloneCensorWeightData agrees with simca
       expect_lt(abs(observed - reference), 4 * se(reference), label = sprintf("started by day %d, dgp %s", t, dgp))
     }
   }
+})
+
+test_that("computeTrueRisks and the natural course agree with simcausal with day-0 initiation parameters", {
+  skip_on_cran()
+  skip_if(Sys.getenv("CCW_RUN_CROSSCHECKS") != "true")
+  skip_if_not_installed("simcausal", minimum_version = "0.5.7")
+
+  n <- 1e5
+  # DGP (b), where the start day within the grace period changes later risk:
+  settings <- m5TinySettings("b", graceEnd = 2)
+  settings$initiationHazardDay0 <- 0.6
+  settings$initiationCoefficientsDay0 <- c(-1, 1)
+  dag <- crossCheckDag(settings)
+  actions <- c("initiateWithinNaturalGrace", "notInitiateWithin", "neverInitiate")
+  strategies <- list(
+    createTreatmentStrategy(1, "Initiate within 2 days", "initiateWithin", graceEnd = 2),
+    createTreatmentStrategy(2, "Do not initiate within 2 days", "notInitiateWithin", graceEnd = 2),
+    createTreatmentStrategy(3, "Never initiate", "neverInitiate")
+  )
+  simulated <- suppressMessages(simcausal::sim(dag, actions = actions, n = n, rndseed = 1, verbose = FALSE))
+  truth <- computeTrueRisks(settings, strategies, horizons = 0:settings$maxDays, graceRegime = "naturalGrace", nTruth = 2e5, seed = 1)
+  for (i in seq_along(strategies)) {
+    reference <- crossCheckRisks(simulated[[actions[i]]], settings$maxDays)
+    se <- sqrt(m5MonteCarloSe(reference, n)^2 + m5MonteCarloSe(reference, 2e5)^2)
+    expect_true(all(abs(truth$risk[truth$strategyId == i] - reference) < 4 * se), label = sprintf("strategy %d", i))
+  }
+
+  # The natural course: started on or before day t and still followed after day t.
+  args <- settings[setdiff(names(settings), "observationEndHazard")]
+  data <- do.call(simulateCloneCensorWeightData, c(list(n = n, observationEndHazard = 0, seed = 1), args))
+  cohorts <- dplyr::collect(data$cohorts)
+  outcomes <- dplyr::collect(data$outcomes)
+  treatments <- dplyr::collect(data$treatments)
+  close(data)
+  natural <- suppressMessages(simcausal::sim(dag, n = n, rndseed = 2, verbose = FALSE))
+  outcomeDay <- rep(Inf, n)
+  outcomeDay[outcomes$rowId] <- outcomes$daysToEvent
+  deathDay <- ifelse(is.na(cohorts$daysToDeath), Inf, cohorts$daysToDeath)
+  startDay <- rep(Inf, n)
+  startDay[treatments$rowId] <- treatments$daysToStart
+  for (t in 0:settings$maxDays) {
+    observed <- mean(startDay <= t & outcomeDay > t & deathDay > t)
+    reference <- mean(natural[[paste0("A_", t)]] %in% 1)
+    expect_lt(abs(observed - reference), 4 * sqrt(2) * m5MonteCarloSe(reference, n), label = sprintf("started by day %d", t))
+  }
+  risk <- cumsum(tabulate(outcomes$daysToEvent + 1, nbins = settings$maxDays + 1)) / n
+  reference <- crossCheckRisks(natural, settings$maxDays)
+  expect_true(all(abs(risk - reference) < 4 * sqrt(2) * m5MonteCarloSe(reference, n)))
 })

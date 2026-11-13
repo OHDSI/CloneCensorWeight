@@ -7,6 +7,8 @@
 createFitCensoringModelsArgs(
   hazardModelType = "logistic",
   timeBasis = createTimeBasis(),
+  covariateTimeInteraction = "none",
+  postGraceModel = "binary",
   censoringMechanisms = "artificial",
   useCovariates = TRUE,
   excludeCovariateIds = c(),
@@ -27,6 +29,17 @@ createFitCensoringModelsArgs(
 \item{timeBasis}{An object of type \code{TimeBasis} as created using
 \code{\link[=createTimeBasis]{createTimeBasis()}}, used by the pooled logistic model. The default
 is a daily indicator basis.}
+
+\item{covariateTimeInteraction}{Covariate-by-time interactions in the pooled logistic initiation
+hazard model: \code{"none"}, \code{"day0"} (each covariate times an indicator
+of the first interval, day 0 with daily intervals), or \code{"interval"}
+(each covariate times each time-basis column). See details. Must be
+\code{"none"} with \code{hazardModelType = "cox"}.}
+
+\item{postGraceModel}{The model that gives the weights of \code{"notInitiateWithin"} strategies
+after the grace period: \code{"binary"} (\code{1 / (1 - pi(X))} from the
+binary model at the end of the grace period) or \code{"hazard"}
+(\code{1 / S(G | X)} from the initiation hazard model). See details.}
 
 \item{censoringMechanisms}{The censoring mechanisms to weight for. This version supports only
 \code{"artificial"} (deviation from a strategy). Censoring at the end of
@@ -77,9 +90,34 @@ therefore grows with the horizon and with each person's daily probability of ini
 largest for \code{"neverInitiate"} strategies. For long horizons, prefer the pooled logistic model, with
 a longer \code{intervalLength} if daily intervals are too costly.
 
-\code{maxCohortSizeForFitting} applies only to the binary model at the end of the grace period of
-\code{"initiateWithin"} strategies (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). In this version the hazard
-models are always fitted to their whole risk set.
+\code{maxCohortSizeForFitting} applies only to the binary models at the end of the grace period
+(through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). In this version the hazard models are always fitted to their
+whole risk set.
+
+\strong{Weights of \code{"notInitiateWithin"} after the grace period.} With \code{postGraceModel = "binary"} (the
+default), the weight of a \code{"notInitiateWithin(G)"} clone after day \code{G} is \code{1 / (1 - pi(X))}, where
+\code{pi(X)} is the probability of starting by day \code{G} from the binary model at \code{G}, the same model the
+\code{"initiateWithin(G)"} strategy uses (the fit is shared when the analysis has such a strategy for the
+same treatment, and made otherwise). The initiation hazard model still gives the weights on days up
+to \code{G}, and all weights of \code{"neverInitiate"} strategies. The binary model is fitted on the persons
+under follow-up at \code{G}, so \code{1 - pi(X)} is the probability of not starting by \code{G} among persons with
+no outcome or death by \code{G}. It equals the probability \code{S(G | X)} of not initiating on days \verb{0..G} of
+the hazard model when starting the treatment during the grace period does not change the risk of
+the outcome or death during the grace period. Unlike \code{S(G | X)}, it does not assume that the
+covariate effects on initiation are the same on every day of the grace period (with the default
+\code{covariateTimeInteraction = "none"}): when a covariate changes \emph{when} persons start (for example
+on day 0 rather than later), \code{1 - S(G | X)} is miscalibrated and the weights \code{1 / S(G | X)} do not
+balance the covariates after \code{G}; see \code{\link[=computeCensoringModelCalibration]{computeCensoringModelCalibration()}}. With
+\code{postGraceModel = "hazard"}, the weight after \code{G} is \code{1 / S(G | X)}.
+
+\strong{Covariate-by-time interactions.} With \code{covariateTimeInteraction = "day0"}, the pooled logistic
+initiation hazard model also has, for each covariate, its product with an indicator of the first
+interval of the time basis (day 0 with the default daily intervals), so the covariates can change
+initiation on day 0 differently from later days. With \code{"interval"}, it has each covariate's product
+with each time-basis column (with the indicator basis: with the indicator of each interval except
+the reference), so the covariate effects can differ in every interval. The interaction columns are
+penalized by the prior like the covariates; the time-basis columns are never penalized. The Cox
+model has no interactions.
 }
 \examples{
 args <- createFitCensoringModelsArgs(hazardModelType = "cox")

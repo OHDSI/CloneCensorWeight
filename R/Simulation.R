@@ -16,7 +16,8 @@
 
 # The DGP is a daily discrete-time process on days 0..maxDays. Each person has three latent
 # processes that are independent given X and the start day A:
-# - initiation of the treatment, with a constant daily hazard (A is geometric on 0, 1, ...);
+# - initiation of the treatment, with a constant daily hazard (A is geometric on 0, 1, ...), or, with
+#   day-0 initiation parameters, a day-0 hazard and a constant daily hazard after day 0;
 # - the outcome, whose daily hazard depends on X and on A (dgp "a" or "b");
 # - death, whose daily hazard depends on X only.
 # A latent event day is drawn by inversion: with E ~ Exp(1), the event day is the first day d on
@@ -68,16 +69,45 @@
   return(x)
 }
 
-# Linear predictors (logit of the daily hazard) for the untreated person.
+# Linear predictors (logit of the daily hazard) for the untreated person. `initiationDay0` is that of
+# day 0, which equals `initiation` unless the settings have day-0 initiation parameters.
 .linearPredictors <- function(x, settings) {
   linearPredictor <- function(hazard, coefficients) {
     return(stats::qlogis(hazard) + as.vector(x %*% coefficients))
   }
+  initiation <- linearPredictor(settings$initiationHazard, settings$initiationCoefficients)
+  initiationDay0 <- initiation
+  if (.hasDay0Initiation(settings)) {
+    initiationDay0 <- linearPredictor(
+      if (is.null(settings$initiationHazardDay0)) settings$initiationHazard else settings$initiationHazardDay0,
+      if (is.null(settings$initiationCoefficientsDay0)) settings$initiationCoefficients else settings$initiationCoefficientsDay0
+    )
+  }
   return(list(
-    initiation = linearPredictor(settings$initiationHazard, settings$initiationCoefficients),
+    initiation = initiation,
+    initiationDay0 = initiationDay0,
     outcome = linearPredictor(settings$outcomeHazard, settings$outcomeCoefficients),
     death = linearPredictor(settings$deathHazard, settings$deathCoefficients)
   ))
+}
+
+# Does the initiation hazard of day 0 have its own parameters?
+.hasDay0Initiation <- function(settings) {
+  return(!is.null(settings$initiationHazardDay0) || !is.null(settings$initiationCoefficientsDay0))
+}
+
+# The natural-course start day: the first day on which the cumulative initiation hazard reaches `e`,
+# with the day-0 hazard on day 0 and the constant daily hazard after it (Inf if after maxDays).
+.initiationEventDay <- function(e, eta, settings, maxDays) {
+  rate <- .dailyCumulativeHazard(eta$initiation)
+  if (!.hasDay0Initiation(settings)) {
+    return(.constantHazardEventDay(e, rate, maxDays))
+  }
+  day0Rate <- .dailyCumulativeHazard(eta$initiationDay0)
+  day <- ceiling((e - day0Rate) / rate)
+  day[e <= day0Rate] <- 0
+  day[day > maxDays] <- Inf
+  return(day)
 }
 
 # First day d >= 0 on which a constant daily cumulative hazard `rate` reaches `e`; Inf if after
@@ -155,9 +185,13 @@
 # P(A = a | A <= graceEnd, no outcome or death on or before graceEnd, X), which is proportional to
 # P(A = a | X) * P(no outcome on or before graceEnd | A = a, X). Death does not depend on the
 # treatment, so its survival cancels. Two passes (total, then inverse CDF), to avoid an
-# n x (graceEnd + 1) matrix.
-.drawGraceStartDay <- function(u, etaInitiation, etaOutcome, graceEnd, settings) {
+# n x (graceEnd + 1) matrix. With a day-0 initiation hazard h0 (etaInitiationDay0), P(A = 0 | X) = h0
+# and P(A = a | X) = (1 - h0) (1 - h)^(a - 1) h for a >= 1.
+.drawGraceStartDay <- function(u, etaInitiation, etaOutcome, graceEnd, settings, etaInitiationDay0 = NULL) {
   initiationHazard <- stats::plogis(etaInitiation)
+  if (!is.null(etaInitiationDay0)) {
+    day0Hazard <- stats::plogis(etaInitiationDay0)
+  }
   untreatedRate <- .dailyCumulativeHazard(etaOutcome)
   if (settings$dgp == "a") {
     treatedRate <- .dailyCumulativeHazard(etaOutcome + settings$treatmentEffect)
@@ -182,7 +216,14 @@
         }
         cumulativeHazard <- (a + 1) * untreatedRate + rampSum
       }
-      weight <- (1 - initiationHazard)^a * initiationHazard * exp(-cumulativeHazard)
+      if (is.null(etaInitiationDay0)) {
+        pStart <- (1 - initiationHazard)^a * initiationHazard
+      } else if (a == 0) {
+        pStart <- day0Hazard
+      } else {
+        pStart <- (1 - day0Hazard) * (1 - initiationHazard)^(a - 1) * initiationHazard
+      }
+      weight <- pStart * exp(-cumulativeHazard)
       if (pass == 1) {
         total <- total + weight
       } else {
@@ -217,7 +258,8 @@
   # graceEnd, and then the hazard of a start on a day drawn from the starters by graceEnd.
   path <- .regularPath(naturalStartDay, settings)
   late <- which(naturalStartDay > graceEnd)
-  drawnStartDay <- .drawGraceStartDay(u[late], eta$initiation[late], eta$outcome[late], graceEnd, settings)
+  etaInitiationDay0 <- if (.hasDay0Initiation(settings)) eta$initiationDay0[late] else NULL
+  drawnStartDay <- .drawGraceStartDay(u[late], eta$initiation[late], eta$outcome[late], graceEnd, settings, etaInitiationDay0)
   latePath <- .regularPath(drawnStartDay, settings)
   path$switchDay[late] <- pmax(latePath$switchDay, graceEnd)
   path$startDay[late] <- drawnStartDay
@@ -239,7 +281,9 @@
 #' scale:
 #'
 #' - initiation of the treatment, for persons who have not started: `qlogis(initiationHazard) + X %*%
-#'   initiationCoefficients`;
+#'   initiationCoefficients`, except on day 0 when `initiationHazardDay0` or
+#'   `initiationCoefficientsDay0` is given: `qlogis(initiationHazardDay0) + X %*%
+#'   initiationCoefficientsDay0` (each `NULL` one takes the value of the other days);
 #' - the outcome: `qlogis(outcomeHazard) + X %*% outcomeCoefficients`, plus the treatment effect below;
 #' - death: `qlogis(deathHazard) + X %*% deathCoefficients` (not affected by the treatment);
 #' - end of observation: `observationEndHazard`, independent of X.
@@ -254,13 +298,17 @@
 #'   person who started on day `A`. The effect starts the day after initiation and builds up with time
 #'   since initiation, so the start day within a grace period changes later risk.
 #'
-#' The daily initiation hazard is constant over time, so the probability of starting by day `G`,
-#' `1 - (1 - plogis(qlogis(initiationHazard) + X %*% initiationCoefficients))^(G + 1)`, is not linear
-#' in X on the logit scale. The binary censoring model of an `initiateWithin(G)` strategy, a logistic
-#' regression on X fitted by [fitCensoringModels()], is therefore misspecified on these data. Its bias
-#' is negligible when initiation is weakly confounded or rare, but it can be detected with strong
-#' covariate effects on initiation and a high daily initiation hazard. The pooled logistic initiation
-#' hazard models of `"notInitiateWithin"` and `"neverInitiate"` strategies are correctly specified.
+#' Without the day-0 parameters, the daily initiation hazard is constant over time, so the
+#' probability of starting by day `G`, `1 - (1 - plogis(qlogis(initiationHazard) + X %*%
+#' initiationCoefficients))^(G + 1)`, is not linear in X on the logit scale. The binary censoring model
+#' of an `initiateWithin(G)` strategy, a logistic regression on X fitted by [fitCensoringModels()], is
+#' therefore misspecified on these data. Its bias is negligible when initiation is weakly confounded
+#' or rare, but it can be detected with strong covariate effects on initiation and a high daily
+#' initiation hazard. The pooled logistic initiation hazard models of `"notInitiateWithin"` and
+#' `"neverInitiate"` strategies are correctly specified. With `initiationCoefficientsDay0` different
+#' from `initiationCoefficients`, the covariates change *when* persons start (on day 0 or later), and
+#' the initiation hazard model is correctly specified only with
+#' `createFitCensoringModelsArgs(covariateTimeInteraction = "day0")` (or `"interval"`).
 #'
 #' Because the daily initiation hazard is the same on every day, the probability of not starting on
 #' days 0 to `d` is `(1 - h)^(d + 1)` for a daily hazard `h`: with the default `initiationHazard =
@@ -298,6 +346,10 @@
 #'                               hazard.
 #' @param effectRampDays         For DGP `"b"`, the number of days since initiation it takes the effect
 #'                               to reach `treatmentEffect`.
+#' @param initiationHazardDay0   Daily probability of starting the treatment on day 0 when X = 0, or
+#'                               `NULL` for `initiationHazard`.
+#' @param initiationCoefficientsDay0 Log odds ratios of the initiation hazard of day 0 for the
+#'                               covariates, or `NULL` for `initiationCoefficients`.
 #' @param seed                   The seed for the random number generator, or `NULL` to leave it as it
 #'                               is.
 #'
@@ -325,6 +377,8 @@ simulateCloneCensorWeightData <- function(n = 5000,
                                           deathCoefficients = rep(0.2, nCovariates),
                                           treatmentEffect = log(0.5),
                                           effectRampDays = 30,
+                                          initiationHazardDay0 = NULL,
+                                          initiationCoefficientsDay0 = NULL,
                                           seed = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   checkmate::assertCount(n, positive = TRUE, add = errorMessages)
@@ -345,7 +399,9 @@ simulateCloneCensorWeightData <- function(n = 5000,
     outcomeCoefficients = outcomeCoefficients,
     deathCoefficients = deathCoefficients,
     treatmentEffect = treatmentEffect,
-    effectRampDays = effectRampDays
+    effectRampDays = effectRampDays,
+    initiationHazardDay0 = initiationHazardDay0,
+    initiationCoefficientsDay0 = initiationCoefficientsDay0
   )
   .assertSimulationSettings(settings)
 
@@ -355,7 +411,7 @@ simulateCloneCensorWeightData <- function(n = 5000,
   x <- .simulateCovariates(n, settings)
   eta <- .linearPredictors(x, settings)
   maxDays <- settings$maxDays
-  startDay <- .constantHazardEventDay(stats::rexp(n), .dailyCumulativeHazard(eta$initiation), maxDays)
+  startDay <- .initiationEventDay(stats::rexp(n), eta, settings, maxDays)
   outcomeDay <- .outcomeEventDay(stats::rexp(n), eta$outcome, .regularPath(startDay, settings), settings)
   deathDay <- .constantHazardEventDay(stats::rexp(n), .dailyCumulativeHazard(eta$death), maxDays)
   observationEndDay <- .constantHazardEventDay(stats::rexp(n), .hazardIncrement(settings$observationEndHazard), maxDays)
@@ -450,6 +506,12 @@ simulateCloneCensorWeightData <- function(n = 5000,
   }
   checkmate::assertNumber(settings$treatmentEffect, finite = TRUE, .var.name = "treatmentEffect", add = errorMessages)
   checkmate::assertInt(settings$effectRampDays, lower = 1, .var.name = "effectRampDays", add = errorMessages)
+  # Optional (NULL: the same as on the other days), so settings created before they existed are valid:
+  checkmate::assertNumber(settings$initiationHazardDay0, lower = 0, upper = 1, null.ok = TRUE, .var.name = "initiationHazardDay0", add = errorMessages)
+  if (isTRUE(settings$initiationHazardDay0 %in% c(0, 1))) {
+    errorMessages$push("initiationHazardDay0 must be strictly between 0 and 1")
+  }
+  checkmate::assertNumeric(settings$initiationCoefficientsDay0, finite = TRUE, any.missing = FALSE, len = settings$nCovariates, null.ok = TRUE, .var.name = "initiationCoefficientsDay0", add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   invisible(settings)
 }
@@ -491,6 +553,12 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #' Under DGP `"a"`, with G equal to the DGP's `graceEnd`, the two grace regimes give the same truth.
 #' Under DGP `"b"`, the binary-at-G regime moves the start of persons who would not start by G to
 #' earlier days, where the effect has had longer to build up.
+#'
+#' The start-day probabilities P(A = a | X) use the day-0 initiation hazard when the settings have
+#' day-0 initiation parameters. Under DGP `"a"`, the truths of strategies with G equal to the DGP's
+#' `graceEnd` (and of `neverInitiate`) do not depend on the initiation process at all, and those of
+#' strategies with G up to `graceEnd` do not depend on the day-0 parameters. Under DGP `"b"`, the
+#' `initiateWithin` truths depend on them under both grace regimes.
 #'
 #' With `riskStart = 0` the risks count outcomes from day 0 (the index date), the estimands of analyses
 #' with `riskStart = 0`. An analysis with `riskStart = r > 0` (with CohortMethod's default removal of
@@ -589,7 +657,7 @@ computeTrueRisks <- function(settings,
 
   eta <- .linearPredictors(x, settings)
   maxDays <- settings$maxDays
-  naturalStartDay <- .constantHazardEventDay(initiationE, .dailyCumulativeHazard(eta$initiation), Inf)
+  naturalStartDay <- .initiationEventDay(initiationE, eta, settings, Inf)
   deathDay <- .constantHazardEventDay(deathE, .dailyCumulativeHazard(eta$death), maxDays)
 
   # Probability of the outcome or death on days 0..riskStart - 1 (untreated hazards):

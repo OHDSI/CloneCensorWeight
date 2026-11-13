@@ -20,6 +20,8 @@ simulateCloneCensorWeightData(
   deathCoefficients = rep(0.2, nCovariates),
   treatmentEffect = log(0.5),
   effectRampDays = 30,
+  initiationHazardDay0 = NULL,
+  initiationCoefficientsDay0 = NULL,
   seed = NULL
 )
 }
@@ -57,6 +59,12 @@ hazard.}
 \item{effectRampDays}{For DGP \code{"b"}, the number of days since initiation it takes the effect
 to reach \code{treatmentEffect}.}
 
+\item{initiationHazardDay0}{Daily probability of starting the treatment on day 0 when X = 0, or
+\code{NULL} for \code{initiationHazard}.}
+
+\item{initiationCoefficientsDay0}{Log odds ratios of the initiation hazard of day 0 for the
+covariates, or \code{NULL} for \code{initiationCoefficients}.}
+
 \item{seed}{The seed for the random number generator, or \code{NULL} to leave it as it
 is.}
 }
@@ -75,7 +83,8 @@ baseline covariates X: covariate j is binary (with prevalence \code{binaryPreval
 standard normal when j is even. On each day, the daily probabilities (hazards) are, on the logit
 scale:
 \itemize{
-\item initiation of the treatment, for persons who have not started: \code{qlogis(initiationHazard) + X \%*\% initiationCoefficients};
+\item initiation of the treatment, for persons who have not started: \code{qlogis(initiationHazard) + X \%*\% initiationCoefficients}, except on day 0 when \code{initiationHazardDay0} or
+\code{initiationCoefficientsDay0} is given: \code{qlogis(initiationHazardDay0) + X \%*\% initiationCoefficientsDay0} (each \code{NULL} one takes the value of the other days);
 \item the outcome: \code{qlogis(outcomeHazard) + X \%*\% outcomeCoefficients}, plus the treatment effect below;
 \item death: \code{qlogis(deathHazard) + X \%*\% deathCoefficients} (not affected by the treatment);
 \item end of observation: \code{observationEndHazard}, independent of X.
@@ -92,13 +101,16 @@ person who started on day \code{A}. The effect starts the day after initiation a
 since initiation, so the start day within a grace period changes later risk.
 }
 
-The daily initiation hazard is constant over time, so the probability of starting by day \code{G},
-\code{1 - (1 - plogis(qlogis(initiationHazard) + X \%*\% initiationCoefficients))^(G + 1)}, is not linear
-in X on the logit scale. The binary censoring model of an \code{initiateWithin(G)} strategy, a logistic
-regression on X fitted by \code{\link[=fitCensoringModels]{fitCensoringModels()}}, is therefore misspecified on these data. Its bias
-is negligible when initiation is weakly confounded or rare, but it can be detected with strong
-covariate effects on initiation and a high daily initiation hazard. The pooled logistic initiation
-hazard models of \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies are correctly specified.
+Without the day-0 parameters, the daily initiation hazard is constant over time, so the
+probability of starting by day \code{G}, \code{1 - (1 - plogis(qlogis(initiationHazard) + X \%*\% initiationCoefficients))^(G + 1)}, is not linear in X on the logit scale. The binary censoring model
+of an \code{initiateWithin(G)} strategy, a logistic regression on X fitted by \code{\link[=fitCensoringModels]{fitCensoringModels()}}, is
+therefore misspecified on these data. Its bias is negligible when initiation is weakly confounded
+or rare, but it can be detected with strong covariate effects on initiation and a high daily
+initiation hazard. The pooled logistic initiation hazard models of \code{"notInitiateWithin"} and
+\code{"neverInitiate"} strategies are correctly specified. With \code{initiationCoefficientsDay0} different
+from \code{initiationCoefficients}, the covariates change \emph{when} persons start (on day 0 or later), and
+the initiation hazard model is correctly specified only with
+\code{createFitCensoringModelsArgs(covariateTimeInteraction = "day0")} (or \code{"interval"}).
 
 Because the daily initiation hazard is the same on every day, the probability of not starting on
 days 0 to \code{d} is \code{(1 - h)^(d + 1)} for a daily hazard \code{h}: with the default \code{initiationHazard = 0.02}, about 0.06\% for persons with X = 0 by day 365, and less for those with a higher hazard. A
