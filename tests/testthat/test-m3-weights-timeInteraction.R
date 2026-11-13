@@ -1,8 +1,8 @@
 library(testthat)
 
-# Contract section 11.3: covariateTimeInteraction = "day0" adds covariate x I(first interval) columns,
-# and "interval" adds covariate x time-basis columns, to the pooled logistic initiation hazard model;
-# they are penalized like the covariates, and the time-basis columns are not.
+# Contract section 11.3: covariateTimeInteraction = "day0" adds covariate x I(day 0) columns (daily
+# intervals only), and "interval" adds covariate x time-basis columns, to the pooled logistic initiation
+# hazard model; they are penalized like the covariates, and the time-basis columns are not.
 
 # Hand-built design of the pooled logistic hazard model on K_g rows (indicator basis): intervals without
 # initiations, or where everyone at risk initiates, are left out; the first remaining interval is the
@@ -79,7 +79,7 @@ interactionReferenceWeights <- function(segments, fixture, design, coefficients,
 test_that("Interaction coefficients and weights match glm on the expanded rows without a penalty", {
   configurations <- list(
     list(covariateTimeInteraction = "day0", sameDayOrdering = "eventsFirst", intervalLength = 1),
-    list(covariateTimeInteraction = "day0", sameDayOrdering = "deviationFirst", intervalLength = 2),
+    list(covariateTimeInteraction = "day0", sameDayOrdering = "deviationFirst", intervalLength = 1),
     list(covariateTimeInteraction = "interval", sameDayOrdering = "eventsFirst", intervalLength = 2),
     list(covariateTimeInteraction = "interval", sameDayOrdering = "deviationFirst", intervalLength = 1)
   )
@@ -145,6 +145,19 @@ test_that("Interaction columns are penalized and time-basis columns are not", {
   basis <- startsWith(names(model$coefficients), "timeBasis") | names(model$coefficients) == "(Intercept)"
   expect_equal(model$coefficients[basis], model$numerator$coefficients[names(model$coefficients)[basis]], tolerance = 1e-5)
   expect_true(all(model$coefficients[startsWith(names(model$coefficients), "timeBasis")] != 0))
+})
+
+test_that("covariateTimeInteraction = 'day0' needs daily intervals", {
+  # Review of contract 11.3: with longer intervals the first interval is not day 0.
+  for (intervalLength in c(2, 7)) {
+    error <- tryCatch(
+      createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = intervalLength), covariateTimeInteraction = "day0"),
+      error = function(e) conditionMessage(e)
+    )
+    expect_match(gsub("\\s*\\n\\s*\\*\\s*", " ", error), "covariateTimeInteraction = \"day0\" needs daily intervals", fixed = TRUE)
+  }
+  expect_equal(createFitCensoringModelsArgs(covariateTimeInteraction = "day0")$covariateTimeInteraction, "day0")
+  expect_equal(createFitCensoringModelsArgs(timeBasis = createTimeBasis(intervalLength = 7), covariateTimeInteraction = "interval")$covariateTimeInteraction, "interval")
 })
 
 test_that("covariateTimeInteraction is not available for the Cox model", {

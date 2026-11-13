@@ -86,7 +86,7 @@ With the indicator basis, an interval without initiations gets a hazard of 0, an
 which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 of these intervals are left out of the fit, and the first remaining interval is the reference.
 With \code{covariateTimeInteraction = "day0"} or \code{"interval"}, the pooled logistic model also has the
-products of the covariates with an indicator of the first interval, or with each time-basis
+products of the covariates with an indicator of day 0 (daily intervals), or with each time-basis
 column, penalized like the covariates (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 \item \code{"notInitiateWithin"} with \code{postGraceModel = "binary"} (the default): also the binary model at \code{G}
 of an \code{"initiateWithin(G)"} strategy of the same treatment (shared with such a strategy when the
@@ -118,8 +118,10 @@ With \code{useCovariates = FALSE} the models have only an intercept and time, so
 numerator models.
 
 Records of day 0 can follow the treatment decision of that day (for example the diagnoses of the
-visit at which a drug is prescribed). So when a strategy allows initiation on day 0 (an
-\code{"initiateWithin"} strategy with \code{graceStart = 0}), the function warns (once) if the models use
+visit at which a drug is prescribed). Every censoring model predicts initiation on day 0: the binary
+model of an \code{"initiateWithin"} strategy (with \code{graceStart = 0}) the probability of starting on days
+\verb{0..G}, and the hazard models of \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies the hazard
+of starting from day 0 on. So the function warns (once, naming the strategies) if the models use
 covariates whose windows end on day 0 or later: those of analyses with \code{endDay >= 0} in
 \code{cloneCensorWeightData$analysisRef}, as with FeatureExtraction's default \code{endDays = 0}. Extract the
 covariates with \code{endDays = -1} instead.

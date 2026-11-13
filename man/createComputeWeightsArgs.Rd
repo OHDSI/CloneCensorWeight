@@ -10,7 +10,8 @@ createComputeWeightsArgs(
 )
 }
 \arguments{
-\item{stabilized}{Stabilize the weights with a numerator model of time only?}
+\item{stabilized}{Stabilize the weights with a numerator model of time only? It does not change which
+weights the Cox and pooled logistic outcome models use (see details).}
 
 \item{truncation}{An object of type \code{WeightTruncation} as created using
 \code{\link[=createWeightTruncation]{createWeightTruncation()}}.}
@@ -20,6 +21,24 @@ An object of type \code{ComputeWeightsArgs}.
 }
 \description{
 Create a parameter object for computing the censoring weights
+}
+\details{
+\code{stabilized} sets the weights \code{weight} that \code{\link[=computeCensoringWeights]{computeCensoringWeights()}} stores on the segments, and
+so the scale on which the truncation cap is computed and applied. These weights give the weighted
+Kaplan-Meier and Aalen-Johansen risks (which, without truncation, are the same either way) and the
+weighted counts of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}. The Cox and pooled logistic outcome models do not use
+\code{stabilized}: they use the weights chosen by \code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}
+(unstabilized by default), formed from the truncated \code{weight} and the segments' stabilization
+numerators.
+
+So with the defaults, \code{stabilized = TRUE} and \code{msmWeights = "unstabilized"}, the cap does not bound
+the weights of the Cox and pooled logistic models: these are the truncated stabilized weights
+divided by the numerator, so their cap on a day is the cap divided by that day's numerator. For a
+\code{"neverInitiate"} strategy the numerator is the share of persons who have not initiated yet, which
+can be small at long horizons: in a simulation with a 365-day horizon, the 99th percentile cap was
+5.7 and the largest unstabilized weight of the \code{"neverInitiate"} strategy was 369. To truncate the
+weights of these models at a percentile of their own distribution, use \code{stabilized = FALSE} with
+\code{msmWeights = "unstabilized"}.
 }
 \examples{
 args <- createComputeWeightsArgs(stabilized = FALSE)

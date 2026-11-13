@@ -41,7 +41,9 @@ last segment weight of each clone with segments, before truncation.
 
 \code{metaData$weights} holds whether the weights are stabilized, the truncation rule, \code{caps} (a tibble
 with, per strategy, the \code{cap} used, \code{NA} without truncation, and \code{truncatedShare}, the share of the
-strategy's segments whose weight was truncated), a summary of the untruncated weights,
+strategy's clones (with segments) whose weight was truncated on at least one segment, that is whose
+\code{maxWeight} exceeds the cap; unlike a share of segments, it does not depend on the extra cuts of
+\code{outcomeTimeBasis}), a summary of the untruncated weights,
 \code{cutIntervalLength}, the interval length of the \code{outcomeTimeBasis} grid the clones are split on
 (\code{NA} without one), and \code{censoringModels}, from which \code{\link[=computeWeightDistribution]{computeWeightDistribution()}} evaluates the
 weight of any day.
@@ -100,7 +102,8 @@ stabilizes its weight), whether or not the weights are stabilized, so that the o
 use either weight (see \code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}): the other weight is \code{weight / stabilizationNumerator} (stabilized weights) or \code{weight * stabilizationNumerator} (unstabilized
 weights). Truncation applies to \code{weight}, and the other weight is formed from the truncated
 \code{weight}, so the same segments are truncated under both weights: the other weight's cap on a
-segment is the cap divided (or multiplied) by the segment's numerator. Within a strategy, the
+segment is the cap divided (or multiplied) by the segment's numerator, so the cap does not bound
+the other weight (see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}). Within a strategy, the
 clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
 Aalen-Johansen estimates are the same with either weight.
 }

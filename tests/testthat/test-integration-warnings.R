@@ -4,13 +4,13 @@ library(testthat)
 # otherwise.
 # - fitOutcomeModel() with modelType = "logistic": a grid with no interval ending at the end of the
 #   grace period, and a smooth time basis with a grace period;
-# - fitCensoringModels(): a strategy that allows initiation on day 0 with covariate windows that end on
-#   day 0 or later;
+# - fitCensoringModels(): censoring models of initiation on day 0 (every strategy type) with covariate
+#   windows that end on day 0 or later;
 # - bootstrapCcwAnalysis(): replicates that sit predominantly on one side of the full-data estimate.
 
 gridWarning <- "No interval of the pooled logistic outcome model's grid"
 smoothWarning <- "smooth time basis"
-day0Warning <- "allows? initiation on day 0"
+day0Warning <- "models? initiation on day 0"
 shiftWarning <- "sit predominantly on one side"
 
 # Pooled logistic outcome model --------------------------------------------------------------------
@@ -149,13 +149,13 @@ test_that("fitCensoringModels warns once when initiation on day 0 meets covariat
   on.exit(close(clones), add = TRUE)
   expect_length(windowWarnings(clones, data), 0)
 
-  # Windows that end on day 0, as with FeatureExtraction's default endDays = 0. The initiateWithin
-  # strategy allows initiation on day 0; one warning, although three models are fitted:
+  # Windows that end on day 0, as with FeatureExtraction's default endDays = 0. The models of both
+  # strategies predict initiation on day 0; one warning, although three models are fitted:
   day0 <- windowData(c(0, 0))
   on.exit(close(day0), add = TRUE)
   warnings <- windowWarnings(clones, day0)
   expect_length(warnings, 1)
-  expect_match(warnings, "Strategy 1 (First) allows initiation on day 0, but the covariate windows of analyses SimulatedBinary (endDay = 0), SimulatedNormal (endDay = 0) end on day 0 or later", fixed = TRUE)
+  expect_match(warnings, "The censoring models of strategies 1 (First) and 2 (Second) model initiation on day 0, but the covariate windows of analyses SimulatedBinary (endDay = 0), SimulatedNormal (endDay = 0) end on day 0 or later", fixed = TRUE)
   expect_match(warnings, "endDays = -1", fixed = TRUE)
   # Silent without covariates:
   expect_length(windowWarnings(clones, day0, useCovariates = FALSE), 0)
@@ -175,10 +175,14 @@ test_that("fitCensoringModels warns once when initiation on day 0 meets covariat
   on.exit(close(noWindow), add = TRUE)
   expect_length(windowWarnings(clones, noWindow), 0)
 
-  # Strategies that do not allow initiation (notInitiateWithin, neverInitiate) do not warn:
+  # The initiation hazard models of notInitiateWithin and neverInitiate strategies also start on day 0,
+  # so a design without an initiateWithin strategy warns too (review of contract 11.6):
   noInitiation <- windowClones(day0, comparatorType = "neverInitiate", firstType = "notInitiateWithin")
   on.exit(close(noInitiation), add = TRUE)
-  expect_length(windowWarnings(noInitiation, day0), 0)
+  warnings <- windowWarnings(noInitiation, day0)
+  expect_length(warnings, 1)
+  expect_match(warnings, "The censoring models of strategies 1 (First) and 2 (Second) model initiation on day 0", fixed = TRUE)
+  expect_length(windowWarnings(noInitiation, windowData()), 0)
 })
 
 test_that("bootstrapCcwAnalysis warns about day-0 covariate windows once, for the full data", {
@@ -201,7 +205,7 @@ test_that("bootstrapCcwAnalysis warns about day-0 covariate windows once, for th
 
 # Bootstrap replicates on one side of the estimate -----------------------------------------------------
 
-test_that("The bootstrap shift criterion: a sign test or the median replicate, with at least 20 replicates", {
+test_that("The bootstrap shift criterion: the median replicate, with a sign test, with at least 20 replicates", {
   t0 <- dplyr::tibble(
     estimand = c("hr", "risk_target_30", "rd_30", "rr_30", "rd_60"),
     estimate = c(0.8, 0.1, 0.02, 1.25, 0.03),
@@ -238,6 +242,16 @@ test_that("The bootstrap shift criterion: a sign test or the median replicate, w
   expect_equal(shift$replicates, c(19, 19, 20))
   expect_equal(shift$below[1], 19)
   expect_equal(shift$shifted, c(NA, NA, TRUE))
+
+  # With many replicates, the sign test is significant for a negligible shift, which is not flagged
+  # without a median shift of more than 0.25 SD (review of contract 11.6):
+  small <- .bootstrapReplicateShift(t0[3, ], cbind(rd_30 = 0.02 + (stats::qnorm(stats::ppoints(1000)) + 0.15) / 100))
+  expect_lt(small$signTestP, 0.001)
+  expect_equal(small$medianShift, 0.15, tolerance = 0.01)
+  expect_false(small$shifted)
+  large <- .bootstrapReplicateShift(t0[3, ], cbind(rd_30 = 0.02 + (stats::qnorm(stats::ppoints(1000)) + 0.3) / 100))
+  expect_lt(large$signTestP, 0.001)
+  expect_true(large$shifted)
 
   # Replicates equal to the estimate are not shifted:
   same <- .bootstrapReplicateShift(t0[3, ], cbind(rd_30 = rep(0.02, 25)))

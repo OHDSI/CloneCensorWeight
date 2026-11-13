@@ -46,8 +46,8 @@ the index date (\code{endDays = 0}), so the covariates include
 records of day 0, the first day on which a strategy can
 start the treatment: for example drugs started and
 diagnoses recorded on the index date. \code{\link[=fitCensoringModels]{fitCensoringModels()}}
-then warns when a strategy allows initiation on day 0; use
-\code{endDays = -1} to end the windows the day before. Exclude
+then warns, because its models predict initiation on day 0;
+use \code{endDays = -1} to end the windows the day before. Exclude
 the treatment from the covariates: its concepts with their
 descendants (\code{excludedCovariateConceptIds} with
 \code{addDescendantsToExclude = TRUE}) and the drug classes that

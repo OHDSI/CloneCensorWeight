@@ -38,6 +38,12 @@ strategy are used.
 When few persons start the treatment by the end of a grace period, most clones of an
 \code{"initiateWithin"} strategy keep a weight of 1, and a percentile over all clones lies inside the
 distribution of the weights that vary: it truncates far more than \code{1 - upper} of them.
+
+The cap is computed from, and bounds, the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, which are
+stabilized or not as set by \code{stabilized} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}. The weights of the Cox
+and pooled logistic outcome models (\code{msmWeights} in \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}) are formed from
+these truncated weights and are not bounded by the cap when they are of the other kind; see
+\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
 }
 \examples{
 truncation <- createWeightTruncation(type = "fixed", upper = 20)

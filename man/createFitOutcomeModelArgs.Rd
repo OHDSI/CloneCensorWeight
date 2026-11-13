@@ -125,8 +125,16 @@ of -0.513, the Cox model estimated a log hazard ratio of about -0.355 with stabi
 whose hazards are shared across strategies or days. \code{"stabilized"} reproduces the earlier
 behaviour, which fitted these models with the stabilized weights of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}
 \code{stabilized = TRUE}; its standard errors are usually smaller, but it estimates that other average.
+
+Truncation applies to the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, on the scale set by
+\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} \code{stabilized}, and the weights of \code{msmWeights} are formed from the
+truncated weights. When the two differ (as with the defaults: \code{stabilized = TRUE} and
+\code{msmWeights = "unstabilized"}), the cap does not bound the weights of the Cox and pooled logistic
+models, which can then be much larger, for example for a \code{"neverInitiate"} strategy at long
+horizons; see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
+args <- createFitOutcomeModelArgs(horizons = c(30, 365), msmWeights = "stabilized")
 
 }

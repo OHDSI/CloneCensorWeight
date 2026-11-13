@@ -64,10 +64,15 @@
 #' estimate as its sampling distribution would, and the limits may not cover it. One known cause is
 #' censoring models with many covariates and a penalty, which the duplicated persons of each replicate
 #' let overfit at the full-data prior variance, moving the replicates toward the unweighted estimate.
-#' The criterion, assessed for an estimate with at least 20 finite replicates, is a two-sided sign test
-#' of the numbers of replicates above and below the estimate (ties left out) with p < 0.01, or a median
-#' replicate more than 0.5 bootstrap standard deviations from the estimate. Without a shift, it still
-#' flags about 8% of estimates with 20 replicates, 1% with 50, and fewer than 1% with 100 or more.
+#' The criterion, assessed for an estimate with at least 20 finite replicates, is a median replicate
+#' more than 0.5 bootstrap standard deviations from the estimate, or more than 0.25 standard deviations
+#' with a two-sided sign test of the numbers of replicates above and below the estimate (ties left out)
+#' with p < 0.01. The sign test alone would flag ever smaller shifts as the number of replicates grows
+#' (with 1000 replicates, about half of the estimates shifted by 0.1 standard deviation, which does not
+#' matter for the limits), hence the floor of 0.25. Without a shift, the criterion still flags about 7%
+#' of estimates with 20 replicates, 1% with 50, and fewer than 1% with 100 or more; it flags about half
+#' of the estimates shifted by 0.5 standard deviation with 20 replicates, nearly 90% with 100, and
+#' nearly all with 200 or more.
 #' `metaData$bootstrap$replicateShift` holds the statistics for these estimands.
 #'
 #' @param cloneCensorWeightData     An object of type [CloneCensorWeightData].
@@ -513,8 +518,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
 # the risk differences at the horizons. For each, from its finite replicates: the numbers above and below
 # the estimate (ties left out), the two-sided sign test p-value of those counts, the median replicate
 # minus the estimate in bootstrap standard deviations (NA when the replicates do not vary), and
-# `shifted`, TRUE when the sign test p < 0.01 or the median is more than 0.5 standard deviations from
-# the estimate, assessed only with at least 20 finite replicates (NA otherwise).
+# `shifted`, TRUE when the median is more than 0.5 standard deviations from the estimate, or more than
+# 0.25 with a sign test p < 0.01 (the sign test alone flags negligible shifts with many replicates),
+# assessed only with at least 20 finite replicates (NA otherwise).
 .bootstrapReplicateShift <- function(t0, replicates) {
   estimands <- t0$estimand[grepl("^(hr|rd_[0-9]+)$", t0$estimand)]
   rows <- list()
@@ -533,7 +539,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     medianShift <- if (is.finite(estimate) && !is.na(sd) && sd > 0) (stats::median(t) - estimate) / sd else NA_real_
     shifted <- NA
     if (length(t) >= 20 && is.finite(estimate)) {
-      shifted <- isTRUE(signTestP < 0.01) || isTRUE(abs(medianShift) > 0.5)
+      shifted <- isTRUE(abs(medianShift) > 0.5) || (isTRUE(signTestP < 0.01) && isTRUE(abs(medianShift) > 0.25))
     }
     rows[[length(rows) + 1]] <- tibble(
       estimand = estimand,

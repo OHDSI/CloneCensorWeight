@@ -3,7 +3,7 @@ library(testthat)
 # Contract section 11.5: createWeightTruncation(type = "percentile", basis = "varying") takes the
 # percentile of the maximum weights over the clones under follow-up on day tau + 1 (whose weight varies);
 # basis = "allClones" is the original rule. metaData$weights$caps reports the cap and the share of
-# segment weights truncated per strategy.
+# clones whose weight is truncated per strategy.
 
 test_that("Percentile truncation over the clones whose weight varies truncates about the nominal share", {
   # The setting of the validation repro truncationPercentileBasis.R: few persons start by G = 1, so most
@@ -54,7 +54,7 @@ test_that("Percentile truncation over the clones whose weight varies truncates a
       cap <- result$caps$cap[strategyId]
       s <- raw$strategyId == strategyId
       expect_equal(result$segments$weight[s], pmin(raw$weight[s], cap))
-      expect_equal(result$caps$truncatedShare[strategyId], mean(raw$weight[s] > cap))
+      expect_equal(result$caps$truncatedShare[strategyId], mean(personWeights$maxWeight[strategy] > cap))
     }
   }
   # Over all clones, the cap of initiateWithin(1) truncates far more than 1% of the weights that vary:
@@ -68,7 +68,47 @@ test_that("Percentile truncation over the clones whose weight varies truncates a
   caps <- attr(weighted, "metaData")$weights$caps
   close(weighted)
   expect_equal(caps$cap, c(2, 2))
-  expect_equal(caps$truncatedShare, as.vector(tapply(raw$weight > 2, raw$strategyId, mean)))
+  expect_equal(caps$truncatedShare, as.vector(tapply(personWeights$maxWeight > 2, personWeights$strategyId, mean)))
+})
+
+test_that("The truncated share does not depend on how the clones are cut", {
+  # Review of contract 11.5: a share of segments changed with the cuts of outcomeTimeBasis (0.11 vs
+  # 0.21 for the same weights and cap). The share of clones does not.
+  data <- simulateCloneCensorWeightData(
+    n = 1500, nCovariates = 1, dgp = "a", graceEnd = 7, maxDays = 40, initiationHazard = 0.02,
+    outcomeHazard = 0.004, initiationCoefficients = 1, outcomeCoefficients = 1, seed = 21
+  )
+  on.exit(close(data))
+  population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowStart = 0, riskWindowEnd = 40, endAnchor = "cohort start"
+  )))
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = list(
+    createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+    createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+  ))))
+  on.exit(close(clones), add = TRUE)
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))))
+  for (stabilized in c(FALSE, TRUE)) {
+    for (truncation in list(createWeightTruncation("fixed", 1.5), createWeightTruncation("percentile", 0.9))) {
+      args <- createComputeWeightsArgs(stabilized = stabilized, truncation = truncation)
+      coarse <- suppressMessages(computeCensoringWeights(clones, models, args))
+      daily <- suppressMessages(computeCensoringWeights(clones, models, args, outcomeTimeBasis = createTimeBasis(intervalLength = 1)))
+      label <- sprintf("stabilized = %s, %s", stabilized, truncation$type)
+      coarseCaps <- attr(coarse, "metaData")$weights$caps
+      dailyCaps <- attr(daily, "metaData")$weights$caps
+      expect_gt(nrow(collectSegments(daily)), nrow(collectSegments(coarse)))
+      expect_equal(dailyCaps$cap, coarseCaps$cap, label = label)
+      expect_equal(dailyCaps$truncatedShare, coarseCaps$truncatedShare, label = label)
+      personWeights <- as.data.frame(dplyr::collect(coarse$personWeights))
+      expect_equal(coarseCaps$truncatedShare, as.vector(tapply(personWeights$maxWeight > coarseCaps$cap[personWeights$strategyId], personWeights$strategyId, mean)), label = label)
+      close(coarse)
+      close(daily)
+    }
+  }
+  # The fixed cap truncates some clones of both strategies (unstabilized weights):
+  weighted <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs(stabilized = FALSE, truncation = createWeightTruncation("fixed", 1.5))))
+  expect_true(all(attr(weighted, "metaData")$weights$caps$truncatedShare > 0))
+  close(weighted)
 })
 
 test_that("Without clones under follow-up on day tau + 1, the percentile is taken over all clones", {

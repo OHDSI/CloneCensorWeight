@@ -41,7 +41,7 @@
 #'   which everyone at risk initiates a hazard of 1 (the limits of the maximum likelihood fit). The rows
 #'   of these intervals are left out of the fit, and the first remaining interval is the reference.
 #'   With `covariateTimeInteraction = "day0"` or `"interval"`, the pooled logistic model also has the
-#'   products of the covariates with an indicator of the first interval, or with each time-basis
+#'   products of the covariates with an indicator of day 0 (daily intervals), or with each time-basis
 #'   column, penalized like the covariates (see [createFitCensoringModelsArgs()]).
 #' - `"notInitiateWithin"` with `postGraceModel = "binary"` (the default): also the binary model at `G`
 #'   of an `"initiateWithin(G)"` strategy of the same treatment (shared with such a strategy when the
@@ -72,8 +72,10 @@
 #' numerator models.
 #'
 #' Records of day 0 can follow the treatment decision of that day (for example the diagnoses of the
-#' visit at which a drug is prescribed). So when a strategy allows initiation on day 0 (an
-#' `"initiateWithin"` strategy with `graceStart = 0`), the function warns (once) if the models use
+#' visit at which a drug is prescribed). Every censoring model predicts initiation on day 0: the binary
+#' model of an `"initiateWithin"` strategy (with `graceStart = 0`) the probability of starting on days
+#' `0..G`, and the hazard models of `"notInitiateWithin"` and `"neverInitiate"` strategies the hazard
+#' of starting from day 0 on. So the function warns (once, naming the strategies) if the models use
 #' covariates whose windows end on day 0 or later: those of analyses with `endDay >= 0` in
 #' `cloneCensorWeightData$analysisRef`, as with FeatureExtraction's default `endDays = 0`. Extract the
 #' covariates with `endDays = -1` instead.
@@ -314,13 +316,15 @@ fitCensoringModels <- function(clones,
 
 # Covariates ---------------------------------------------------------------------------------------
 
-# Warns, once, when a strategy allows initiation on day 0 ("initiateWithin" with graceStart = 0) while
-# the censoring models use covariates whose window ends on day 0 or later (`endDay >= 0` in analysisRef,
-# as with FeatureExtraction's default endDays = 0): records of day 0 may follow the treatment decision
-# of that day (Phase1Contracts section 11.6). Analyses without a window (endDay NA, such as demographics)
-# are not a concern.
+# Warns, once, when a strategy's censoring model predicts initiation on day 0 while the censoring models
+# use covariates whose window ends on day 0 or later (`endDay >= 0` in analysisRef, as with
+# FeatureExtraction's default endDays = 0): records of day 0 may follow the treatment decision of that
+# day (Phase1Contracts section 11.6). The binary model of an "initiateWithin" strategy with
+# graceStart = 0 predicts initiation on days 0..G, and the hazard models of "notInitiateWithin" and
+# "neverInitiate" strategies have a risk set that starts on day 0, so all of them are affected. Analyses
+# without a window (endDay NA, such as demographics) are not a concern.
 .warnDay0CovariateWindows <- function(strategies, cloneCensorWeightData, fitCensoringModelsArgs) {
-  day0 <- vapply(strategies, function(strategy) strategy$type == "initiateWithin" && strategy$graceStart == 0, logical(1))
+  day0 <- vapply(strategies, function(strategy) strategy$type != "initiateWithin" || strategy$graceStart == 0, logical(1))
   if (!fitCensoringModelsArgs$useCovariates || !any(day0)) {
     return(invisible(NULL))
   }
@@ -353,8 +357,9 @@ fitCensoringModels <- function(clones,
     analyses <- c(analyses[1:5], sprintf("%d more", length(analyses) - 5))
   }
   warning(sprintf(
-    "%s %s allow%s initiation on day 0, but the covariate windows of analyses %s end on day 0 or later, so the censoring models can use records of day 0 that may follow the treatment decision. Extract the covariates with windows that end before day 0, for example with endDays = -1 in FeatureExtraction::createCovariateSettings()",
-    if (length(ids) == 1) "Strategy" else "Strategies",
+    "The censoring model%s of %s %s model%s initiation on day 0, but the covariate windows of analyses %s end on day 0 or later, so the censoring models can use records of day 0 that may follow the treatment decision. Extract the covariates with windows that end before day 0, for example with endDays = -1 in FeatureExtraction::createCovariateSettings()",
+    if (length(ids) == 1) "" else "s",
+    if (length(ids) == 1) "strategy" else "strategies",
     paste(sprintf("%d (%s)", ids, labels), collapse = " and "),
     if (length(ids) == 1) "s" else "",
     paste(analyses, collapse = ", ")
@@ -835,9 +840,10 @@ fitCensoringModels <- function(clones,
 }
 
 # The interaction basis (intervals x columns) whose columns multiply every covariate: none, an indicator
-# of the first interval ("day0"), or the time-basis columns ("interval"). A column that takes a single
-# value over `rowIntervals`, the intervals with rows in the fit, would duplicate the covariates, so it is
-# left out (for example "day0" when the first interval is not fit, or nobody reaches a later one).
+# of the first interval, which is day 0 ("day0", whose settings require daily intervals), or the
+# time-basis columns ("interval"). A column that takes a single value over `rowIntervals`, the intervals
+# with rows in the fit, would duplicate the covariates, so it is left out (for example "day0" when the
+# first interval is not fit, or nobody reaches a later one).
 .createInteractionBasis <- function(covariateTimeInteraction, basis, k, rowIntervals) {
   if (covariateTimeInteraction == "day0") {
     interactionBasis <- matrix(as.numeric(k == 0), ncol = 1, dimnames = list(NULL, "day0"))

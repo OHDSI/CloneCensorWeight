@@ -64,12 +64,14 @@ reference:
       - computeKaplanMeier
       - computeMdrr
       - computeWeightDistribution
+      - computeCensoringModelCalibration
       - getAttritionTable
       - plotLovePlot
       - plotCovariateBalance
       - plotKaplanMeier
       - plotMdrr
       - plotWeightDistribution
+      - plotCensoringModelCalibration
       - plotCalibration
 
   - title: "Multi-Analysis Runner"

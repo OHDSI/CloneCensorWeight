@@ -445,3 +445,42 @@ test_that("Bootstrap replicates fit the Cox MSM with the msmWeights weights", {
   km <- colnames(results$unstabilized$replicates) != "hr"
   expect_equal(results$unstabilized$replicates[, km], results$stabilized$replicates[, km], tolerance = 1e-12)
 })
+
+test_that("Weighted clones without stabilization numerators stop with a message to rerun computeCensoringWeights", {
+  # Review of contract 11.1: weighted clones made before the numerator was stored gave a raw dplyr error.
+  analysis <- msmAnalysis("notInitiateWithin")
+  on.exit(closeMsmAnalysis(analysis))
+  weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE))
+  on.exit(close(weighted), add = TRUE)
+  segments <- dplyr::collect(weighted$segments)
+  segments$stabilizationNumerator <- NULL
+  weighted$segments <- segments
+  for (modelType in c("cox", "km")) {
+    expect_error(
+      fitOutcomeModel(weighted, createFitOutcomeModelArgs(modelType = modelType, horizons = 10)),
+      "earlier version of computeCensoringWeights\\(\\). Rerun computeCensoringWeights\\(\\)"
+    )
+  }
+})
+
+test_that("The cap bounds the weights of computeCensoringWeights, and the MSM weights only when of the same kind", {
+  # Contract 11.1 as documented at review: the other weight is formed from the truncated weight, so the
+  # cap computed on the stabilized scale does not bound the unstabilized MSM weights of neverInitiate.
+  analysis <- msmAnalysis("neverInitiate")
+  on.exit(closeMsmAnalysis(analysis))
+  truncation <- createWeightTruncation("percentile", 0.9)
+  for (stabilized in c(TRUE, FALSE)) {
+    weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = stabilized, truncation = truncation))
+    segments <- collectMsmSegments(weighted)
+    caps <- attr(weighted, "metaData")$weights$caps
+    close(weighted)
+    cap <- caps$cap[segments$strategyId]
+    expect_true(all(segments$weight <= cap + 1e-12))
+    unstabilized <- if (stabilized) segments$weight / segments$stabilizationNumerator else segments$weight
+    if (stabilized) {
+      expect_gt(max(unstabilized[segments$strategyId == 2]), caps$cap[2])
+    } else {
+      expect_true(all(unstabilized <= cap + 1e-12))
+    }
+  }
+})

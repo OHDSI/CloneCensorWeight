@@ -40,14 +40,25 @@
 #' fewer groups (for example two with a single binary covariate). In a well-calibrated model the
 #' observed share is close to the mean prediction in every group.
 #'
-#' A miscalibrated `1 - S(G | X)` means that `1 / S(G | X)` does not reweight the compliant clones of
-#' the `"notInitiateWithin"` strategy after `G` to the persons under follow-up at `G`, so the
-#' covariates are not balanced after the grace period (see [computeCovariateBalance()]). It can come
-#' from a hazard model that assumes the same covariate effects on every day of the grace period when
-#' covariates change *when* persons start (see `covariateTimeInteraction` in
-#' [createFitCensoringModelsArgs()]), or from starting the treatment during the grace period changing
-#' the risk of the outcome or death during the grace period (then the observed share among persons
-#' still under follow-up at `G` differs from the probability of initiating by `G`).
+#' The observed share is taken among the persons still under follow-up at `G`. It estimates the
+#' probability of starting by `G` only when starting the treatment during the grace period does not
+#' change the risk of the outcome or death during the grace period. A gap between `1 - S(G | X)` and
+#' the observed share therefore has two possible causes, which this diagnostic cannot tell apart:
+#'
+#' - The hazard model is misspecified, for example it assumes the same covariate effects on every day
+#'   of the grace period when covariates change *when* persons start (see `covariateTimeInteraction`
+#'   in [createFitCensoringModelsArgs()]). Then `1 / S(G | X)` does not reweight the compliant clones
+#'   of the `"notInitiateWithin"` strategy after `G` to the persons under follow-up at `G`. A gap that
+#'   closes when interactions are added points to this cause.
+#' - Starting the treatment changes the risk of the outcome or death during the grace period. Then the
+#'   persons under follow-up at `G` are a selected group, the observed share differs from the
+#'   probability of starting by `G`, and the hazard model, which follows each person only until the
+#'   outcome or death, is the correct one: it is the binary model, calibrated to the observed share by
+#'   construction, whose weights after `G` are biased (see `postGraceModel` in
+#'   [createFitCensoringModelsArgs()]).
+#'
+#' So good calibration of the binary model does not show that `postGraceModel = "binary"` is
+#' appropriate, and a gap for the hazard model does not show that it is not.
 #'
 #' @param clones          An object of type [CcwClones] as created by `createClones()` (or the
 #'                        weighted clones returned by [computeCensoringWeights()]).

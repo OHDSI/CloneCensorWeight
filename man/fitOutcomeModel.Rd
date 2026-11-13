@@ -36,7 +36,8 @@ strategy of not initiating do on day 0 with \code{"eventsFirst"};
 for \code{"logistic"} those of the outcome model and, with competing death, of the death model,
 prefixed with \code{"death:"};
 \item \code{counts}: per strategy, the number of clones, persons, outcomes and competing events, the
-person-days, and the weighted person-days, outcomes and competing events;
+person-days, and the weighted person-days, outcomes and competing events (weighted with the
+segments' \code{weight} from \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}, not with the weights of \code{msmWeights});
 \item \code{metaData}: the strategies, outcome ID, target ID, competing events, risk start, and the
 arguments.
 }

@@ -70,7 +70,8 @@
 #' stabilizationNumerator` (stabilized weights) or `weight * stabilizationNumerator` (unstabilized
 #' weights). Truncation applies to `weight`, and the other weight is formed from the truncated
 #' `weight`, so the same segments are truncated under both weights: the other weight's cap on a
-#' segment is the cap divided (or multiplied) by the segment's numerator. Within a strategy, the
+#' segment is the cap divided (or multiplied) by the segment's numerator, so the cap does not bound
+#' the other weight (see [createComputeWeightsArgs()]). Within a strategy, the
 #' clones at risk at an event time share the numerator, so the weighted Kaplan-Meier and
 #' Aalen-Johansen estimates are the same with either weight.
 #'
@@ -99,7 +100,9 @@
 #'
 #' `metaData$weights` holds whether the weights are stabilized, the truncation rule, `caps` (a tibble
 #' with, per strategy, the `cap` used, `NA` without truncation, and `truncatedShare`, the share of the
-#' strategy's segments whose weight was truncated), a summary of the untruncated weights,
+#' strategy's clones (with segments) whose weight was truncated on at least one segment, that is whose
+#' `maxWeight` exceeds the cap; unlike a share of segments, it does not depend on the extra cuts of
+#' `outcomeTimeBasis`), a summary of the untruncated weights,
 #' `cutIntervalLength`, the interval length of the `outcomeTimeBasis` grid the clones are split on
 #' (`NA` without one), and `censoringModels`, from which [computeWeightDistribution()] evaluates the
 #' weight of any day.
@@ -273,13 +276,15 @@ computeCensoringWeights <- function(clones,
   caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay)
   weightedClones$ccwWCaps <- caps |>
     filter(!is.na(.data$cap))
+  # The share of clones with a truncated weight, which (unlike a share of segments) does not depend on
+  # how the clones are cut:
   truncated <- .andromedaSql(weightedClones, "
-    SELECT ccwWWeighted.strategyId,
-      AVG(CASE WHEN ccwWCaps.cap IS NOT NULL AND ccwWWeighted.weight > ccwWCaps.cap THEN 1.0 ELSE 0.0 END) AS truncatedShare
-    FROM ccwWWeighted
+    SELECT ccwWPersonWeights.strategyId,
+      AVG(CASE WHEN ccwWCaps.cap IS NOT NULL AND ccwWPersonWeights.maxWeight > ccwWCaps.cap THEN 1.0 ELSE 0.0 END) AS truncatedShare
+    FROM ccwWPersonWeights
     LEFT JOIN ccwWCaps
-      ON ccwWWeighted.strategyId = ccwWCaps.strategyId
-    GROUP BY ccwWWeighted.strategyId;")
+      ON ccwWPersonWeights.strategyId = ccwWCaps.strategyId
+    GROUP BY ccwWPersonWeights.strategyId;")
   caps$truncatedShare <- as.numeric(truncated$truncatedShare[match(caps$strategyId, truncated$strategyId)])
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwWFinalSegments AS

@@ -46,14 +46,26 @@ size (deciles by default); persons with tied predictions are kept in one group, 
 fewer groups (for example two with a single binary covariate). In a well-calibrated model the
 observed share is close to the mean prediction in every group.
 
-A miscalibrated \code{1 - S(G | X)} means that \code{1 / S(G | X)} does not reweight the compliant clones of
-the \code{"notInitiateWithin"} strategy after \code{G} to the persons under follow-up at \code{G}, so the
-covariates are not balanced after the grace period (see \code{\link[=computeCovariateBalance]{computeCovariateBalance()}}). It can come
-from a hazard model that assumes the same covariate effects on every day of the grace period when
-covariates change \emph{when} persons start (see \code{covariateTimeInteraction} in
-\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}), or from starting the treatment during the grace period changing
-the risk of the outcome or death during the grace period (then the observed share among persons
-still under follow-up at \code{G} differs from the probability of initiating by \code{G}).
+The observed share is taken among the persons still under follow-up at \code{G}. It estimates the
+probability of starting by \code{G} only when starting the treatment during the grace period does not
+change the risk of the outcome or death during the grace period. A gap between \code{1 - S(G | X)} and
+the observed share therefore has two possible causes, which this diagnostic cannot tell apart:
+\itemize{
+\item The hazard model is misspecified, for example it assumes the same covariate effects on every day
+of the grace period when covariates change \emph{when} persons start (see \code{covariateTimeInteraction}
+in \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}). Then \code{1 / S(G | X)} does not reweight the compliant clones
+of the \code{"notInitiateWithin"} strategy after \code{G} to the persons under follow-up at \code{G}. A gap that
+closes when interactions are added points to this cause.
+\item Starting the treatment changes the risk of the outcome or death during the grace period. Then the
+persons under follow-up at \code{G} are a selected group, the observed share differs from the
+probability of starting by \code{G}, and the hazard model, which follows each person only until the
+outcome or death, is the correct one: it is the binary model, calibrated to the observed share by
+construction, whose weights after \code{G} are biased (see \code{postGraceModel} in
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+}
+
+So good calibration of the binary model does not show that \code{postGraceModel = "binary"} is
+appropriate, and a gap for the hazard model does not show that it is not.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

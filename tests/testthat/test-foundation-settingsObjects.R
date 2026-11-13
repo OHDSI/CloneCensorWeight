@@ -265,6 +265,11 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expect_error(createFitOutcomeModelArgs(horizons = c(30.5)), "horizons")
   expect_error(createFitOutcomeModelArgs(horizons = c(-1)), "horizons")
   expect_error(createFitOutcomeModelArgs(varianceEstimator = "jackknife"), "varianceEstimator")
+  # Settings saved before msmWeights existed load with the default:
+  untypedList <- jsonlite::fromJSON(createFitOutcomeModelArgs(msmWeights = "stabilized")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$msmWeights <- NULL
+  expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$msmWeights, "unstabilized")
+  expect_equal(FitOutcomeModelArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))$msmWeights, "unstabilized")
   expect_error(createFitOutcomeModelArgs(msmWeights = "truncated"), "msmWeights")
   expect_error(createFitOutcomeModelArgs(msmWeights = TRUE), "msmWeights")
   expect_error(createFitOutcomeModelArgs(useCovariates = TRUE), "Not yet supported")

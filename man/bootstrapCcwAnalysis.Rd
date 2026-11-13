@@ -116,10 +116,15 @@ hazard ratio (on the log scale) or of a risk difference: then the replicates do 
 estimate as its sampling distribution would, and the limits may not cover it. One known cause is
 censoring models with many covariates and a penalty, which the duplicated persons of each replicate
 let overfit at the full-data prior variance, moving the replicates toward the unweighted estimate.
-The criterion, assessed for an estimate with at least 20 finite replicates, is a two-sided sign test
-of the numbers of replicates above and below the estimate (ties left out) with p < 0.01, or a median
-replicate more than 0.5 bootstrap standard deviations from the estimate. Without a shift, it still
-flags about 8\% of estimates with 20 replicates, 1\% with 50, and fewer than 1\% with 100 or more.
+The criterion, assessed for an estimate with at least 20 finite replicates, is a median replicate
+more than 0.5 bootstrap standard deviations from the estimate, or more than 0.25 standard deviations
+with a two-sided sign test of the numbers of replicates above and below the estimate (ties left out)
+with p < 0.01. The sign test alone would flag ever smaller shifts as the number of replicates grows
+(with 1000 replicates, about half of the estimates shifted by 0.1 standard deviation, which does not
+matter for the limits), hence the floor of 0.25. Without a shift, the criterion still flags about 7\%
+of estimates with 20 replicates, 1\% with 50, and fewer than 1\% with 100 or more; it flags about half
+of the estimates shifted by 0.5 standard deviation with 20 replicates, nearly 90\% with 100, and
+nearly all with 200 or more.
 \code{metaData$bootstrap$replicateShift} holds the statistics for these estimands.
 }
 \examples{

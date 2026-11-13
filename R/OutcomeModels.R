@@ -126,7 +126,8 @@
 #'   for `"logistic"` those of the outcome model and, with competing death, of the death model,
 #'   prefixed with `"death:"`;
 #' - `counts`: per strategy, the number of clones, persons, outcomes and competing events, the
-#'   person-days, and the weighted person-days, outcomes and competing events;
+#'   person-days, and the weighted person-days, outcomes and competing events (weighted with the
+#'   segments' `weight` from [computeCensoringWeights()], not with the weights of `msmWeights`);
 #' - `metaData`: the strategies, outcome ID, target ID, competing events, risk start, and the
 #'   arguments.
 #'
@@ -249,6 +250,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     pull()
   if (length(riskStart) != 1) {
     stop("All clones must have the same riskStart")
+  }
+  if (!"stabilizationNumerator" %in% colnames(weightedClones$segments)) {
+    stop("The weighted clones have no stabilizationNumerator: they were created by an earlier version of computeCensoringWeights(). Rerun computeCensoringWeights()")
   }
   segments <- weightedClones$segments |>
     select("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "outcome", "competing") |>
@@ -777,7 +781,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   offGrid <- Filter(function(end) end$t %% intervalLength != 0, ends)
   if (length(offGrid) > 0) {
     warning(sprintf(
-      "No interval of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d) ends where the grace period censors clones: %s. A clone counts as at risk for the whole interval it is censored in, which dilutes that interval's hazard and biases the risks. Use an intervalLength that divides t (for example 1): an indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      "No interval of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d) ends where the grace period ends (where clones are censored or their weights change): %s. A clone counts as at risk for the whole interval it is censored in, which dilutes that interval's hazard and biases the risks. Use an intervalLength that divides t (for example 1): an indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
       intervalLength, data$riskStart, paste(vapply(offGrid, function(end) end$description, character(1)), collapse = "; ")
     ), call. = FALSE)
   }
