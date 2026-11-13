@@ -66,6 +66,7 @@ ccwrRowsToWeightedClones <- function(weighted, lungcancer, graceEnd) {
     startTime = rows$Tstart,
     stopTime = rows$Tstop,
     weight = unname(rows$weight_Cox),
+    stabilizationNumerator = rep(1, nrow(rows)),
     outcome = as.integer(rows$outcome),
     competing = 0L
   )
@@ -181,8 +182,9 @@ test_that("Outcome stage: KM risks and Cox MSM on ccwr's lungcancer clones and w
 # ccwr's grace period is 182 days (our G = 181), and both use the 7 Maringe covariates as censoring
 # predictors without a prior. ccwr: Cox censoring models in both arms (Efron), unstabilized weights,
 # emul_estimate(method = "KM") and "Cox" with predictors = NULL. Ours: initiateWithin(181) (binary-at-G
-# model) vs notInitiateWithin(181) (Cox initiation-hazard model, Breslow), unstabilized weights without
-# truncation, "km" and the default "cox" report. Exact agreement is impossible: ccwr's initiate arm uses a
+# model) vs notInitiateWithin(181) (Cox initiation-hazard model, Breslow, also after G as in ccwr's
+# Control arm: postGraceModel = "hazard"), unstabilized weights without truncation, "km" and the default
+# "cox" report. Exact agreement is impossible: ccwr's initiate arm uses a
 # Cox model with every censoring event at G instead of a binary model at G, its ties are Efron, and its
 # same-day rules differ (plan section 6.4).
 #
@@ -278,7 +280,8 @@ test_that("Full pipeline vs ccwr on lungcancer (reported, not gated)", {
   on.exit(close(clones), add = TRUE)
   models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(
     hazardModelType = "cox",
-    prior = Cyclops::createPrior("none")
+    prior = Cyclops::createPrior("none"),
+    postGraceModel = "hazard"
   )))
   weightedClones <- suppressMessages(computeCensoringWeights(
     clones, models, createComputeWeightsArgs(stabilized = FALSE, truncation = createWeightTruncation("none"))

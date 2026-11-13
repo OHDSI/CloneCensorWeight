@@ -6,7 +6,7 @@ library(testthat)
 
 # Simulated data, clones and censoring models (with covariates and no prior, so the weights vary by
 # person) of initiateWithin(5) vs `comparatorType`. The caller closes `data` and `clones`.
-msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eventsFirst", hazardModelType = "logistic", seed = 1) {
+msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eventsFirst", hazardModelType = "logistic", postGraceModel = "binary", seed = 1) {
   data <- simulateCloneCensorWeightData(
     n = 300, maxDays = 20, graceEnd = 5, initiationHazard = 0.05, outcomeHazard = 0.01, deathHazard = 0.005, seed = seed
   )
@@ -20,7 +20,9 @@ msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eve
     createTreatmentStrategy(2, "Comparator", comparatorType, graceEnd = if (comparatorType == "neverInitiate") NULL else 5)
   )
   clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering)))
-  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"))))
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(
+    hazardModelType = hazardModelType, prior = Cyclops::createPrior("none"), postGraceModel = postGraceModel
+  )))
   return(list(data = data, clones = clones, models = models))
 }
 
@@ -54,7 +56,9 @@ msmCoxControl <- function() survival::coxph.control(eps = 1e-12, toler.chol = 1e
 # The unstabilized W(d) of each segment (d its last day) and its stabilization numerator, written out
 # from the fitted censoring models ("eventsFirst", daily pooled logistic hazard model; contract section
 # 5.4): 1 up to day G and 1 / pi after it, with numerator pi-bar after G (binary); 1 / prod over days
-# k < d, k <= H of (1 - h_k), with the same product of the numerator model as numerator (hazard).
+# k < d, k <= H of (1 - h_k), with the same product of the numerator model as numerator (hazard), except
+# after G for a hazard strategy with the binary model at G (postGraceModel = "binary", contract section
+# 11.2): 1 / (1 - pi), with numerator 1 - pi-bar.
 handMsmWeights <- function(models, segments, riskStart) {
   day <- segments$stopTime + riskStart - 1
   weight <- rep(NA_real_, nrow(segments))
@@ -75,6 +79,12 @@ handMsmWeights <- function(models, segments, riskStart) {
         k <- seq_len(min(day[idx[j]], model$horizon + 1))
         weight[idx[j]] <- 1 / prod(1 - stats::plogis(baseline[k] + linearPredictor[j]))
         numerator[idx[j]] <- prod(1 - stats::plogis(numeratorBaseline[k]))
+      }
+      if (!is.null(model$postGrace)) {
+        after <- idx[day[idx] > model$horizon]
+        pi <- model$postGrace$predictions$propensityScore[match(segments$rowId[after], model$postGrace$predictions$rowId)]
+        weight[after] <- 1 / (1 - pi)
+        numerator[after] <- 1 - model$postGrace$numerator$propensityScore
       }
     }
   }
@@ -243,6 +253,123 @@ test_that("The stored numerator reconstructs the other weight for every strategy
     close(weighted$stabilized)
     close(weighted$unstabilized)
     closeMsmAnalysis(analysis)
+  }
+})
+
+test_that("Stabilized and unstabilized weights reconstruct each other for every strategy type, post-grace model and truncation basis", {
+  # Contract sections 11.1, 11.2 and 11.5: after G, the numerator of a notInitiateWithin(G) clone is
+  # 1 - pi-bar of the binary model at G (postGraceModel = "binary") or S-bar(G) ("hazard"); either weight
+  # is the other times or divided by the numerator, and under truncation (with either basis) the other
+  # weight is formed from the truncated weight, so its cap is the cap divided or multiplied by the
+  # numerator.
+  configurations <- list(
+    list(comparatorType = "notInitiateWithin", postGraceModel = "binary"),
+    list(comparatorType = "notInitiateWithin", postGraceModel = "hazard"),
+    list(comparatorType = "neverInitiate", postGraceModel = "binary"),
+    list(comparatorType = "notInitiateWithin", postGraceModel = "binary", sameDayOrdering = "deviationFirst", hazardModelType = "cox")
+  )
+  truncations <- list(
+    none = createWeightTruncation("none"),
+    varying = createWeightTruncation("percentile", 0.9, basis = "varying"),
+    allClones = createWeightTruncation("percentile", 0.9, basis = "allClones")
+  )
+  kinds <- c("stabilized", "unstabilized")
+  structure <- c("segmentId", "cloneRowId", "rowId", "strategyId", "startTime", "stopTime", "outcome", "competing")
+  for (configuration in configurations) {
+    label <- paste(unlist(configuration), collapse = " ")
+    analysis <- do.call(msmAnalysis, configuration)
+    # The segments, caps, the weights each msmWeights gives the MSMs, and (untruncated) the Cox MSMs:
+    results <- list()
+    for (truncation in names(truncations)) {
+      for (kind in kinds) {
+        weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = kind == "stabilized", truncation = truncations[[truncation]]))
+        outcomeData <- .getOutcomeData(weighted)
+        result <- list(
+          segments = collectMsmSegments(weighted),
+          caps = attr(weighted, "metaData")$weights$caps,
+          msm = lapply(stats::setNames(kinds, kinds), function(msmWeights) .withMsmWeights(outcomeData, msmWeights)$segments$weight)
+        )
+        if (truncation == "none") {
+          result$cox <- lapply(stats::setNames(kinds, kinds), function(msmWeights) fitMsm(weighted, modelType = "cox", horizons = 20, msmWeights = msmWeights)$estimates)
+        }
+        close(weighted)
+        results[[truncation]][[kind]] <- result
+      }
+    }
+    closeMsmAnalysis(analysis)
+
+    s <- results$none$stabilized$segments
+    u <- results$none$unstabilized$segments
+    expect_equal(s[, structure], u[, structure], info = label)
+    numerator <- u$stabilizationNumerator
+    expect_equal(s$stabilizationNumerator, numerator, tolerance = 1e-12, info = label)
+    expect_true(all(numerator > 0 & numerator <= 1), info = label)
+    expect_true(all(tapply(numerator < 1 - 1e-6, u$strategyId, any)), info = label)
+    # Without truncation, each weight is exactly the other times or divided by the numerator, the MSMs
+    # get the same weights from either weighted clones, and so the same fits:
+    expect_equal(s$weight, u$weight * numerator, tolerance = 1e-12, info = label)
+    expect_equal(u$weight, s$weight / numerator, tolerance = 1e-12, info = label)
+    for (kind in kinds) {
+      for (msmWeights in kinds) {
+        expect_equal(results$none[[kind]]$msm[[msmWeights]], results$none[[msmWeights]]$segments$weight, tolerance = 1e-12, info = paste(label, kind, msmWeights))
+      }
+    }
+    for (msmWeights in kinds) {
+      expect_equal(results$none$stabilized$cox[[msmWeights]], results$none$unstabilized$cox[[msmWeights]], tolerance = 1e-8, info = paste(label, msmWeights))
+    }
+
+    # The numerators: pi-bar after G and 1 up to G (initiateWithin); after G, 1 - pi-bar of the binary
+    # model at G or S-bar(G) (notInitiateWithin); with "eventsFirst" and the daily logistic hazard model,
+    # every weight and numerator written out by hand.
+    deviationFirst <- identical(configuration$sameDayOrdering, "deviationFirst")
+    afterG <- if (deviationFirst) u$stopTime - 1 >= 5 else u$stopTime - 1 > 5
+    initiate <- u$strategyId == 1
+    expect_equal(unique(numerator[initiate & afterG]), analysis$models[[1]]$numerator$propensityScore, info = label)
+    expect_equal(unique(numerator[initiate & !afterG]), 1, info = label)
+    postGrace <- analysis$models[[2]]$postGrace
+    if (configuration$comparatorType == "notInitiateWithin") {
+      comparatorAfterG <- !initiate & afterG
+      expect_true(any(comparatorAfterG), info = label)
+      if (configuration$postGraceModel == "binary") {
+        expect_equal(unique(numerator[comparatorAfterG]), 1 - postGrace$numerator$propensityScore, info = label)
+        pi <- postGrace$predictions$propensityScore[match(u$rowId[comparatorAfterG], postGrace$predictions$rowId)]
+        expect_equal(u$weight[comparatorAfterG], 1 / (1 - pi), tolerance = 1e-12, info = label)
+      } else {
+        expect_null(postGrace)
+        expect_length(unique(round(numerator[comparatorAfterG], 12)), 1)
+      }
+    } else {
+      expect_null(postGrace)
+    }
+    if (!deviationFirst) {
+      hand <- handMsmWeights(analysis$models, u, riskStart = 0)
+      expect_equal(numerator, hand$numerator, tolerance = 1e-10, info = label)
+      expect_equal(u$weight, hand$weight, tolerance = 1e-10, info = label)
+    }
+
+    # With truncation, under either basis: the weight is the untruncated weight capped at the strategy's
+    # cap, and the other weight the other untruncated weight capped at the cap divided (unstabilized) or
+    # multiplied (stabilized) by the numerator.
+    for (truncation in c("varying", "allClones")) {
+      for (kind in kinds) {
+        other <- setdiff(kinds, kind)
+        result <- results[[truncation]][[kind]]
+        info <- paste(label, truncation, kind)
+        expect_equal(result$segments[, structure], u[, structure], info = info)
+        expect_equal(result$segments$stabilizationNumerator, numerator, tolerance = 1e-12, info = info)
+        cap <- result$caps$cap[match(result$segments$strategyId, result$caps$strategyId)]
+        raw <- results$none[[kind]]$segments$weight
+        expect_equal(result$segments$weight, pmin(raw, cap), tolerance = 1e-12, info = info)
+        expect_true(any(result$segments$weight < raw * (1 - 1e-12)), info = info)
+        otherCap <- if (kind == "stabilized") cap / numerator else cap * numerator
+        expect_equal(result$msm[[other]], pmin(results$none[[other]]$segments$weight, otherCap), tolerance = 1e-12, info = info)
+        expect_equal(result$msm[[kind]], result$segments$weight, info = info)
+      }
+    }
+    # The two bases give different caps here, so both are exercised:
+    for (kind in kinds) {
+      expect_false(isTRUE(all.equal(results$varying[[kind]]$caps$cap, results$allClones[[kind]]$caps$cap)), info = paste(label, kind))
+    }
   }
 })
 
