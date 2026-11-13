@@ -11,5 +11,3 @@ extras
 vignettes/*.html
 vignettes/*-woven*
 .claude/
-hand-off.md
-future-studies.md
