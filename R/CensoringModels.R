@@ -92,6 +92,10 @@
 #'                               `"notInitiateWithin"` strategy's weights after the grace period. For a
 #'                               model in the list, its covariate model is fit with that prior variance
 #'                               and without cross-validation.
+#' @param .sourcePersonSeqIds    For internal use (the bootstrap): `NULL`, or a data frame with the
+#'                               `personSeqId` of each person and the `sourcePersonSeqId` of the person
+#'                               it is a copy of. Copies of one person stay in one cross-validation fold
+#'                               of the hazard models.
 #'
 #' @return
 #' An object of class `CcwCensoringModels`: a list with one element per strategy (in strategy order),
@@ -143,7 +147,8 @@
 fitCensoringModels <- function(clones,
                                cloneCensorWeightData,
                                fitCensoringModelsArgs = createFitCensoringModelsArgs(),
-                               .fixedPriorVariances = NULL) {
+                               .fixedPriorVariances = NULL,
+                               .sourcePersonSeqIds = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
@@ -151,6 +156,10 @@ fitCensoringModels <- function(clones,
   checkmate::assertList(.fixedPriorVariances, types = "numeric", null.ok = TRUE, add = errorMessages)
   if (!is.null(.fixedPriorVariances)) {
     checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2", "1.postGrace", "2.postGrace"), empty.ok = FALSE, add = errorMessages)
+  }
+  checkmate::assertDataFrame(.sourcePersonSeqIds, null.ok = TRUE, add = errorMessages)
+  if (!is.null(.sourcePersonSeqIds)) {
+    checkmate::assertNames(names(.sourcePersonSeqIds), must.include = c("personSeqId", "sourcePersonSeqId"), add = errorMessages)
   }
   checkmate::reportAssertions(collection = errorMessages)
 
@@ -165,6 +174,12 @@ fitCensoringModels <- function(clones,
   sameDayOrdering <- metaData$sameDayOrdering
   persons <- clones$persons |>
     collect()
+  # The unit of the hazard models' cross-validation folds: the person, or in a bootstrap replicate the
+  # person a copy was drawn from, so that the rows of one person never score each other.
+  persons$subjectId <- persons$personSeqId
+  if (!is.null(.sourcePersonSeqIds)) {
+    persons$subjectId <- .sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, .sourcePersonSeqIds$personSeqId)]
+  }
   maxRiskEnd <- if (nrow(persons) == 0) 0L else max(persons$riskEnd)
 
   models <- list()
@@ -270,8 +285,8 @@ fitCensoringModels <- function(clones,
   ))
 }
 
-# Persons at risk of initiating on day 0, with the last day at risk (through the horizon) and whether
-# they initiated on that day.
+# Persons at risk of initiating on day 0, with their subject (the unit of cross-validation folds), the
+# last day at risk (through the horizon) and whether they initiated on that day.
 .getHazardRiskSet <- function(persons, treatmentDay, horizon, sameDayOrdering) {
   eventDay <- pmin(persons$outcomeDay, persons$deathDay, na.rm = TRUE)
   if (sameDayOrdering == "eventsFirst") {
@@ -283,6 +298,7 @@ fitCensoringModels <- function(clones,
   return(tibble(
     rowId = persons$rowId[inRiskSet],
     personSeqId = persons$personSeqId[inRiskSet],
+    subjectId = persons$subjectId[inRiskSet],
     lastDay = as.integer(lastDay[inRiskSet]),
     y = as.integer(initiated[inRiskSet])
   ))
@@ -567,8 +583,11 @@ fitCensoringModels <- function(clones,
       error <- .checkHighCorrelation(covariateData, riskSet, fitCensoringModelsArgs)
       if (is.null(error)) {
         error <- "OK"
+        # One row per person, so subjects matter only when persons share one (copies in a bootstrap
+        # replicate); without them each row is its own fold unit.
+        outcomeColumns <- c("rowId", "y", "time", if (anyDuplicated(riskSet$subjectId) > 0) "subjectId")
         covariateData$outcomes <- riskSet |>
-          select("rowId", "y", "time")
+          select(dplyr::all_of(outcomeColumns))
         cyclopsData <- Cyclops::convertToCyclopsData(
           covariateData$outcomes,
           covariateData$covariates,
@@ -687,7 +706,7 @@ fitCensoringModels <- function(clones,
   ) |>
     filter(.data$zValue != 0)
   covariateData$riskSet <- riskSet |>
-    select("rowId", "lastInterval", "y")
+    select("rowId", "subjectId", "lastInterval", "y")
   covariateData$intervals <- tibble(k = fitIntervals)
   covariateData$basis <- tibble(
     k = rep(k, ncol(basis)),
@@ -699,14 +718,16 @@ fitCensoringModels <- function(clones,
     CREATE TABLE hazardRows AS
     SELECT CAST(ROW_NUMBER() OVER (ORDER BY riskSet.rowId, intervals.k) AS DOUBLE) AS rowId,
       riskSet.rowId AS personRowId,
+      riskSet.subjectId,
       intervals.k,
       CASE WHEN riskSet.y = 1 AND intervals.k = riskSet.lastInterval THEN 1 ELSE 0 END AS y
     FROM riskSet
     INNER JOIN intervals
       ON intervals.k <= riskSet.lastInterval;")
+  # subjectId keeps the rows of a person in one cross-validation fold (Cyclops 4.0.1 or later)
   .andromedaExecute(covariateData, "
     CREATE TABLE hazardOutcomes AS
-    SELECT rowId, y
+    SELECT rowId, y, subjectId
     FROM hazardRows;")
   .andromedaExecute(covariateData, "
     CREATE TABLE hazardBasis AS

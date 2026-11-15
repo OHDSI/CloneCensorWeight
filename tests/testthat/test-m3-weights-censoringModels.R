@@ -383,6 +383,32 @@ test_that("Prior variance: fixed variances skip cross-validation, cross-validati
   close(data)
 })
 
+test_that("Cross-validation of the hazard models keeps the rows and copies of a person in one fold", {
+  fixture <- createM3Fixture(150, riskStart = 0L, seed = 10)
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies(), "eventsFirst")
+  # The fold unit Cyclops reports for the cross-validated hazard model (strategy 2's, fitted last)
+  hazardSelectorType <- function(hazardModelType, ...) {
+    args <- m3Args(hazardModelType, prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE))
+    # minCVData: the 150 persons are 75 copied pairs below, fewer fold units than Cyclops' default minimum
+    args$control <- Cyclops::createControl(noiseLevel = "quiet", cvType = "auto", fold = 5, cvRepetitions = 1, seed = 1, tolerance = 1e-8, minCVData = 10)
+    output <- capture.output(suppressMessages(fitCensoringModels(clones, data, args, ...)))
+    selectorTypes <- sub("^Using cross-validation selector type ", "", grep("^Using cross-validation selector type", output, value = TRUE))
+    return(utils::tail(selectorTypes, 1))
+  }
+  # The pooled logistic model has one row per person-interval, so it folds by person
+  expect_equal(hazardSelectorType("logistic"), "bySubject")
+  # The Cox model has one row per person, so it needs subjects only when persons share one: copies
+  # of a person in a bootstrap replicate
+  expect_equal(hazardSelectorType("cox"), "byRow")
+  persons <- dplyr::collect(clones$persons)
+  copies <- tibble::tibble(personSeqId = persons$personSeqId, sourcePersonSeqId = (persons$personSeqId + 1L) %/% 2L)
+  expect_equal(hazardSelectorType("cox", .sourcePersonSeqIds = copies), "bySubject")
+  expect_error(fitCensoringModels(clones, data, m3Args("cox"), .sourcePersonSeqIds = copies[, 1]), "sourcePersonSeqId")
+  close(clones)
+  close(data)
+})
+
 test_that("Laplace and normal priors at a fixed variance match glmnet", {
   skip_if_not_installed("glmnet", minimum_version = "5.0")
   skip_if_not_installed("survival")

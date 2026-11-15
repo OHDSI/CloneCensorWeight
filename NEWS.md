@@ -39,6 +39,14 @@ new defaults):
   `metaData$weights$caps` reports the cap and the share of clones truncated per strategy.
 * The covariate analyses of `simulateCloneCensorWeightData()` have windows that end on day -1
   (`endDay` in `analysisRef`), not day 0.
+* The cross-validation of the pooled logistic initiation hazard model (`hazardModelType = "logistic"`)
+  keeps all interval rows of a person in one fold. It split them over folds, so held-out rows were
+  scored by a model fitted to other rows of the same person, which favours weaker penalties. Its
+  selected prior variance, coefficients and the weights change. In bootstrap replicates with
+  `fixHyperparameters = FALSE`, the hazard models (Cox and pooled logistic) also keep the copies of a
+  person in one fold. Cyclops' minimum for cross-validation (`createControl(minCVData = 100)`) then
+  counts persons, not rows, so small replicates can fail where they did not. This needs Cyclops 4.0.1,
+  which keeps the rows of a subject together for every model type.
 * New arguments were inserted before existing ones: `covariateTimeInteraction` and `postGraceModel`
   after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
   `armByTimeInteraction` in `createFitOutcomeModelArgs()`. Calls that pass the later arguments by

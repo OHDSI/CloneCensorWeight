@@ -31,8 +31,11 @@
 #' with its own row IDs and `personSeqId`, so copies are distinct persons in every step of the
 #' analysis. With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
 #' models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
-#' every replicate, without cross-validation. The pooled logistic outcome model gets clones split on
-#' its interval grid (`computeCensoringWeights(outcomeTimeBasis = )`).
+#' every replicate, without cross-validation. With `FALSE`, the cross-validation of the hazard models
+#' (Cox and pooled logistic) keeps the copies of a person in one fold, so that no copy is scored by a
+#' model fitted to another copy; that of the binary models ([CohortMethod::createPs()]) does not. The
+#' pooled logistic outcome model gets clones split on its interval grid
+#' (`computeCensoringWeights(outcomeTimeBasis = )`).
 #'
 #' In the replicates, the censoring models are fitted with `errorOnHighCorrelation = FALSE`: the check
 #' for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
@@ -253,7 +256,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
           fitCensoringModelsArgs = replicateCensoringModelsArgs,
           computeWeightsArgs = computeWeightsArgs,
           fitOutcomeModelArgs = fitOutcomeModelArgs,
-          fixedPriorVariances = fixedPriorVariances
+          fixedPriorVariances = fixedPriorVariances,
+          sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate])
         )),
         error = function(e) conditionMessage(e)
       ),
@@ -369,7 +373,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
                                   computeWeightsArgs,
                                   fitOutcomeModelArgs,
                                   censoringModels = NULL,
-                                  fixedPriorVariances = NULL) {
+                                  fixedPriorVariances = NULL,
+                                  sourcePersonSeqIds = NULL) {
   population <- createStudyPopulation(
     cloneCensorWeightData = cloneCensorWeightData,
     outcomeId = outcomeId,
@@ -378,7 +383,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   clones <- createClones(population, cloneCensorWeightData, createClonesArgs)
   on.exit(close(clones))
   if (is.null(censoringModels)) {
-    censoringModels <- fitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = fixedPriorVariances)
+    censoringModels <- fitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs,
+                                          .fixedPriorVariances = fixedPriorVariances,
+                                          .sourcePersonSeqIds = sourcePersonSeqIds)
   }
   outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
   weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)
@@ -409,6 +416,14 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     return(character(0))
   }
   return(intersect(coefficientNames, c("target", "death:target")))
+}
+
+# The source person of each copy made by .resampleCloneCensorWeightData(personSeqIds, counts), which
+# numbers the copies by source personSeqId and copy: a tibble `personSeqId, sourcePersonSeqId`.
+.copySourcePersonSeqIds <- function(personSeqIds, counts) {
+  order <- order(personSeqIds)
+  sources <- rep(as.integer(personSeqIds[order]), counts[order])
+  return(tibble(personSeqId = seq_along(sources), sourcePersonSeqId = sources))
 }
 
 # A new CloneCensorWeightData in which the person with personSeqIds[i] appears counts[i] times, each

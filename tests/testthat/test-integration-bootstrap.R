@@ -323,8 +323,8 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
 
   realFitCensoringModels <- fitCensoringModels
   calls <- list()
-  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL) {
-    models <- realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances)
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
+    models <- realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances, .sourcePersonSeqIds)
     calls[[length(calls) + 1]] <<- list(fixed = .fixedPriorVariances, fitted = lapply(models, function(model) model$priorVariance))
     return(models)
   })
@@ -339,10 +339,41 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
 
   calls <- list()
   settings$fitOutcomeModelArgs$bootstrapArgs <- createBootstrapArgs(replicates = 1, fixHyperparameters = FALSE)
+  # The copies of a person are one cross-validation unit, and a replicate of 120 persons holds fewer
+  # distinct persons than Cyclops' default minimum for cross-validation (minCVData = 100):
+  settings$fitCensoringModelsArgs$control$minCVData <- 10
   result <- runBootstrap(data, settings, censoringModels = fullModels)
   expect_null(result$metaData$bootstrap$fixedPriorVariances)
   expect_length(calls, 1)
   expect_null(calls[[1]]$fixed)
+})
+
+test_that("Replicates give the censoring models the person each copy was drawn from", {
+  data <- bootstrapData(n = 60, seed = 3)
+  on.exit(close(data))
+  settings <- bootstrapSettings(replicates = 2)
+  persons <- dplyr::collect(data$cohorts) |>
+    dplyr::distinct(personSeqId, personId) |>
+    dplyr::arrange(personSeqId)
+  realFitCensoringModels <- fitCensoringModels
+  calls <- list()
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
+    copies <- dplyr::collect(cloneCensorWeightData$cohorts) |>
+      dplyr::distinct(personSeqId, personId)
+    calls[[length(calls) + 1]] <<- list(copies = copies, sources = .sourcePersonSeqIds)
+    return(realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances, .sourcePersonSeqIds))
+  })
+  result <- runBootstrap(data, settings, returnCounts = TRUE)
+  expect_length(calls, 3)
+  expect_null(calls[[1]]$sources) # the full data
+  for (replicate in 1:2) {
+    call <- calls[[replicate + 1]]
+    # Every copy is a copy of its source person, and each person is a source as often as drawn:
+    source <- call$sources$sourcePersonSeqId[match(call$copies$personSeqId, call$sources$personSeqId)]
+    expect_equal(call$copies$personId, persons$personId[match(source, persons$personSeqId)])
+    drawn <- tabulate(match(call$sources$sourcePersonSeqId, persons$personSeqId), nbins = nrow(persons))
+    expect_equal(drawn, unname(result$bootstrapCounts[, replicate]))
+  }
 })
 
 test_that("Failed replicates are NA, left out with a warning, and inputs are checked", {
@@ -435,9 +466,9 @@ test_that("Replicates fit the censoring models without the high-correlation chec
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
   realFitCensoringModels <- fitCensoringModels
   checks <- logical(0)
-  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL) {
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
     checks <<- c(checks, fitCensoringModelsArgs$errorOnHighCorrelation)
-    return(realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances))
+    return(realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances, .sourcePersonSeqIds))
   })
   result <- runBootstrap(data, settings)
   # The full data first, with the check; then the replicates, without it:

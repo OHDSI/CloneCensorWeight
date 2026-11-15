@@ -8,7 +8,8 @@ fitCensoringModels(
   clones,
   cloneCensorWeightData,
   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
-  .fixedPriorVariances = NULL
+  .fixedPriorVariances = NULL,
+  .sourcePersonSeqIds = NULL
 )
 }
 \arguments{
@@ -26,6 +27,11 @@ covariates of the persons in \code{clones}.}
 \code{"notInitiateWithin"} strategy's weights after the grace period. For a
 model in the list, its covariate model is fit with that prior variance
 and without cross-validation.}
+
+\item{.sourcePersonSeqIds}{For internal use (the bootstrap): \code{NULL}, or a data frame with the
+\code{personSeqId} of each person and the \code{sourcePersonSeqId} of the person
+it is a copy of. Copies of one person stay in one cross-validation fold
+of the hazard models.}
 }
 \value{
 An object of class \code{CcwCensoringModels}: a list with one element per strategy (in strategy order),
