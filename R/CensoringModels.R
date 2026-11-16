@@ -789,6 +789,13 @@ fitCensoringModels <- function(clones,
     numeratorCoefficients <- c("(Intercept)" = if (0L %in% fullIntervals) Inf else -Inf)
   } else if (length(presentBasisIds) == 0 || events == 0) {
     numeratorCoefficients <- .fitInterceptOnly(covariateData)
+  } else if (fitCensoringModelsArgs$timeBasis$type == "indicator") {
+    # The indicator basis is saturated in the fitted intervals, so the maximum likelihood fit is the
+    # observed hazard of each: the intercept is the log-odds of the reference (first) interval, and the
+    # coefficient of each later interval's column (in interval order) its log-odds minus the reference's.
+    logOdds <- stats::qlogis(initiations[fitIntervals + 1L] / atRisk[fitIntervals + 1L])
+    numeratorCoefficients <- c(logOdds[1], logOdds[-1] - logOdds[1])
+    names(numeratorCoefficients) <- c("(Intercept)", as.character(basisIds))
   } else {
     numeratorFit <- fitLr(covariateData$hazardBasis, Cyclops::createPrior("none"))
     if (is.character(numeratorFit)) {

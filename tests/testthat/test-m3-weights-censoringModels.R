@@ -139,9 +139,9 @@ test_that("Pooled logistic hazard matches glm on hand-built K_g rows", {
 
       reference0 <- glm(rows$initiated ~ k, family = quasibinomial(link = "logit"), control = glmControl)
       expect_equal(unname(model$numerator$coefficients), unname(coef(reference0)), tolerance = 1e-6)
-      # The saturated numerator is the observed hazard of each interval:
+      # The saturated numerator is the observed hazard of each interval, in closed form:
       hazard <- tapply(rows$initiated, rows$k, mean)
-      expect_equal(plogis(model$numerator$intervals$baseline[eventIntervals + 1]), unname(as.vector(hazard)), tolerance = 1e-6)
+      expect_equal(plogis(model$numerator$intervals$baseline[eventIntervals + 1]), unname(as.vector(hazard)), tolerance = 1e-12)
     }
     close(clones)
     close(data)
@@ -272,6 +272,11 @@ test_that("A failed pooled logistic numerator fit follows stopOnError", {
   rows <- refIntervalRows(fixture$persons, 5, "eventsFirst", 1)
   expect_equal(models[[2]]$numerator$coefficients, c("(Intercept)" = qlogis(mean(rows$initiated))), tolerance = 1e-10)
   expect_equal(models[[2]]$coefficients, models[[2]]$numerator$coefficients)
+  # The indicator basis needs no numerator fit, so it cannot fail:
+  args$timeBasis <- createTimeBasis()
+  args$stopOnError <- TRUE
+  models <- fitCensoringModels(clones, data, args)
+  expect_equal(models[[2]]$diagnostics$status, "OK")
   close(clones)
   close(data)
 })

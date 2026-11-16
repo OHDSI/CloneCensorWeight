@@ -52,6 +52,10 @@ new defaults):
   after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
   `armByTimeInteraction` in `createFitOutcomeModelArgs()`. Calls that pass the later arguments by
   position must name them.
+* With the indicator time basis (the default), the numerator of the pooled logistic initiation hazard
+  model is computed in closed form, as the observed hazard of each interval, instead of fitted by
+  Cyclops. It is the same model, so its coefficients and the stabilized weights change only within
+  Cyclops' convergence tolerance, and its fit can no longer fail.
 
 New features:
 
