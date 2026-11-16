@@ -43,8 +43,9 @@ new defaults):
   keeps all interval rows of a person in one fold. It split them over folds, so held-out rows were
   scored by a model fitted to other rows of the same person, which favours weaker penalties. Its
   selected prior variance, coefficients and the weights change. In bootstrap replicates with
-  `fixHyperparameters = FALSE`, the hazard models (Cox and pooled logistic) also keep the copies of a
-  person in one fold. Cyclops' minimum for cross-validation (`createControl(minCVData = 100)`) then
+  `fixHyperparameters = FALSE`, every censoring model (binary, Cox and pooled logistic) also keeps the
+  copies of a person in one fold; the binary models pass them to `CohortMethod::createPs()` as
+  `population$subjectId`. Cyclops' minimum for cross-validation (`createControl(minCVData = 100)`) then
   counts persons, not rows, so small replicates can fail where they did not. This needs Cyclops 4.0.1,
   which keeps the rows of a subject together for every model type.
 * New arguments were inserted before existing ones: `covariateTimeInteraction` and `postGraceModel`

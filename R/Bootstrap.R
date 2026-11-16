@@ -31,9 +31,9 @@
 #' with its own row IDs and `personSeqId`, so copies are distinct persons in every step of the
 #' analysis. With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
 #' models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
-#' every replicate, without cross-validation. With `FALSE`, the cross-validation of the hazard models
-#' (Cox and pooled logistic) keeps the copies of a person in one fold, so that no copy is scored by a
-#' model fitted to another copy; that of the binary models ([CohortMethod::createPs()]) does not. The
+#' every replicate, without cross-validation. With `FALSE`, the cross-validation of every censoring
+#' model (binary, Cox and pooled logistic) keeps the copies of a person in one fold, so that no copy is
+#' scored by a model fitted to another copy. The
 #' pooled logistic outcome model gets clones split on its interval grid
 #' (`computeCensoringWeights(outcomeTimeBasis = )`).
 #'

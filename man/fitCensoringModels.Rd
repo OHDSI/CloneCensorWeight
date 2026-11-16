@@ -31,7 +31,7 @@ and without cross-validation.}
 \item{.sourcePersonSeqIds}{For internal use (the bootstrap): \code{NULL}, or a data frame with the
 \code{personSeqId} of each person and the \code{sourcePersonSeqId} of the person
 it is a copy of. Copies of one person stay in one cross-validation fold
-of the hazard models.}
+of every censoring model.}
 }
 \value{
 An object of class \code{CcwCensoringModels}: a list with one element per strategy (in strategy order),

@@ -95,7 +95,7 @@
 #' @param .sourcePersonSeqIds    For internal use (the bootstrap): `NULL`, or a data frame with the
 #'                               `personSeqId` of each person and the `sourcePersonSeqId` of the person
 #'                               it is a copy of. Copies of one person stay in one cross-validation fold
-#'                               of the hazard models.
+#'                               of every censoring model.
 #'
 #' @return
 #' An object of class `CcwCensoringModels`: a list with one element per strategy (in strategy order),
@@ -174,8 +174,8 @@ fitCensoringModels <- function(clones,
   sameDayOrdering <- metaData$sameDayOrdering
   persons <- clones$persons |>
     collect()
-  # The unit of the hazard models' cross-validation folds: the person, or in a bootstrap replicate the
-  # person a copy was drawn from, so that the rows of one person never score each other.
+  # The unit of the censoring models' cross-validation folds: the person, or in a bootstrap replicate
+  # the person a copy was drawn from, so that the rows of one person never score each other.
   persons$subjectId <- persons$personSeqId
   if (!is.null(.sourcePersonSeqIds)) {
     persons$subjectId <- .sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, .sourcePersonSeqIds$personSeqId)]
@@ -269,7 +269,8 @@ fitCensoringModels <- function(clones,
 
 # Risk sets ----------------------------------------------------------------------------------------
 
-# Persons under follow-up at day G, with y = started on or before day G.
+# Persons under follow-up at day G, with their subject (the unit of cross-validation folds, when
+# `persons` has one) and y = started on or before day G.
 .getBinaryRiskSet <- function(persons, treatmentDay, graceEnd, sameDayOrdering) {
   eventDay <- pmin(persons$outcomeDay, persons$deathDay, na.rm = TRUE)
   if (sameDayOrdering == "eventsFirst") {
@@ -281,6 +282,7 @@ fitCensoringModels <- function(clones,
   return(tibble(
     rowId = persons$rowId[inRiskSet],
     personSeqId = persons$personSeqId[inRiskSet],
+    subjectId = persons[["subjectId"]][inRiskSet], # NULL (no column) for persons without subjects
     y = as.integer(!is.na(treatmentDay[inRiskSet]) & treatmentDay[inRiskSet] <= graceEnd)
   ))
 }
@@ -513,6 +515,11 @@ fitCensoringModels <- function(clones,
     )
     population <- riskSet |>
       dplyr::rename(treatment = "y")
+    # One row per person, so subjects matter only when persons share one (copies in a bootstrap
+    # replicate). createPs() passes subjectId on to Cyclops as the unit of its folds.
+    if (anyDuplicated(population$subjectId) == 0) {
+      population$subjectId <- NULL
+    }
     ps <- CohortMethod::createPs(cohortMethodData = view, population = population, createPsArgs = createPsArgs)
     psMetaData <- attr(ps, "metaData")
     error <- psMetaData$psError
