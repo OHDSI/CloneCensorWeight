@@ -407,7 +407,7 @@ test_that("Cross-validation of the censoring models keeps the rows and copies of
   # one: copies of a person in a bootstrap replicate
   expect_equal(selectorTypes("cox"), c("byRow", "byRow"))
   persons <- dplyr::collect(clones$persons)
-  copies <- tibble::tibble(personSeqId = persons$personSeqId, sourcePersonSeqId = (persons$personSeqId + 1L) %/% 2L)
+  copies <- dplyr::tibble(personSeqId = persons$personSeqId, sourcePersonSeqId = (persons$personSeqId + 1L) %/% 2L)
   expect_equal(selectorTypes("cox", .sourcePersonSeqIds = copies), c("bySubject", "bySubject"))
   expect_error(fitCensoringModels(clones, data, m3Args("cox"), .sourcePersonSeqIds = copies[, 1]), "sourcePersonSeqId")
   close(clones)
