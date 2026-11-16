@@ -688,7 +688,7 @@ createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                                                           seed = 1,
                                                                           resetCoefficients = TRUE,
                                                                           tolerance = 2e-07,
-                                                                          cvRepetitions = 10,
+                                                                          cvRepetitions = 3,
                                                                           startingVariance = 0.01)) {
   args <- list()
   for (name in names(formals())) {

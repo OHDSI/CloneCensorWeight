@@ -56,6 +56,11 @@ new defaults):
   model is computed in closed form, as the observed hazard of each interval, instead of fitted by
   Cyclops. It is the same model, so its coefficients and the stabilized weights change only within
   Cyclops' convergence tolerance, and its fit can no longer fail.
+* The default control of `createFitCensoringModelsArgs()` cross-validates the prior variance with 3
+  repetitions of the folds (`cvRepetitions = 3`) instead of 10, so cross-validation takes about a third
+  of the time. It applies to the binary models (through `CohortMethod::createPs()`) and to the hazard
+  models. The selected prior variances, the coefficients and the weights change. A control with
+  `cvRepetitions = 10` reproduces the earlier fits.
 
 New features:
 

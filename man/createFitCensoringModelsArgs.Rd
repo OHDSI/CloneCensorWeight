@@ -18,7 +18,7 @@ createFitCensoringModelsArgs(
   stopOnError = TRUE,
   prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
   control = Cyclops::createControl(noiseLevel = "silent", cvType = "auto", seed = 1,
-    resetCoefficients = TRUE, tolerance = 2e-07, cvRepetitions = 10, startingVariance =
+    resetCoefficients = TRUE, tolerance = 2e-07, cvRepetitions = 3, startingVariance =
     0.01)
 )
 }
