@@ -24,7 +24,10 @@
 #' Let `W(d)` be the weight on day `d` (days since index). With `sameDayOrdering = "eventsFirst"`:
 #'
 #' - `"initiateWithin"` (grace period ending on day `G`): `W(d) = 1` for `d <= G` and `1 / pi(X)` for
-#'   `d > G`, where `pi(X)` is the probability of starting by `G` from the binary model.
+#'   `d > G`, where `pi(X)` is the probability of starting by `G` from the binary model when the models
+#'   were fit with `initiateWithinModel = "binary"` (the default), and `1 - S(G | X)` from the
+#'   initiation hazard model with `initiateWithinModel = "hazard"` (see [createFitCensoringModelsArgs()]
+#'   for when each is valid).
 #' - `"notInitiateWithin"`: `W(d) = 1 / S(d - 1 | X)` for `d <= G` (with `S(-1) = 1`), where
 #'   `S(d | X)` is the probability of not initiating on days `0..d` from the initiation hazard model.
 #'   For `d > G`, `W(d) = 1 / S(G | X)` when the models were fit with `postGraceModel = "hazard"` (the
@@ -39,7 +42,8 @@
 #' any outcome on that day, so it is not at risk of the outcome on day `d`: its segments end on day
 #' `d - 1`, and a clone that deviates on its first day of follow-up has no segments. Stabilized
 #' weights multiply by the same quantity from the numerator model without covariates (the marginal
-#' `pi-bar` of the binary model in place of `pi(X)`, also in `1 - pi(X)`).
+#' `pi-bar` of the binary model in place of `pi(X)`, also in `1 - pi(X)`, and `S-bar` in place of `S`,
+#' also in `1 - S(G | X)`).
 #'
 #' Each clone's follow-up is split, on the survival time scale `t = day - riskStart + 1`, at the end of
 #' day `G` (day `G - 1` with `"deviationFirst"`) for `"initiateWithin"`, and, for the hazard
@@ -406,6 +410,11 @@ computeCensoringWeights <- function(clones,
   interactionValues <- list()
   interactionBasis <- list()
   for (model in censoringModels) {
+    # An initiateWithin(G) strategy with initiateWithinModel = "hazard": its weights are those of the
+    # binary model at G with pi(X) = 1 - S(G | X) and pi-bar = 1 - S-bar(G):
+    if (identical(model$type, "initiateWithin") && model$kind == "hazard") {
+      model <- .hazardAsBinaryModel(model)
+    }
     strategyId <- as.integer(model$strategyId)
     isLogistic <- model$modelType == "logistic"
     hasPostGrace <- !is.null(model$postGrace)

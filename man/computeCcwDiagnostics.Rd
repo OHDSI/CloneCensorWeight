@@ -14,7 +14,8 @@ computeCcwDiagnostics(
   numberOfGroups = 10,
   strataCovariateIds = NULL,
   sensitivity = FALSE,
-  fitOutcomeModelArgs = createFitOutcomeModelArgs()
+  fitOutcomeModelArgs = createFitOutcomeModelArgs(),
+  censoringModels = NULL
 )
 }
 \arguments{
@@ -44,16 +45,25 @@ created from.}
 
 \item{fitOutcomeModelArgs}{An object of type \code{FitOutcomeModelArgs} as created using
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}, used with \code{sensitivity = TRUE}.}
+
+\item{censoringModels}{\code{NULL}, or an object of class \code{CcwCensoringModels} as created by
+\code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones (without the internal
+\code{.fixedPriorVariances}): its models are reused, for the specified
+settings and for every other choice that uses them, instead of
+refitted. When \code{fitCensoringModelsArgs} is not given, the
+specified settings are those the models were fit with. Models fit
+with other settings (other than the design choices compared) are
+not reused.}
 }
 \value{
 An object of class \code{CcwDiagnostics}: a list with \code{variants} (a tibble with \code{variant},
-\code{postGraceModel}, \code{covariateTimeInteraction} and \code{specified}), \code{calibration},
+\code{postGraceModel}, \code{covariateTimeInteraction}, \code{initiateWithinModel} and \code{specified}), \code{calibration},
 \code{gracePeriodSelection}, \code{weightSummary}, \code{balance}, \code{positivity}, \code{sensitivity} (\code{NULL} unless
 requested) and \code{thresholds}.
 }
 \description{
-Computes, for the specified settings and for the alternative choices of \code{postGraceModel} and
-\code{covariateTimeInteraction}, the diagnostics that help choose between them for the data at hand:
+Computes, for the specified settings and for the alternative choices of \code{postGraceModel},
+\code{initiateWithinModel} and \code{covariateTimeInteraction}, the diagnostics that help choose between them for the data at hand:
 calibration of the censoring models, the grace-period selection check, the weights on both scales,
 covariate balance after the grace period, positivity and, optionally, the estimates under each
 choice.
@@ -61,19 +71,26 @@ choice.
 \details{
 The choices compared are \code{postGraceModel} \code{"hazard"} and \code{"binary"} (when a strategy is
 \code{"notInitiateWithin"}), crossed with \code{covariateTimeInteraction} \code{"none"}, \code{"day0"} and the
-specified one (with the pooled logistic hazard model; the Cox model has none). One censoring model
-fit per interaction setting serves both \code{postGraceModel} choices. For each choice the result holds:
+specified one (with the pooled logistic hazard model, when a strategy uses it; the Cox model has
+none), crossed with \code{initiateWithinModel} \code{"binary"} and \code{"hazard"} (when a strategy is
+\code{"initiateWithin"}). Choices that give the same censoring models (for example the interaction
+settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
+and shared by the choices that use it (for example the hazard model through \code{G} serves both
+\code{postGraceModel} choices, and both strategies with \code{initiateWithinModel = "hazard"}), and the models
+in \code{censoringModels} are reused, so only the models they lack are fit. For each choice the result
+holds:
 \itemize{
 \item \code{calibration}: \code{\link[=computeCensoringModelCalibration]{computeCensoringModelCalibration()}}, for the binary model at \code{G} and for the
 hazard model of each interaction setting, by group of the prediction, in the large, and by the
 covariates in \code{strataCovariateIds};
-\item \code{gracePeriodSelection}: \code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}}, which tells whether \code{"binary"} is valid;
+\item \code{gracePeriodSelection}: \code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}} for the specified settings, which tells
+whether \code{postGraceModel = "binary"} and \code{initiateWithinModel = "hazard"} are valid;
 \item \code{weightSummary}: \code{\link[=computeWeightSummary]{computeWeightSummary()}} for each choice (column \code{variant});
 \item \code{balance}: per choice, the largest absolute standardized difference of mean and the number of
 covariates above \code{diagnosticThresholds$sdmThreshold}, before and after weighting, of
 \code{\link[=computeCovariateBalance]{computeCovariateBalance()}} at day \code{tau + 1};
-\item \code{positivity}: \code{\link[=computePositivity]{computePositivity()}} for the specified interaction setting (with the binary model
-at \code{G});
+\item \code{positivity}: \code{\link[=computePositivity]{computePositivity()}} for the specified interaction setting, with the binary model
+at \code{G} and the hazard model of each strategy with a grace period;
 \item \code{sensitivity}: \code{\link[=computeCcwSensitivity]{computeCcwSensitivity()}} with its default variants, only when \code{sensitivity = TRUE},
 because it refits the outcome model under every variant.
 }
@@ -109,13 +126,19 @@ clones <- createClones(
     )
   )
 )
-diagnostics <- computeCcwDiagnostics(
+censoringModels <- fitCensoringModels(
   clones = clones,
   cloneCensorWeightData = data,
   fitCensoringModelsArgs = createFitCensoringModelsArgs(
     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
-  ),
-  numberOfGroups = 5
+  )
+)
+# Reuses the fitted models, and fits only those of the other choices:
+diagnostics <- computeCcwDiagnostics(
+  clones = clones,
+  cloneCensorWeightData = data,
+  numberOfGroups = 5,
+  censoringModels = censoringModels
 )
 diagnostics
 close(clones)

@@ -20,12 +20,17 @@
 #' Fits, for each strategy, the model of artificial censoring (deviation from the strategy) used to
 #' compute the inverse probability of censoring weights. Days are relative to the index date (day 0).
 #'
-#' - `"initiateWithin"` (grace period ending on day `G`): a binary model at `G`. The risk set holds the
+#' - `"initiateWithin"` (grace period ending on day `G`), with `initiateWithinModel = "binary"` (the
+#'   default): a binary model at `G`. The risk set holds the
 #'   persons with no outcome or death on or before day `G` (before day `G` with
 #'   `sameDayOrdering = "deviationFirst"`) and `riskEnd >= G`. The response is "started the treatment
 #'   on or before day `G`". The model is fit by [CohortMethod::createPs()] on a `CohortMethodData` view
 #'   of the risk set, so it gets CohortMethod's covariate tidying, high-correlation check, sampling
 #'   and regularization, and the AUC is computed with [CohortMethod::computePsAuc()].
+#' - `"initiateWithin"` with `initiateWithinModel = "hazard"`: the model of the hazard of initiation
+#'   through `G` described next, the same model as that of a `"notInitiateWithin(G)"` strategy of the
+#'   same treatment (shared with such a strategy when the analysis has one), whose `1 - S(G | X)`
+#'   gives the weights after `G` (see [createFitCensoringModelsArgs()]).
 #' - `"notInitiateWithin"` and `"neverInitiate"`: a model of the hazard of initiation. Each person is
 #'   at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 #'   death (that day with `"deviationFirst"`), `riskEnd`, and the strategy's horizon `H` (`G`, or the
@@ -43,13 +48,18 @@
 #'   With `covariateTimeInteraction = "day0"` (the default) or `"interval"`, the pooled logistic model
 #'   also has the products of the covariates with an indicator of day 0 (of the first interval with
 #'   longer intervals), or with each time-basis column, penalized like the covariates (see
-#'   [createFitCensoringModelsArgs()]).
+#'   [createFitCensoringModelsArgs()]). An interaction column that takes a single value over the
+#'   intervals in the fit would duplicate the covariates, so it is left out, with a message: for
+#'   example `"day0"` with 7-day intervals and `G = 7` when nobody starts on day 7, so the first
+#'   interval is the only one fit.
 #' - `"notInitiateWithin"` with `postGraceModel = "binary"` (not the default, `"hazard"`): also the binary model at `G`
 #'   of an `"initiateWithin(G)"` strategy of the same treatment (shared with such a strategy when the
 #'   analysis has one), which gives the weights after `G` (see [createFitCensoringModelsArgs()]).
 #'
 #' Hazard models are fit per strategy horizon, and a fit is shared only between strategies with the
-#' same type, treatment and horizon. Each model also has a numerator model without covariates, fit on
+#' same treatment and horizon whose risk sets are the same: `"notInitiateWithin"` strategies, and
+#' `"initiateWithin"` strategies with `initiateWithinModel = "hazard"`, with the same `G`, or
+#' `"neverInitiate"` strategies. Each model also has a numerator model without covariates, fit on
 #' the same rows, used to stabilize the weights: the marginal probability of starting by `G` (binary),
 #' the Breslow cumulative hazard of a model without covariates (Cox), or the pooled logistic model
 #' with the time basis only. If the pooled logistic numerator model fails and `stopOnError = FALSE`,
@@ -101,7 +111,8 @@
 #' An object of class `CcwCensoringModels`: a list with one element per strategy (in strategy order),
 #' each a list with
 #'
-#' - `strategyId`, `type`, `treatment`, `kind` (`"binary"` or `"hazard"`), `modelType` (`"binary"`,
+#' - `strategyId`, `type`, `treatment`, `kind` (`"binary"` or `"hazard"`; `"hazard"` for an
+#'   `"initiateWithin"` strategy with `initiateWithinModel = "hazard"`), `modelType` (`"binary"`,
 #'   `"cox"` or `"logistic"`), and `horizon` (`G`, or the largest `riskEnd` for `"neverInitiate"`).
 #' - `coefficients` (named by covariate ID; `"(Intercept)"`, the time-basis columns and the
 #'   interactions, named `"<covariateId>:<column>"`, for the logistic model) and `priorVariance` (`NA`
@@ -163,6 +174,27 @@ fitCensoringModels <- function(clones,
   }
   checkmate::reportAssertions(collection = errorMessages)
 
+  return(.fitCensoringModelsWithFits(
+    clones = clones,
+    cloneCensorWeightData = cloneCensorWeightData,
+    fitCensoringModelsArgs = fitCensoringModelsArgs,
+    fixedPriorVariances = .fixedPriorVariances,
+    sourcePersonSeqIds = .sourcePersonSeqIds
+  )$models)
+}
+
+# fitCensoringModels() with a cache of fits: `fits` is a list of fitted models named by
+# .censoringFitKey() (from earlier calls, possibly with other design choices, or from
+# .censoringFitsFromModels()), and a model whose key is in it is reused, not refit. Returns a list with
+# the CcwCensoringModels `models` and the `fits`, with the new ones added. Callers that fit several
+# variants of the same analysis warn about day-0 covariate windows once.
+.fitCensoringModelsWithFits <- function(clones,
+                                        cloneCensorWeightData,
+                                        fitCensoringModelsArgs,
+                                        fixedPriorVariances = NULL,
+                                        sourcePersonSeqIds = NULL,
+                                        fits = list(),
+                                        warnDay0CovariateWindows = TRUE) {
   metaData <- attr(clones, "metaData")
   strategies <- metaData$strategies
   for (strategy in strategies) {
@@ -170,24 +202,41 @@ fitCensoringModels <- function(clones,
       stop("Not yet supported in this version: censoring models for strategies with graceStart > 0 or prohibitedTreatments")
     }
   }
-  .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
+  if (warnDay0CovariateWindows) {
+    .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
+  }
   sameDayOrdering <- metaData$sameDayOrdering
   persons <- clones$persons |>
     collect()
   # The unit of the censoring models' cross-validation folds: the person, or in a bootstrap replicate
   # the person a copy was drawn from, so that the rows of one person never score each other.
   persons$subjectId <- persons$personSeqId
-  if (!is.null(.sourcePersonSeqIds)) {
-    persons$subjectId <- .sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, .sourcePersonSeqIds$personSeqId)]
+  if (!is.null(sourcePersonSeqIds)) {
+    persons$subjectId <- sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, sourcePersonSeqIds$personSeqId)]
   }
   maxRiskEnd <- if (nrow(persons) == 0) 0L else max(persons$riskEnd)
+  argsList <- fitCensoringModelsArgs$toList()
 
   models <- list()
-  fitted <- list()
-  # Fits a model, or reuses the fit of an earlier strategy with the same key. The binary model at G has
-  # the key of an initiateWithin(G) strategy, so the binary model that gives a notInitiateWithin(G)
-  # strategy's weights after G is shared with an initiateWithin(G) strategy of the same treatment: their
-  # risk sets are the same (both use the analysis' sameDayOrdering).
+  # The keys of the fits used by this call: a key used by an earlier strategy is shared with it.
+  used <- character(0)
+  # Fits a model, or reuses the fit of an earlier strategy, or from `fits`, with the same key. The
+  # binary model at G that gives a notInitiateWithin(G) strategy's weights after G is shared with an
+  # initiateWithin(G) strategy of the same treatment: their risk sets are the same (both use the
+  # analysis' sameDayOrdering). So is the hazard model through G of a notInitiateWithin(G) strategy and
+  # of an initiateWithin(G) strategy with initiateWithinModel = "hazard".
+  getFit <- function(component, kind, treatment, horizon, fixedVariance, description, shareMessage) {
+    key <- .censoringFitKey(component, treatment, horizon, fixedVariance, argsList)
+    if (key %in% used) {
+      message(shareMessage)
+    } else if (key %in% names(fits)) {
+      message("Reusing the fitted ", description)
+    } else {
+      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description)
+    }
+    used <<- c(used, key)
+    return(fits[[key]])
+  }
   fitModel <- function(kind, treatment, horizon, fixedVariance, description) {
     treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
     prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
@@ -204,7 +253,7 @@ fitCensoringModels <- function(clones,
           if (fitCensoringModelsArgs$hazardModelType == "cox") {
             .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
           } else {
-            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description)
           }
         }
       },
@@ -212,18 +261,10 @@ fitCensoringModels <- function(clones,
     )
     return(c(list(kind = kind, horizon = horizon), model))
   }
-  varianceKey <- function(fixedVariance) if (is.null(fixedVariance)) "cv" else fixedVariance
   for (strategyId in seq_along(strategies)) {
     strategy <- strategies[[strategyId]]
-    if (strategy$type == "initiateWithin") {
-      kind <- "binary"
-      horizon <- as.integer(strategy$graceEnd)
-    } else {
-      kind <- "hazard"
-      horizon <- if (strategy$type == "neverInitiate") as.integer(maxRiskEnd) else as.integer(strategy$graceEnd)
-    }
-    fixedVariance <- .fixedPriorVariances[[as.character(strategyId)]]
-    key <- paste(strategy$type, strategy$treatment, horizon, varianceKey(fixedVariance))
+    horizon <- if (strategy$type == "neverInitiate") as.integer(maxRiskEnd) else as.integer(strategy$graceEnd)
+    kind <- if (strategy$type == "initiateWithin" && fitCensoringModelsArgs$initiateWithinModel == "binary") "binary" else "hazard"
     if (kind == "binary") {
       description <- sprintf("binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label)
     } else {
@@ -232,28 +273,31 @@ fitCensoringModels <- function(clones,
         fitCensoringModelsArgs$hazardModelType, horizon, strategyId, strategy$label
       )
     }
-    if (key %in% names(fitted)) {
-      message(sprintf("Strategy %d shares the censoring model of an earlier strategy", strategyId))
-    } else {
-      fitted[[key]] <- fitModel(kind, strategy$treatment, horizon, fixedVariance, description)
-    }
     models[[strategyId]] <- c(
       list(strategyId = strategyId, type = strategy$type, treatment = strategy$treatment),
-      fitted[[key]]
+      getFit(
+        component = .censoringFitComponent(kind, strategy$type),
+        kind = kind,
+        treatment = strategy$treatment,
+        horizon = horizon,
+        fixedVariance = fixedPriorVariances[[as.character(strategyId)]],
+        description = description,
+        shareMessage = sprintf("Strategy %d shares the censoring model of an earlier strategy", strategyId)
+      )
     )
     if (strategy$type == "notInitiateWithin" && fitCensoringModelsArgs$postGraceModel == "binary") {
-      fixedVariance <- .fixedPriorVariances[[paste0(strategyId, ".postGrace")]]
-      key <- paste("initiateWithin", strategy$treatment, horizon, varianceKey(fixedVariance))
-      if (key %in% names(fitted)) {
-        message(sprintf("Strategy %d shares the binary model at day %d of an earlier strategy for its weights after the grace period", strategyId, horizon))
-      } else {
-        description <- sprintf(
+      models[[strategyId]]$postGrace <- getFit(
+        component = "binary",
+        kind = "binary",
+        treatment = strategy$treatment,
+        horizon = horizon,
+        fixedVariance = fixedPriorVariances[[paste0(strategyId, ".postGrace")]],
+        description = sprintf(
           "binary censoring model at day %d for the weights after the grace period of strategy %d (%s)",
           horizon, strategyId, strategy$label
-        )
-        fitted[[key]] <- fitModel("binary", strategy$treatment, horizon, fixedVariance, description)
-      }
-      models[[strategyId]]$postGrace <- fitted[[key]]
+        ),
+        shareMessage = sprintf("Strategy %d shares the binary model at day %d of an earlier strategy for its weights after the grace period", strategyId, horizon)
+      )
     }
   }
   attr(models, "metaData") <- list(
@@ -261,10 +305,77 @@ fitCensoringModels <- function(clones,
     sameDayOrdering = sameDayOrdering,
     competingEvents = metaData$competingEvents,
     strategies = strategies,
-    fitCensoringModelsArgs = fitCensoringModelsArgs$toList()
+    fitCensoringModelsArgs = argsList
   )
   class(models) <- "CcwCensoringModels"
-  return(models)
+  return(list(models = models, fits = fits))
+}
+
+# Fits shared between strategies and calls -----------------------------------------------------------
+
+# The fitted model a strategy's censoring model is: the binary model at G ("binary"), the initiation
+# hazard model through G of notInitiateWithin(G) and of initiateWithin(G) with initiateWithinModel =
+# "hazard" ("hazard"), or the initiation hazard model of neverInitiate ("neverInitiate"), which never
+# shares a fit with the others (Phase1Contracts section 5.3).
+.censoringFitComponent <- function(kind, type) {
+  if (kind == "binary") {
+    return("binary")
+  }
+  return(if (type == "neverInitiate") "neverInitiate" else "hazard")
+}
+
+# The key of a fitted model: its component (.censoringFitComponent()), treatment, horizon, fixed prior
+# variance ("cv": none) and the settings (`argsList`, from FitCensoringModelsArgs$toList()) the fit
+# depends on. The design choices postGraceModel and initiateWithinModel choose between fits, so they
+# are not part of it, and the binary model at G does not depend on the hazard model's settings.
+.censoringFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
+  argsList$postGraceModel <- NULL
+  argsList$initiateWithinModel <- NULL
+  if (component == "binary") {
+    argsList$hazardModelType <- NULL
+    argsList$timeBasis <- NULL
+    argsList$covariateTimeInteraction <- NULL
+  } else {
+    argsList$maxCohortSizeForFitting <- NULL
+  }
+  return(paste(
+    component,
+    treatment,
+    as.integer(horizon),
+    if (is.null(fixedVariance)) "cv" else sprintf("%.17g", fixedVariance),
+    .settingsJson(argsList)
+  ))
+}
+
+# A settings list (from toList()) as JSON with its named elements sorted by name at every level, because
+# the order of the fields of settings objects (R6) depends on how they were made (for example clone()).
+.settingsJson <- function(settingsList) {
+  sortNames <- function(x) {
+    if (!is.list(x)) {
+      return(x)
+    }
+    if (!is.null(names(x))) {
+      x <- x[order(names(x))]
+    }
+    return(lapply(x, sortNames))
+  }
+  return(as.character(jsonlite::toJSON(sortNames(settingsList), auto_unbox = TRUE, digits = NA, null = "null")))
+}
+
+# The fits (named by .censoringFitKey()) of CcwCensoringModels, so they can be reused by
+# .fitCensoringModelsWithFits(). Models fit with .fixedPriorVariances cannot be told from
+# cross-validated ones, so pass only models fit without them.
+.censoringFitsFromModels <- function(censoringModels) {
+  argsList <- attr(censoringModels, "metaData")$fitCensoringModelsArgs
+  fits <- list()
+  for (model in censoringModels) {
+    fit <- model[setdiff(names(model), c("strategyId", "type", "treatment", "postGrace"))]
+    fits[[.censoringFitKey(.censoringFitComponent(model$kind, model$type), model$treatment, model$horizon, NULL, argsList)]] <- fit
+    if (!is.null(model$postGrace)) {
+      fits[[.censoringFitKey("binary", model$treatment, model$postGrace$horizon, NULL, argsList)]] <- model$postGrace
+    }
+  }
+  return(fits)
 }
 
 # Risk sets ----------------------------------------------------------------------------------------
@@ -658,7 +769,7 @@ fitCensoringModels <- function(clones,
   return(c("(Intercept)" = stats::qlogis(meanY)))
 }
 
-.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior) {
+.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model") {
   intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
   nIntervals <- horizon %/% intervalLength + 1L
   k <- seq_len(nIntervals) - 1L
@@ -694,12 +805,8 @@ fitCensoringModels <- function(clones,
     dplyr::distinct(.data$covariateId) |>
     pull()
   # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
-  interactionBasis <- .createInteractionBasis(
-    fitCensoringModelsArgs$covariateTimeInteraction,
-    basis,
-    k,
-    rowIntervals = fitIntervals[fitIntervals <= max(c(-1L, riskSet$lastInterval))]
-  )
+  rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, riskSet$lastInterval))]
+  interactionBasis <- .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
   interactionRef <- tibble(
     covariateId = rep(as.numeric(covariateIds), ncol(interactionBasis)),
     columnIndex = rep(seq_len(ncol(interactionBasis)), each = length(covariateIds))
@@ -771,6 +878,10 @@ fitCensoringModels <- function(clones,
     count() |>
     pull()
   events <- sum(riskSet$y)
+  if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
+    requested <- if (fitCensoringModelsArgs$covariateTimeInteraction == "day0") "day0" else colnames(basis)
+    .messageDroppedInteractions(fitCensoringModelsArgs$covariateTimeInteraction, requested, colnames(interactionBasis), rowIntervals, nIntervals, intervalLength, description)
+  }
   # Basis columns with no rows (intervals nobody reaches) are not in the model:
   presentBasisIds <- covariateData$hazardBasis |>
     dplyr::distinct(.data$covariateId) |>
@@ -894,6 +1005,31 @@ fitCensoringModels <- function(clones,
   return(interactionBasis[, varies, drop = FALSE])
 }
 
+# Says when covariateTimeInteraction asks for interactions but .createInteractionBasis() leaves out some
+# or all of their columns (`requested`; `keptColumns` are left), because they take a single value over
+# the intervals in the fit (`rowIntervals`), so the model has fewer (or no) covariate-by-time
+# interactions than asked for.
+.messageDroppedInteractions <- function(covariateTimeInteraction, requested, keptColumns, rowIntervals, nIntervals, intervalLength, description) {
+  if (covariateTimeInteraction == "none") {
+    return(invisible(NULL))
+  }
+  dropped <- setdiff(requested, keptColumns)
+  if (length(dropped) == 0 && length(keptColumns) > 0) {
+    return(invisible(NULL))
+  }
+  message(sprintf(
+    "The %s %s covariateTimeInteraction = \"%s\": %s a single value over the intervals in the fit (%s of %d%s; with the indicator basis, intervals in which nobody or everybody at risk initiates are not fit), so they would duplicate the covariates and are left out. For example, with intervalLength = 7 and a grace period ending on day 7, \"day0\" multiplies the first interval (days 0-6) and is left out when nobody starts on day 7; use shorter intervals to model the effects of the covariates on day 0",
+    description,
+    if (length(keptColumns) == 0) "has no covariate-by-time interactions although" else sprintf("leaves out the interaction columns %s of", paste(dropped, collapse = ", ")),
+    covariateTimeInteraction,
+    if (length(keptColumns) == 0) "its interaction columns would take" else "they take",
+    if (length(rowIntervals) == 0) "no intervals" else sprintf("interval%s %s", if (length(rowIntervals) == 1) "" else "s", paste(rowIntervals, collapse = ", ")),
+    nIntervals,
+    if (intervalLength == 1) "" else sprintf(", each %d days", intervalLength)
+  ))
+  invisible(NULL)
+}
+
 # The covariate part of the interaction coefficients, per person and interaction column with a non-zero
 # value (rowId, columnIndex, value): in interval k, the linear predictor of a person gains the sum over
 # columns c of interactionBasis[k, c] * value_c.
@@ -942,6 +1078,35 @@ fitCensoringModels <- function(clones,
   # log(1 - expit(eta)) = -log(1 + exp(eta)):
   logSurvival <- -ifelse(eta > 30, eta, log1p(exp(eta)))
   return(exp(rowSums(matrix(logSurvival, nrow = length(rowIds)))))
+}
+
+# S-bar(day) of a hazard model's numerator model (no covariates), the probability of no initiation on
+# days 0..day (day <= horizon).
+.computeNumeratorSurvival <- function(model, day) {
+  if (model$modelType == "cox") {
+    return(exp(-.evaluateCumulativeHazard(model$numerator$baselineHazard, day + 1)))
+  }
+  eta <- model$numerator$intervals$baseline[model$numerator$intervals$endDay <= day]
+  return(exp(-sum(ifelse(eta > 30, eta, log1p(exp(eta))))))
+}
+
+# The initiation hazard model of an initiateWithin(G) strategy with initiateWithinModel = "hazard" as the
+# binary model at G whose weights after G it gives: pi(X) = 1 - S(G | X) for the persons of its risk
+# set, and pi-bar = 1 - S-bar(G).
+.hazardAsBinaryModel <- function(model) {
+  return(list(
+    strategyId = model$strategyId,
+    type = model$type,
+    treatment = model$treatment,
+    kind = "binary",
+    modelType = "binary",
+    horizon = model$horizon,
+    predictions = tibble(
+      rowId = model$predictions$rowId,
+      propensityScore = 1 - .computeHazardSurvival(model, model$predictions$rowId, model$horizon)
+    ),
+    numerator = list(propensityScore = 1 - .computeNumeratorSurvival(model, model$horizon))
+  ))
 }
 
 # The intercept plus time-basis part of the linear predictor for each interval (-Inf or Inf, a hazard

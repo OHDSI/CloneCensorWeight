@@ -348,6 +348,29 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
   expect_null(calls[[1]]$fixed)
 })
 
+test_that("With initiateWithinModel = 'hazard', replicates fix the prior variance of the shared hazard model", {
+  data <- bootstrapData(seed = 4, initiationCoefficient = 0.8)
+  on.exit(close(data))
+  settings <- bootstrapSettings(
+    modelType = "km",
+    useCovariates = TRUE,
+    prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
+    replicates = 2
+  )
+  settings$fitCensoringModelsArgs$initiateWithinModel <- "hazard"
+  population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = settings$createStudyPopulationArgs))
+  clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))
+  fullModels <- suppressMessages(fitCensoringModels(clones, data, settings$fitCensoringModelsArgs))
+  close(clones)
+  # Both strategies use the hazard model through G = 3:
+  expect_equal(fullModels[[1]]$kind, "hazard")
+  expect_equal(fullModels[[1]]$priorVariance, fullModels[[2]]$priorVariance)
+  result <- runBootstrap(data, settings, censoringModels = fullModels)
+  expect_equal(result$metaData$bootstrap$fixedPriorVariances, list("1" = fullModels[[1]]$priorVariance, "2" = fullModels[[2]]$priorVariance))
+  expect_true(all(is.finite(result$estimates$estimate)))
+  expect_true(all(is.finite(result$estimates$lb95)))
+})
+
 test_that("Replicates give the censoring models the person each copy was drawn from", {
   data <- bootstrapData(n = 60, seed = 3)
   on.exit(close(data))

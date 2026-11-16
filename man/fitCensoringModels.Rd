@@ -37,7 +37,8 @@ of every censoring model.}
 An object of class \code{CcwCensoringModels}: a list with one element per strategy (in strategy order),
 each a list with
 \itemize{
-\item \code{strategyId}, \code{type}, \code{treatment}, \code{kind} (\code{"binary"} or \code{"hazard"}), \code{modelType} (\code{"binary"},
+\item \code{strategyId}, \code{type}, \code{treatment}, \code{kind} (\code{"binary"} or \code{"hazard"}; \code{"hazard"} for an
+\code{"initiateWithin"} strategy with \code{initiateWithinModel = "hazard"}), \code{modelType} (\code{"binary"},
 \code{"cox"} or \code{"logistic"}), and \code{horizon} (\code{G}, or the largest \code{riskEnd} for \code{"neverInitiate"}).
 \item \code{coefficients} (named by covariate ID; \code{"(Intercept)"}, the time-basis columns and the
 interactions, named \code{"<covariateId>:<column>"}, for the logistic model) and \code{priorVariance} (\code{NA}
@@ -71,12 +72,17 @@ the settings.
 Fits, for each strategy, the model of artificial censoring (deviation from the strategy) used to
 compute the inverse probability of censoring weights. Days are relative to the index date (day 0).
 \itemize{
-\item \code{"initiateWithin"} (grace period ending on day \code{G}): a binary model at \code{G}. The risk set holds the
+\item \code{"initiateWithin"} (grace period ending on day \code{G}), with \code{initiateWithinModel = "binary"} (the
+default): a binary model at \code{G}. The risk set holds the
 persons with no outcome or death on or before day \code{G} (before day \code{G} with
 \code{sameDayOrdering = "deviationFirst"}) and \code{riskEnd >= G}. The response is "started the treatment
 on or before day \code{G}". The model is fit by \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}} on a \code{CohortMethodData} view
 of the risk set, so it gets CohortMethod's covariate tidying, high-correlation check, sampling
 and regularization, and the AUC is computed with \code{\link[CohortMethod:computePsAuc]{CohortMethod::computePsAuc()}}.
+\item \code{"initiateWithin"} with \code{initiateWithinModel = "hazard"}: the model of the hazard of initiation
+through \code{G} described next, the same model as that of a \code{"notInitiateWithin(G)"} strategy of the
+same treatment (shared with such a strategy when the analysis has one), whose \code{1 - S(G | X)}
+gives the weights after \code{G} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 \item \code{"notInitiateWithin"} and \code{"neverInitiate"}: a model of the hazard of initiation. Each person is
 at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 death (that day with \code{"deviationFirst"}), \code{riskEnd}, and the strategy's horizon \code{H} (\code{G}, or the
@@ -94,14 +100,19 @@ of these intervals are left out of the fit, and the first remaining interval is 
 With \code{covariateTimeInteraction = "day0"} (the default) or \code{"interval"}, the pooled logistic model
 also has the products of the covariates with an indicator of day 0 (of the first interval with
 longer intervals), or with each time-basis column, penalized like the covariates (see
-\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}). An interaction column that takes a single value over the
+intervals in the fit would duplicate the covariates, so it is left out, with a message: for
+example \code{"day0"} with 7-day intervals and \code{G = 7} when nobody starts on day 7, so the first
+interval is the only one fit.
 \item \code{"notInitiateWithin"} with \code{postGraceModel = "binary"} (not the default, \code{"hazard"}): also the binary model at \code{G}
 of an \code{"initiateWithin(G)"} strategy of the same treatment (shared with such a strategy when the
 analysis has one), which gives the weights after \code{G} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 }
 
 Hazard models are fit per strategy horizon, and a fit is shared only between strategies with the
-same type, treatment and horizon. Each model also has a numerator model without covariates, fit on
+same treatment and horizon whose risk sets are the same: \code{"notInitiateWithin"} strategies, and
+\code{"initiateWithin"} strategies with \code{initiateWithinModel = "hazard"}, with the same \code{G}, or
+\code{"neverInitiate"} strategies. Each model also has a numerator model without covariates, fit on
 the same rows, used to stabilize the weights: the marginal probability of starting by \code{G} (binary),
 the Breslow cumulative hazard of a model without covariates (Cox), or the pooled logistic model
 with the time basis only. If the pooled logistic numerator model fails and \code{stopOnError = FALSE},

@@ -10,7 +10,8 @@ computeCcwSensitivity(
   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
   computeWeightsArgs = createComputeWeightsArgs(),
   fitOutcomeModelArgs = createFitOutcomeModelArgs(),
-  variants = NULL
+  variants = NULL,
+  .censoringModelFits = NULL
 )
 }
 \arguments{
@@ -33,12 +34,16 @@ variants. Each variant is a list with optional elements
 \code{fitCensoringModelsArgs}, \code{computeWeightsArgs} and
 \code{fitOutcomeModelArgs}, each a named list of the settings to change, for
 example \code{list("binary, no interactions" = list(fitCensoringModelsArgs = list(postGraceModel = "binary", covariateTimeInteraction = "none")))}.}
+
+\item{.censoringModelFits}{For internal use (\code{\link[=computeCcwDiagnostics]{computeCcwDiagnostics()}}): \code{NULL}, or censoring
+models fitted earlier, which are reused instead of refitted.}
 }
 \value{
 A tibble of class \code{CcwSensitivity} with columns \code{variant} (\code{"specified"} for the specified
 settings), \code{changes} (a description of the changed settings) and the columns of the estimates of
 \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} (\code{estimand}, \code{estimate}, \code{logEstimate}, \code{seLogEstimate}, \code{se}, \code{lb95}, \code{ub95},
-\code{p}). The attribute \code{variants} holds the settings of each variant.
+\code{p}). The attribute \code{variants} holds the settings of each variant. Each censoring model is fit once
+and shared by the variants that use it.
 }
 \description{
 Fits the censoring models, the weights and the outcome model under the specified settings and under
@@ -48,8 +53,8 @@ them.
 }
 \details{
 By default the variants change one choice at a time from the specified settings, to each of its
-other values: \code{postGraceModel} and \code{covariateTimeInteraction} (pooled logistic hazard model only) of
-\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses them), \code{truncateMsmWeights} (with
+other values: \code{postGraceModel}, \code{initiateWithinModel} and \code{covariateTimeInteraction} (pooled
+logistic hazard model only) of \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses them), \code{truncateMsmWeights} (with
 truncation, not for \code{modelType = "km"}, which does not use the weights on the MSM scale) and the
 truncation \code{basis} of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (with percentile truncation), and \code{msmWeights} of
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} (not for \code{modelType = "km"}). Pass \code{variants} for other combinations.

@@ -48,8 +48,8 @@ new defaults):
   `population$subjectId`. Cyclops' minimum for cross-validation (`createControl(minCVData = 100)`) then
   counts persons, not rows, so small replicates can fail where they did not. This needs Cyclops 4.0.1,
   which keeps the rows of a subject together for every model type.
-* New arguments were inserted before existing ones: `covariateTimeInteraction` and `postGraceModel`
-  after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
+* New arguments were inserted before existing ones: `covariateTimeInteraction`, `postGraceModel` and
+  `initiateWithinModel` after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
   `armByTimeInteraction` in `createFitOutcomeModelArgs()`. Calls that pass the later arguments by
   position must name them.
 * With the indicator time basis (the default), the numerator of the pooled logistic initiation hazard
@@ -79,3 +79,16 @@ New features:
 * Warnings for pooled logistic outcome grids that do not end an interval at the end of a grace period
   or use a smooth time basis with a grace period, for covariate windows that end on or after day 0,
   and for bootstrap replicates that sit predominantly on one side of the full-data estimate.
+* `createFitCensoringModelsArgs(initiateWithinModel = "hazard")` gives the weights of
+  `"initiateWithin(G)"` clones after the grace period as `1 / (1 - S(G | X))` from the initiation
+  hazard model (shared with a `"notInitiateWithin(G)"` strategy of the same treatment), stabilized by
+  `1 - S-bar(G)`. The default, `"binary"`, keeps the binary model at `G`. The calibration, positivity
+  and grace-period selection diagnostics, `computeCcwDiagnostics()` and the default variants of
+  `computeCcwSensitivity()` include both.
+* `computeCcwDiagnostics(censoringModels = )` reuses fitted censoring models, and the diagnostics and
+  `computeCcwSensitivity()` fit each censoring model once and share it between the choices that use it
+  (before, the specified models were refit, and the binary model at `G` once per interaction setting).
+  Choices that give the same censoring models are compared once.
+* `fitCensoringModels()` says when the columns of `covariateTimeInteraction` are left out because they
+  take a single value over the intervals in the fit (for example `"day0"` with 7-day intervals and a
+  grace period ending on day 7 when nobody starts on day 7).

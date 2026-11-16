@@ -552,8 +552,9 @@ TimeBasis <- R6Class(
 #' @details
 #' Create an object defining the parameter values for fitting the models of artificial censoring
 #' (deviation from a strategy). For `"initiateWithin"` strategies a binary model at the end of the grace
-#' period is always used. For `"notInitiateWithin"` and `"neverInitiate"` strategies the hazard of
-#' initiation is modelled with `hazardModelType`.
+#' period is used by default (`initiateWithinModel = "binary"`), or the initiation hazard model
+#' (`initiateWithinModel = "hazard"`). For `"notInitiateWithin"` and `"neverInitiate"` strategies the
+#' hazard of initiation is modelled with `hazardModelType`.
 #'
 #' The default hazard model, pooled logistic regression with a daily indicator time basis, is the
 #' exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
@@ -608,6 +609,39 @@ TimeBasis <- R6Class(
 #' selection check, weights, balance and positivity per option) and [computeCcwSensitivity()] (the
 #' estimates per option).
 #'
+#' **Weights of `"initiateWithin"` after the grace period.** With `initiateWithinModel = "binary"` (the
+#' default), the weight of an `"initiateWithin(G)"` clone after day `G` is `1 / pi(X)`, where `pi(X)` is
+#' the probability of starting by day `G` from the binary model at `G`. With
+#' `initiateWithinModel = "hazard"`, it is `1 / (1 - S(G | X))`, where `S(G | X)` is the probability of
+#' not initiating on days `0..G` from the initiation hazard model through `G` (with
+#' `hazardModelType`, `timeBasis` and `covariateTimeInteraction`), and the stabilized weight multiplies
+#' by `1 - S-bar(G)` of its numerator model. That hazard model is the one of a `"notInitiateWithin(G)"`
+#' strategy of the same treatment (the fit is shared when the analysis has one). When each option is
+#' valid:
+#'
+#' - **`"binary"`** is fitted on the persons under follow-up at `G`, whose probability of starting by
+#'   `G` is the one the weight needs, so it is valid whether or not starting during the grace period
+#'   changes the risk during the grace period. It needs a correctly specified binary model: a logistic
+#'   regression of starting by `G` on the main effects of the covariates. With covariates that change
+#'   *when* persons start (for example who starts on day 0), the probability of starting by `G` is not
+#'   logit-linear in them, and the weights are biased (in simulations with five covariates, and with
+#'   covariates that change who starts on day 0, the risk of the `"initiateWithin"` strategy at day 60
+#'   was biased by -0.26 and +0.32 empirical standard errors).
+#' - **`"hazard"`** models the timing of initiation, with covariate effects that can differ on day 0
+#'   (`covariateTimeInteraction = "day0"`) or in every interval (`"interval"`). But `1 - S(G | X)` is
+#'   the probability of starting by `G` of all persons at day 0, followed until the outcome or death,
+#'   not of the persons still under follow-up at `G`. The two agree only when starting the treatment
+#'   during the grace period does not change the risk of the outcome or death during the grace period:
+#'   the same assumption (1) as `postGraceModel = "binary"` above, the other way round. When starting
+#'   lowers that risk, the persons who started are over-represented among those under follow-up at `G`,
+#'   so `1 - S(G | X)` is too small for them and the weights after `G` too large. It also needs a
+#'   correctly specified hazard model.
+#'
+#' [computeGracePeriodSelection()] checks the assumption of `"hazard"`; a flag there means that
+#' `"binary"` is the valid choice. [computeCensoringModelCalibration()] compares `pi(X)` and
+#' `1 - S(G | X)` with the observed share who started by `G` (with the same caveat: under grace-period
+#' selection the observed share is that of the selected survivors).
+#'
 #' **Covariate-by-time interactions.** With `covariateTimeInteraction = "day0"` (the default), the
 #' pooled logistic initiation hazard model also has, for each covariate, its product with an indicator
 #' of the first interval of the time basis. With daily intervals (`timeBasis` with
@@ -622,8 +656,8 @@ TimeBasis <- R6Class(
 #' covariates; the time-basis columns are never penalized. The Cox model has no interactions, so with
 #' `hazardModelType = "cox"` the default is `"none"`, and `"day0"` and `"interval"` are not available.
 #'
-#' Settings saved before `covariateTimeInteraction` and `postGraceModel` existed load with
-#' `"day0"` (`"none"` for the Cox model) and `"hazard"`.
+#' Settings saved before `covariateTimeInteraction`, `postGraceModel` and `initiateWithinModel` existed
+#' load with `"day0"` (`"none"` for the Cox model), `"hazard"` and `"binary"`.
 #'
 #' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
 #'                                 `"cox"` (see details for its ties caveat).
@@ -641,6 +675,11 @@ TimeBasis <- R6Class(
 #'                                 initiation hazard model) or `"binary"` (`1 / (1 - pi(X))` from the
 #'                                 binary model at the end of the grace period). See details for when
 #'                                 each is valid.
+#' @param initiateWithinModel      The model that gives the weights of `"initiateWithin"` strategies
+#'                                 after the grace period: `"binary"` (`1 / pi(X)` from the binary
+#'                                 model at the end of the grace period) or `"hazard"`
+#'                                 (`1 / (1 - S(G | X))` from the initiation hazard model). See details
+#'                                 for when each is valid.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
 #'                                 `"artificial"` (deviation from a strategy). Censoring at the end of
 #'                                 observation is not weighted, so it is assumed to be independent of
@@ -667,12 +706,14 @@ TimeBasis <- R6Class(
 #' @examples
 #' args <- createFitCensoringModelsArgs(hazardModelType = "cox")
 #' args <- createFitCensoringModelsArgs(covariateTimeInteraction = "none", postGraceModel = "binary")
+#' args <- createFitCensoringModelsArgs(initiateWithinModel = "hazard")
 #'
 #' @export
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
                                          covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
                                          postGraceModel = "hazard",
+                                         initiateWithinModel = "binary",
                                          censoringMechanisms = "artificial",
                                          useCovariates = TRUE,
                                          excludeCovariateIds = c(),
@@ -706,6 +747,7 @@ FitCensoringModelsArgs <- R6Class(
     # Defaults, so settings saved before these fields existed load:
     covariateTimeInteraction = "day0",
     postGraceModel = "hazard",
+    initiateWithinModel = "binary",
     censoringMechanisms = NULL,
     useCovariates = NULL,
     excludeCovariateIds = NULL,
@@ -721,6 +763,7 @@ FitCensoringModelsArgs <- R6Class(
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
       checkmate::assertChoice(self$covariateTimeInteraction, c("none", "day0", "interval"), add = errorMessages)
       checkmate::assertChoice(self$postGraceModel, c("binary", "hazard"), add = errorMessages)
+      checkmate::assertChoice(self$initiateWithinModel, c("binary", "hazard"), add = errorMessages)
       if (identical(self$hazardModelType, "cox") && !identical(self$covariateTimeInteraction, "none")) {
         errorMessages$push("covariateTimeInteraction must be \"none\" with hazardModelType = \"cox\": covariate-by-time interactions are available only in the pooled logistic initiation hazard model (hazardModelType = \"logistic\")")
       }

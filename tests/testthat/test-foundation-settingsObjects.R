@@ -211,6 +211,30 @@ test_that("FitCensoringModelsArgs postGraceModel and covariateTimeInteraction (c
   }
 })
 
+test_that("FitCensoringModelsArgs initiateWithinModel (contract section 13.1)", {
+  expect_equal(createFitCensoringModelsArgs()$initiateWithinModel, "binary")
+  for (initiateWithinModel in c("binary", "hazard")) {
+    for (hazardModelType in c("logistic", "cox")) {
+      expectRoundTrip(
+        createFitCensoringModelsArgs(hazardModelType = hazardModelType, initiateWithinModel = initiateWithinModel),
+        FitCensoringModelsArgs
+      )
+    }
+  }
+  args <- createFitCensoringModelsArgs(initiateWithinModel = "hazard", postGraceModel = "binary")
+  reloaded <- FitCensoringModelsArgs$new(json = args$toJson())
+  expect_equal(reloaded$initiateWithinModel, "hazard")
+  expect_equal(reloaded$postGraceModel, "binary")
+  expect_error(createFitCensoringModelsArgs(initiateWithinModel = "logistic"), "initiateWithinModel")
+  # Settings saved before the field existed load with "binary", the earlier behaviour:
+  untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(initiateWithinModel = "hazard")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$initiateWithinModel <- NULL
+  expect_message(old <- FitCensoringModelsArgs$new(untypedList = untypedList), "saved without initiateWithinModel: filled with the current default initiateWithinModel = binary")
+  expect_equal(old$initiateWithinModel, "binary")
+  expect_message(old <- FitCensoringModelsArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA)), "initiateWithinModel = binary")
+  expect_equal(old$initiateWithinModel, "binary")
+})
+
 test_that("WeightTruncation basis (contract section 11.5)", {
   expect_equal(createWeightTruncation()$basis, "varying")
   expectRoundTrip(createWeightTruncation(basis = "allClones"), WeightTruncation)

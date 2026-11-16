@@ -55,7 +55,8 @@ with nobody under follow-up at \code{G} has no rows). The predictions are:
 likelihood with an intercept, it reproduces the observed share overall.
 \item \code{model = "hazard"}: \code{1 - S(G | X)} from the initiation hazard model of a \code{"notInitiateWithin"}
 strategy, the probability of initiating on days \verb{0..G}, whose complement gives the weights with
-\code{postGraceModel = "hazard"}.
+\code{postGraceModel = "hazard"}, or of an \code{"initiateWithin"} strategy fit with
+\code{initiateWithinModel = "hazard"}, which gives its weights after \code{G}.
 }
 
 The persons are ranked by their prediction and split into \code{numberOfGroups} groups of about the same
@@ -82,7 +83,10 @@ construction, whose weights after \code{G} are biased (see \code{postGraceModel}
 }
 
 So good calibration of the binary model does not show that \code{postGraceModel = "binary"} is
-appropriate, and a gap for the hazard model does not show that it is not. To tell the causes apart,
+appropriate, and a gap for the hazard model does not show that it is not. For an \code{"initiateWithin"}
+strategy the second cause works the other way: the persons under follow-up at \code{G} are the ones its
+weights reweight, so the binary model is the correct one, and \code{initiateWithinModel = "hazard"} is
+biased (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}). To tell the causes apart,
 the result also holds the grace-period selection check of \code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}} (the
 outcome and death rates during the grace period after and without initiation), and the hazard
 models with and without covariate-by-time interactions can be compared by calling this function on

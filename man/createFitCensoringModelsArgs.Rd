@@ -9,6 +9,7 @@ createFitCensoringModelsArgs(
   timeBasis = createTimeBasis(),
   covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
   postGraceModel = "hazard",
+  initiateWithinModel = "binary",
   censoringMechanisms = "artificial",
   useCovariates = TRUE,
   excludeCovariateIds = c(),
@@ -42,6 +43,12 @@ after the grace period: \code{"hazard"} (\code{1 / S(G | X)} from the
 initiation hazard model) or \code{"binary"} (\code{1 / (1 - pi(X))} from the
 binary model at the end of the grace period). See details for when
 each is valid.}
+
+\item{initiateWithinModel}{The model that gives the weights of \code{"initiateWithin"} strategies
+after the grace period: \code{"binary"} (\code{1 / pi(X)} from the binary
+model at the end of the grace period) or \code{"hazard"}
+(\code{1 / (1 - S(G | X))} from the initiation hazard model). See details
+for when each is valid.}
 
 \item{censoringMechanisms}{The censoring mechanisms to weight for. This version supports only
 \code{"artificial"} (deviation from a strategy). Censoring at the end of
@@ -80,8 +87,9 @@ Create a parameter object for fitting the censoring models
 \details{
 Create an object defining the parameter values for fitting the models of artificial censoring
 (deviation from a strategy). For \code{"initiateWithin"} strategies a binary model at the end of the grace
-period is always used. For \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies the hazard of
-initiation is modelled with \code{hazardModelType}.
+period is used by default (\code{initiateWithinModel = "binary"}), or the initiation hazard model
+(\code{initiateWithinModel = "hazard"}). For \code{"notInitiateWithin"} and \code{"neverInitiate"} strategies the
+hazard of initiation is modelled with \code{hazardModelType}.
 
 The default hazard model, pooled logistic regression with a daily indicator time basis, is the
 exact discrete-time hazard of initiation. The Cox model treats the initiation days as continuous
@@ -137,6 +145,40 @@ Compare the options on your data with \code{\link[=computeCcwDiagnostics]{comput
 selection check, weights, balance and positivity per option) and \code{\link[=computeCcwSensitivity]{computeCcwSensitivity()}} (the
 estimates per option).
 
+\strong{Weights of \code{"initiateWithin"} after the grace period.} With \code{initiateWithinModel = "binary"} (the
+default), the weight of an \code{"initiateWithin(G)"} clone after day \code{G} is \code{1 / pi(X)}, where \code{pi(X)} is
+the probability of starting by day \code{G} from the binary model at \code{G}. With
+\code{initiateWithinModel = "hazard"}, it is \code{1 / (1 - S(G | X))}, where \code{S(G | X)} is the probability of
+not initiating on days \verb{0..G} from the initiation hazard model through \code{G} (with
+\code{hazardModelType}, \code{timeBasis} and \code{covariateTimeInteraction}), and the stabilized weight multiplies
+by \code{1 - S-bar(G)} of its numerator model. That hazard model is the one of a \code{"notInitiateWithin(G)"}
+strategy of the same treatment (the fit is shared when the analysis has one). When each option is
+valid:
+\itemize{
+\item \strong{\code{"binary"}} is fitted on the persons under follow-up at \code{G}, whose probability of starting by
+\code{G} is the one the weight needs, so it is valid whether or not starting during the grace period
+changes the risk during the grace period. It needs a correctly specified binary model: a logistic
+regression of starting by \code{G} on the main effects of the covariates. With covariates that change
+\emph{when} persons start (for example who starts on day 0), the probability of starting by \code{G} is not
+logit-linear in them, and the weights are biased (in simulations with five covariates, and with
+covariates that change who starts on day 0, the risk of the \code{"initiateWithin"} strategy at day 60
+was biased by -0.26 and +0.32 empirical standard errors).
+\item \strong{\code{"hazard"}} models the timing of initiation, with covariate effects that can differ on day 0
+(\code{covariateTimeInteraction = "day0"}) or in every interval (\code{"interval"}). But \code{1 - S(G | X)} is
+the probability of starting by \code{G} of all persons at day 0, followed until the outcome or death,
+not of the persons still under follow-up at \code{G}. The two agree only when starting the treatment
+during the grace period does not change the risk of the outcome or death during the grace period:
+the same assumption (1) as \code{postGraceModel = "binary"} above, the other way round. When starting
+lowers that risk, the persons who started are over-represented among those under follow-up at \code{G},
+so \code{1 - S(G | X)} is too small for them and the weights after \code{G} too large. It also needs a
+correctly specified hazard model.
+}
+
+\code{\link[=computeGracePeriodSelection]{computeGracePeriodSelection()}} checks the assumption of \code{"hazard"}; a flag there means that
+\code{"binary"} is the valid choice. \code{\link[=computeCensoringModelCalibration]{computeCensoringModelCalibration()}} compares \code{pi(X)} and
+\code{1 - S(G | X)} with the observed share who started by \code{G} (with the same caveat: under grace-period
+selection the observed share is that of the selected survivors).
+
 \strong{Covariate-by-time interactions.} With \code{covariateTimeInteraction = "day0"} (the default), the
 pooled logistic initiation hazard model also has, for each covariate, its product with an indicator
 of the first interval of the time basis. With daily intervals (\code{timeBasis} with
@@ -151,11 +193,12 @@ With \code{"none"} it has no interactions. The interaction columns are penalized
 covariates; the time-basis columns are never penalized. The Cox model has no interactions, so with
 \code{hazardModelType = "cox"} the default is \code{"none"}, and \code{"day0"} and \code{"interval"} are not available.
 
-Settings saved before \code{covariateTimeInteraction} and \code{postGraceModel} existed load with
-\code{"day0"} (\code{"none"} for the Cox model) and \code{"hazard"}.
+Settings saved before \code{covariateTimeInteraction}, \code{postGraceModel} and \code{initiateWithinModel} existed
+load with \code{"day0"} (\code{"none"} for the Cox model), \code{"hazard"} and \code{"binary"}.
 }
 \examples{
 args <- createFitCensoringModelsArgs(hazardModelType = "cox")
 args <- createFitCensoringModelsArgs(covariateTimeInteraction = "none", postGraceModel = "binary")
+args <- createFitCensoringModelsArgs(initiateWithinModel = "hazard")
 
 }

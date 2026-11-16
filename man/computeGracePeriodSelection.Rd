@@ -73,7 +73,9 @@ groups do not remove (or, with \code{stratifyByDay = FALSE}, from a time trend i
 the absence of a flag does not prove the assumption when there are few events: read the rate ratio
 and its interval, not only the flag. \code{postGraceModel} concerns the \code{"notInitiateWithin"}
 strategies; the check of an \code{"initiateWithin"} strategy of the same treatment and \code{G} uses the same
-person-time.
+person-time, and concerns \code{initiateWithinModel}: a flag there means that
+\code{initiateWithinModel = "hazard"} is likely biased and \code{"binary"} is the valid choice (see
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

@@ -33,7 +33,8 @@
 #'   likelihood with an intercept, it reproduces the observed share overall.
 #' - `model = "hazard"`: `1 - S(G | X)` from the initiation hazard model of a `"notInitiateWithin"`
 #'   strategy, the probability of initiating on days `0..G`, whose complement gives the weights with
-#'   `postGraceModel = "hazard"`.
+#'   `postGraceModel = "hazard"`, or of an `"initiateWithin"` strategy fit with
+#'   `initiateWithinModel = "hazard"`, which gives its weights after `G`.
 #'
 #' The persons are ranked by their prediction and split into `numberOfGroups` groups of about the same
 #' size (deciles by default); persons with tied predictions are kept in one group, so there can be
@@ -58,7 +59,10 @@
 #'   [createFitCensoringModelsArgs()]).
 #'
 #' So good calibration of the binary model does not show that `postGraceModel = "binary"` is
-#' appropriate, and a gap for the hazard model does not show that it is not. To tell the causes apart,
+#' appropriate, and a gap for the hazard model does not show that it is not. For an `"initiateWithin"`
+#' strategy the second cause works the other way: the persons under follow-up at `G` are the ones its
+#' weights reweight, so the binary model is the correct one, and `initiateWithinModel = "hazard"` is
+#' biased (see [createFitCensoringModelsArgs()]). To tell the causes apart,
 #' the result also holds the grace-period selection check of [computeGracePeriodSelection()] (the
 #' outcome and death rates during the grace period after and without initiation), and the hazard
 #' models with and without covariate-by-time interactions can be compared by calling this function on

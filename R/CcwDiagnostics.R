@@ -57,7 +57,9 @@
 #' the absence of a flag does not prove the assumption when there are few events: read the rate ratio
 #' and its interval, not only the flag. `postGraceModel` concerns the `"notInitiateWithin"`
 #' strategies; the check of an `"initiateWithin"` strategy of the same treatment and `G` uses the same
-#' person-time.
+#' person-time, and concerns `initiateWithinModel`: a flag there means that
+#' `initiateWithinModel = "hazard"` is likely biased and `"binary"` is the valid choice (see
+#' [createFitCensoringModelsArgs()]).
 #'
 #' @param clones          An object of type [CcwClones] as created by `createClones()` (or the
 #'                        weighted clones returned by [computeCensoringWeights()]).
@@ -331,6 +333,8 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
       flag <- " FLAG: initiated and not-initiated person-time differ in risk"
       if (is.null(types) || types[row$strategyId] == "notInitiateWithin") {
         flag <- paste0(flag, "; postGraceModel = \"binary\" is likely biased, \"hazard\" is valid")
+      } else if (types[row$strategyId] == "initiateWithin") {
+        flag <- paste0(flag, "; initiateWithinModel = \"hazard\" is likely biased, \"binary\" is valid")
       }
     }
     writeLines(sprintf(
@@ -464,11 +468,12 @@ plotGracePeriodSelection <- function(gracePeriodSelection, labels = NULL, fileNa
 #' `"notInitiateWithin"` strategy with `postGraceModel = "binary"`), the prediction is `pi(X)`, the
 #' probability of starting by `G`, over the persons under follow-up at `G`. For an initiation hazard
 #' model it is `1 - S(H | X)`, the probability of starting on days `0..H` for its horizon `H` (`G` of a
-#' `"notInitiateWithin"` strategy, the largest `riskEnd` of a `"neverInitiate"` strategy), over the
-#' persons at risk on day 0; its complement `S(H | X)` gives the weights. The probability of following
-#' the strategy is `pi(X)` for `"initiateWithin"` and `S(H | X)` (or `1 - pi(X)`) for the strategies
-#' of not initiating; its inverse is the weight, so persons with a probability below `threshold` get
-#' weights above `1 / threshold`.
+#' `"notInitiateWithin"` strategy, or of an `"initiateWithin"` strategy with
+#' `initiateWithinModel = "hazard"`, the largest `riskEnd` of a `"neverInitiate"` strategy), over the
+#' persons at risk on day 0. The probability of following the strategy is `pi(X)` (or `1 - S(G | X)`)
+#' for `"initiateWithin"` and `S(H | X)` (or `1 - pi(X)`) for the strategies of not initiating; its
+#' inverse is the weight, so persons with a probability below `threshold` get weights above
+#' `1 / threshold`.
 #'
 #' @param clones          An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels An object of class `CcwCensoringModels` as created by [fitCensoringModels()]
@@ -901,8 +906,8 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #'
 #' @details
 #' By default the variants change one choice at a time from the specified settings, to each of its
-#' other values: `postGraceModel` and `covariateTimeInteraction` (pooled logistic hazard model only) of
-#' [createFitCensoringModelsArgs()] (only when a strategy uses them), `truncateMsmWeights` (with
+#' other values: `postGraceModel`, `initiateWithinModel` and `covariateTimeInteraction` (pooled
+#' logistic hazard model only) of [createFitCensoringModelsArgs()] (only when a strategy uses them), `truncateMsmWeights` (with
 #' truncation, not for `modelType = "km"`, which does not use the weights on the MSM scale) and the
 #' truncation `basis` of [createComputeWeightsArgs()] (with percentile truncation), and `msmWeights` of
 #' [createFitOutcomeModelArgs()] (not for `modelType = "km"`). Pass `variants` for other combinations.
@@ -922,12 +927,15 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #'                               `fitOutcomeModelArgs`, each a named list of the settings to change, for
 #'                               example `list("binary, no interactions" = list(fitCensoringModelsArgs =
 #'                               list(postGraceModel = "binary", covariateTimeInteraction = "none")))`.
+#' @param .censoringModelFits    For internal use ([computeCcwDiagnostics()]): `NULL`, or censoring
+#'                               models fitted earlier, which are reused instead of refitted.
 #'
 #' @return
 #' A tibble of class `CcwSensitivity` with columns `variant` (`"specified"` for the specified
 #' settings), `changes` (a description of the changed settings) and the columns of the estimates of
 #' [fitOutcomeModel()] (`estimand`, `estimate`, `logEstimate`, `seLogEstimate`, `se`, `lb95`, `ub95`,
-#' `p`). The attribute `variants` holds the settings of each variant.
+#' `p`). The attribute `variants` holds the settings of each variant. Each censoring model is fit once
+#' and shared by the variants that use it.
 #'
 #' @example inst/examples/clones.R
 #' @examples
@@ -949,7 +957,8 @@ computeCcwSensitivity <- function(clones,
                                   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
                                   computeWeightsArgs = createComputeWeightsArgs(),
                                   fitOutcomeModelArgs = createFitOutcomeModelArgs(),
-                                  variants = NULL) {
+                                  variants = NULL,
+                                  .censoringModelFits = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
@@ -966,6 +975,9 @@ computeCcwSensitivity <- function(clones,
   base <- list(fitCensoringModelsArgs = fitCensoringModelsArgs, computeWeightsArgs = computeWeightsArgs, fitOutcomeModelArgs = fitOutcomeModelArgs)
 
   censoringModels <- list()
+  # Each censoring model is fit once, also when variants (or computeCcwDiagnostics()) share it:
+  fits <- if (is.null(.censoringModelFits)) list() else .censoringModelFits
+  warnDay0CovariateWindows <- is.null(.censoringModelFits)
   weightedClones <- list()
   on.exit(for (weighted in weightedClones) close(weighted))
   estimates <- list()
@@ -974,7 +986,10 @@ computeCcwSensitivity <- function(clones,
     args <- .applyVariant(base, variants[[name]], name)
     censoringKey <- as.character(args$fitCensoringModelsArgs$toJson())
     if (is.null(censoringModels[[censoringKey]])) {
-      censoringModels[[censoringKey]] <- fitCensoringModels(clones, cloneCensorWeightData, args$fitCensoringModelsArgs)
+      fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args$fitCensoringModelsArgs, fits = fits, warnDay0CovariateWindows = warnDay0CovariateWindows)
+      warnDay0CovariateWindows <- FALSE
+      fits <- fitted$fits
+      censoringModels[[censoringKey]] <- fitted$models
     }
     outcomeTimeBasis <- if (args$fitOutcomeModelArgs$modelType == "logistic") args$fitOutcomeModelArgs$timeBasis else NULL
     weightsKey <- paste(censoringKey, as.character(args$computeWeightsArgs$toJson()), if (is.null(outcomeTimeBasis)) "" else as.character(outcomeTimeBasis$toJson()))
@@ -988,6 +1003,7 @@ computeCcwSensitivity <- function(clones,
       variant = name,
       changes = changes,
       postGraceModel = args$fitCensoringModelsArgs$postGraceModel,
+      initiateWithinModel = args$fitCensoringModelsArgs$initiateWithinModel,
       covariateTimeInteraction = args$fitCensoringModelsArgs$covariateTimeInteraction,
       stabilized = args$computeWeightsArgs$stabilized,
       truncationType = args$computeWeightsArgs$truncation$type,
@@ -1017,7 +1033,13 @@ computeCcwSensitivity <- function(clones,
       add("fitCensoringModelsArgs", "postGraceModel", value)
     }
   }
-  if (any(types != "initiateWithin") && fitCensoringModelsArgs$hazardModelType == "logistic") {
+  if (any(types == "initiateWithin")) {
+    for (value in setdiff(c("binary", "hazard"), fitCensoringModelsArgs$initiateWithinModel)) {
+      add("fitCensoringModelsArgs", "initiateWithinModel", value)
+    }
+  }
+  usesHazardModel <- any(types != "initiateWithin") || fitCensoringModelsArgs$initiateWithinModel == "hazard"
+  if (usesHazardModel && fitCensoringModelsArgs$hazardModelType == "logistic") {
     for (value in setdiff(c("day0", "none", "interval"), fitCensoringModelsArgs$covariateTimeInteraction)) {
       add("fitCensoringModelsArgs", "covariateTimeInteraction", value)
     }
@@ -1143,8 +1165,8 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #' Compute the diagnostics for choosing the design options of a clone-censor-weight analysis
 #'
 #' @description
-#' Computes, for the specified settings and for the alternative choices of `postGraceModel` and
-#' `covariateTimeInteraction`, the diagnostics that help choose between them for the data at hand:
+#' Computes, for the specified settings and for the alternative choices of `postGraceModel`,
+#' `initiateWithinModel` and `covariateTimeInteraction`, the diagnostics that help choose between them for the data at hand:
 #' calibration of the censoring models, the grace-period selection check, the weights on both scales,
 #' covariate balance after the grace period, positivity and, optionally, the estimates under each
 #' choice.
@@ -1152,19 +1174,26 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #' @details
 #' The choices compared are `postGraceModel` `"hazard"` and `"binary"` (when a strategy is
 #' `"notInitiateWithin"`), crossed with `covariateTimeInteraction` `"none"`, `"day0"` and the
-#' specified one (with the pooled logistic hazard model; the Cox model has none). One censoring model
-#' fit per interaction setting serves both `postGraceModel` choices. For each choice the result holds:
+#' specified one (with the pooled logistic hazard model, when a strategy uses it; the Cox model has
+#' none), crossed with `initiateWithinModel` `"binary"` and `"hazard"` (when a strategy is
+#' `"initiateWithin"`). Choices that give the same censoring models (for example the interaction
+#' settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
+#' and shared by the choices that use it (for example the hazard model through `G` serves both
+#' `postGraceModel` choices, and both strategies with `initiateWithinModel = "hazard"`), and the models
+#' in `censoringModels` are reused, so only the models they lack are fit. For each choice the result
+#' holds:
 #'
 #' - `calibration`: [computeCensoringModelCalibration()], for the binary model at `G` and for the
 #'   hazard model of each interaction setting, by group of the prediction, in the large, and by the
 #'   covariates in `strataCovariateIds`;
-#' - `gracePeriodSelection`: [computeGracePeriodSelection()], which tells whether `"binary"` is valid;
+#' - `gracePeriodSelection`: [computeGracePeriodSelection()] for the specified settings, which tells
+#'   whether `postGraceModel = "binary"` and `initiateWithinModel = "hazard"` are valid;
 #' - `weightSummary`: [computeWeightSummary()] for each choice (column `variant`);
 #' - `balance`: per choice, the largest absolute standardized difference of mean and the number of
 #'   covariates above `diagnosticThresholds$sdmThreshold`, before and after weighting, of
 #'   [computeCovariateBalance()] at day `tau + 1`;
-#' - `positivity`: [computePositivity()] for the specified interaction setting (with the binary model
-#'   at `G`);
+#' - `positivity`: [computePositivity()] for the specified interaction setting, with the binary model
+#'   at `G` and the hazard model of each strategy with a grace period;
 #' - `sensitivity`: [computeCcwSensitivity()] with its default variants, only when `sensitivity = TRUE`,
 #'   because it refits the outcome model under every variant.
 #'
@@ -1195,22 +1224,36 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'                                    [computeCcwSensitivity()])?
 #' @param fitOutcomeModelArgs         An object of type `FitOutcomeModelArgs` as created using
 #'                                    [createFitOutcomeModelArgs()], used with `sensitivity = TRUE`.
+#' @param censoringModels             `NULL`, or an object of class `CcwCensoringModels` as created by
+#'                                    [fitCensoringModels()] on the same clones (without the internal
+#'                                    `.fixedPriorVariances`): its models are reused, for the specified
+#'                                    settings and for every other choice that uses them, instead of
+#'                                    refitted. When `fitCensoringModelsArgs` is not given, the
+#'                                    specified settings are those the models were fit with. Models fit
+#'                                    with other settings (other than the design choices compared) are
+#'                                    not reused.
 #'
 #' @return
 #' An object of class `CcwDiagnostics`: a list with `variants` (a tibble with `variant`,
-#' `postGraceModel`, `covariateTimeInteraction` and `specified`), `calibration`,
+#' `postGraceModel`, `covariateTimeInteraction`, `initiateWithinModel` and `specified`), `calibration`,
 #' `gracePeriodSelection`, `weightSummary`, `balance`, `positivity`, `sensitivity` (`NULL` unless
 #' requested) and `thresholds`.
 #'
 #' @example inst/examples/clones.R
 #' @examples
-#' diagnostics <- computeCcwDiagnostics(
+#' censoringModels <- fitCensoringModels(
 #'   clones = clones,
 #'   cloneCensorWeightData = data,
 #'   fitCensoringModelsArgs = createFitCensoringModelsArgs(
 #'     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
-#'   ),
-#'   numberOfGroups = 5
+#'   )
+#' )
+#' # Reuses the fitted models, and fits only those of the other choices:
+#' diagnostics <- computeCcwDiagnostics(
+#'   clones = clones,
+#'   cloneCensorWeightData = data,
+#'   numberOfGroups = 5,
+#'   censoringModels = censoringModels
 #' )
 #' diagnostics
 #' close(clones)
@@ -1226,7 +1269,8 @@ computeCcwDiagnostics <- function(clones,
                                   numberOfGroups = 10,
                                   strataCovariateIds = NULL,
                                   sensitivity = FALSE,
-                                  fitOutcomeModelArgs = createFitOutcomeModelArgs()) {
+                                  fitOutcomeModelArgs = createFitOutcomeModelArgs(),
+                                  censoringModels = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
@@ -1236,42 +1280,73 @@ computeCcwDiagnostics <- function(clones,
   checkmate::assertInt(numberOfGroups, lower = 1, add = errorMessages)
   checkmate::assertFlag(sensitivity, add = errorMessages)
   checkmate::assertR6(fitOutcomeModelArgs, "FitOutcomeModelArgs", add = errorMessages)
+  checkmate::assertClass(censoringModels, "CcwCensoringModels", null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
+  # The fitted censoring models, reused by every choice that uses them:
+  fits <- list()
+  if (!is.null(censoringModels)) {
+    .checkModelsMatchClones(censoringModels, attr(clones, "metaData"))
+    modelsArgs <- attr(censoringModels, "metaData")$fitCensoringModelsArgs
+    if (missing(fitCensoringModelsArgs)) {
+      fitCensoringModelsArgs <- FitCensoringModelsArgs$new(untypedList = modelsArgs)
+    } else if (.withoutDesignChoices(modelsArgs) != .withoutDesignChoices(fitCensoringModelsArgs$toList())) {
+      message("The censoring models given were fit with other settings than fitCensoringModelsArgs (besides postGraceModel, initiateWithinModel and covariateTimeInteraction), so the models that depend on them are fit again")
+    }
+    fits <- .censoringFitsFromModels(censoringModels)
+  }
   strategies <- attr(clones, "metaData")$strategies
   types <- vapply(strategies, function(strategy) strategy$type, character(1))
 
   postGraceModels <- if (any(types == "notInitiateWithin")) c("hazard", "binary") else fitCensoringModelsArgs$postGraceModel
+  initiateWithinModels <- if (any(types == "initiateWithin")) c("binary", "hazard") else fitCensoringModelsArgs$initiateWithinModel
   interactions <- fitCensoringModelsArgs$covariateTimeInteraction
-  if (fitCensoringModelsArgs$hazardModelType == "logistic" && any(types != "initiateWithin")) {
+  usesHazardModel <- any(types != "initiateWithin") || "hazard" %in% initiateWithinModels
+  if (fitCensoringModelsArgs$hazardModelType == "logistic" && usesHazardModel) {
     interactions <- unique(c(interactions, "none", "day0"))
   }
-  variants <- expand.grid(postGraceModel = postGraceModels, covariateTimeInteraction = interactions, stringsAsFactors = FALSE)
-  variants$variant <- sprintf("postGraceModel = %s, covariateTimeInteraction = %s", variants$postGraceModel, variants$covariateTimeInteraction)
+  variants <- expand.grid(
+    postGraceModel = postGraceModels,
+    covariateTimeInteraction = interactions,
+    initiateWithinModel = initiateWithinModels,
+    stringsAsFactors = FALSE
+  )
+  variants$variant <- sprintf(
+    "postGraceModel = %s, covariateTimeInteraction = %s, initiateWithinModel = %s",
+    variants$postGraceModel, variants$covariateTimeInteraction, variants$initiateWithinModel
+  )
   variants$specified <- variants$postGraceModel == fitCensoringModelsArgs$postGraceModel &
-    variants$covariateTimeInteraction == fitCensoringModelsArgs$covariateTimeInteraction
-  variants <- dplyr::as_tibble(variants[order(!variants$specified), c("variant", "postGraceModel", "covariateTimeInteraction", "specified")])
+    variants$covariateTimeInteraction == fitCensoringModelsArgs$covariateTimeInteraction &
+    variants$initiateWithinModel == fitCensoringModelsArgs$initiateWithinModel
+  variants <- dplyr::as_tibble(variants[order(!variants$specified), c("variant", "postGraceModel", "covariateTimeInteraction", "initiateWithinModel", "specified")])
 
-  # One fit per interaction setting, with the binary model at G when a strategy can use it, serves both
-  # postGraceModel choices: the "hazard" models are the same fit without that binary model.
-  fits <- list()
-  for (interaction in interactions) {
+  # The censoring models of each choice, each model fit once (or taken from censoringModels):
+  variantModels <- list()
+  for (i in seq_len(nrow(variants))) {
     args <- fitCensoringModelsArgs$clone(deep = TRUE)
-    args$covariateTimeInteraction <- interaction
-    args$postGraceModel <- if ("binary" %in% postGraceModels) "binary" else fitCensoringModelsArgs$postGraceModel
-    fits[[interaction]] <- fitCensoringModels(clones, cloneCensorWeightData, args)
+    args$postGraceModel <- variants$postGraceModel[i]
+    args$covariateTimeInteraction <- variants$covariateTimeInteraction[i]
+    args$initiateWithinModel <- variants$initiateWithinModel[i]
+    fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args, fits = fits, warnDay0CovariateWindows = i == 1)
+    fits <- fitted$fits
+    variantModels[[i]] <- fitted$models
   }
+  # Choices with the same censoring models are compared once (the specified one, or the first):
+  duplicate <- vapply(seq_along(variantModels), function(i) {
+    any(vapply(seq_len(i - 1), function(j) .sameCensoringModels(variantModels[[i]], variantModels[[j]]), logical(1)))
+  }, logical(1))
+  variants <- variants[!duplicate, ]
+  variantModels <- variantModels[!duplicate]
+  specifiedModels <- variantModels[[1]]
 
-  calibration <- dplyr::bind_rows(lapply(fits, function(models) {
+  calibration <- dplyr::bind_rows(lapply(variantModels, function(models) {
     computeCensoringModelCalibration(clones, models, numberOfGroups, cloneCensorWeightData, strataCovariateIds)
   }))
   calibration <- calibration[!duplicated(calibration[, c("strategyId", "model", "covariateTimeInteraction", "grouping", "covariateId", "group")]), ]
-  specifiedFit <- fits[[fitCensoringModelsArgs$covariateTimeInteraction]]
 
   balance <- list()
   weightSummaries <- list()
   for (i in seq_len(nrow(variants))) {
-    models <- .withPostGraceModel(fits[[variants$covariateTimeInteraction[i]]], variants$postGraceModel[i])
-    weightedClones <- computeCensoringWeights(clones, models, computeWeightsArgs)
+    weightedClones <- computeCensoringWeights(clones, variantModels[[i]], computeWeightsArgs)
     tryCatch(
       {
         covariateBalance <- computeCovariateBalance(weightedClones, cloneCensorWeightData, computeCovariateBalanceArgs)
@@ -1285,35 +1360,62 @@ computeCcwDiagnostics <- function(clones,
     )
   }
 
+  # Positivity of the specified interaction setting, with the binary model at G of notInitiateWithin's
+  # weights after G when there is one, and both models of initiateWithin:
+  postGraceModel <- if ("binary" %in% postGraceModels) "binary" else fitCensoringModelsArgs$postGraceModel
+  positivityModels <- variantModels[variants$covariateTimeInteraction == fitCensoringModelsArgs$covariateTimeInteraction & variants$postGraceModel == postGraceModel]
+  if (length(positivityModels) == 0) {
+    positivityModels <- list(specifiedModels)
+  }
+  positivity <- .combinePositivity(lapply(positivityModels, function(models) {
+    computePositivity(clones, models, diagnosticThresholds$positivityThreshold)
+  }))
+
   diagnostics <- list(
     variants = variants,
     calibration = calibration,
-    gracePeriodSelection = computeGracePeriodSelection(clones, specifiedFit, numberOfGroups),
+    gracePeriodSelection = computeGracePeriodSelection(clones, specifiedModels, numberOfGroups),
     weightSummary = dplyr::bind_rows(weightSummaries),
     balance = dplyr::bind_rows(balance),
-    positivity = computePositivity(clones, specifiedFit, diagnosticThresholds$positivityThreshold),
-    sensitivity = if (sensitivity) computeCcwSensitivity(clones, cloneCensorWeightData, fitCensoringModelsArgs, computeWeightsArgs, fitOutcomeModelArgs) else NULL,
+    positivity = positivity,
+    sensitivity = if (sensitivity) computeCcwSensitivity(clones, cloneCensorWeightData, fitCensoringModelsArgs, computeWeightsArgs, fitOutcomeModelArgs, .censoringModelFits = fits) else NULL,
     thresholds = diagnosticThresholds$toList()
   )
   class(diagnostics) <- "CcwDiagnostics"
   return(diagnostics)
 }
 
-# The censoring models with the weights after the grace period of `postGraceModel`: a fit with
-# postGraceModel = "binary" without its binary models at G is the fit with "hazard".
-.withPostGraceModel <- function(censoringModels, postGraceModel) {
-  if (postGraceModel == "binary") {
-    return(censoringModels)
-  }
-  metaData <- attr(censoringModels, "metaData")
-  censoringModels <- lapply(censoringModels, function(model) {
-    model$postGrace <- NULL
-    model
-  })
-  metaData$fitCensoringModelsArgs$postGraceModel <- "hazard"
-  attr(censoringModels, "metaData") <- metaData
-  class(censoringModels) <- "CcwCensoringModels"
-  return(censoringModels)
+# The settings of the censoring models (FitCensoringModelsArgs$toList()) without the design choices that
+# computeCcwDiagnostics() compares, as JSON.
+.withoutDesignChoices <- function(argsList) {
+  argsList$postGraceModel <- NULL
+  argsList$initiateWithinModel <- NULL
+  argsList$covariateTimeInteraction <- NULL
+  return(.settingsJson(argsList))
+}
+
+# Do two CcwCensoringModels hold the same models (whatever settings they record)?
+.sameCensoringModels <- function(a, b) {
+  a <- unclass(a)
+  b <- unclass(b)
+  attr(a, "metaData") <- NULL
+  attr(b, "metaData") <- NULL
+  return(identical(a, b))
+}
+
+# One CcwPositivity from several, each model of each strategy once (in strategy order).
+.combinePositivity <- function(positivities) {
+  positivity <- dplyr::bind_rows(lapply(positivities, dplyr::as_tibble))
+  keep <- !duplicated(positivity[, c("strategyId", "model", "day")])
+  positivity <- positivity[keep, ]
+  positivity <- positivity[order(positivity$strategyId), ]
+  predictions <- dplyr::bind_rows(lapply(positivities, function(x) attr(x, "predictions")))
+  predictions <- predictions[!duplicated(predictions[, c("strategyId", "model", "rowId")]), ]
+  attr(positivity, "predictions") <- predictions[order(predictions$strategyId), ]
+  attr(positivity, "threshold") <- attr(positivities[[1]], "threshold")
+  attr(positivity, "strategyLabels") <- attr(positivities[[1]], "strategyLabels")
+  class(positivity) <- c("CcwPositivity", class(positivity))
+  return(positivity)
 }
 
 .summarizeBalance <- function(balance, threshold) {

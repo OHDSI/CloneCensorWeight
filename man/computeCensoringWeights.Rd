@@ -61,7 +61,10 @@ for the outcome models.
 Let \code{W(d)} be the weight on day \code{d} (days since index). With \code{sameDayOrdering = "eventsFirst"}:
 \itemize{
 \item \code{"initiateWithin"} (grace period ending on day \code{G}): \code{W(d) = 1} for \code{d <= G} and \code{1 / pi(X)} for
-\code{d > G}, where \code{pi(X)} is the probability of starting by \code{G} from the binary model.
+\code{d > G}, where \code{pi(X)} is the probability of starting by \code{G} from the binary model when the models
+were fit with \code{initiateWithinModel = "binary"} (the default), and \code{1 - S(G | X)} from the
+initiation hazard model with \code{initiateWithinModel = "hazard"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}
+for when each is valid).
 \item \code{"notInitiateWithin"}: \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= G} (with \code{S(-1) = 1}), where
 \code{S(d | X)} is the probability of not initiating on days \verb{0..d} from the initiation hazard model.
 For \code{d > G}, \code{W(d) = 1 / S(G | X)} when the models were fit with \code{postGraceModel = "hazard"} (the
@@ -77,7 +80,8 @@ day \code{G} on, with \code{postGraceModel = "binary"}). A clone that deviates o
 any outcome on that day, so it is not at risk of the outcome on day \code{d}: its segments end on day
 \code{d - 1}, and a clone that deviates on its first day of follow-up has no segments. Stabilized
 weights multiply by the same quantity from the numerator model without covariates (the marginal
-\code{pi-bar} of the binary model in place of \code{pi(X)}, also in \code{1 - pi(X)}).
+\code{pi-bar} of the binary model in place of \code{pi(X)}, also in \code{1 - pi(X)}, and \code{S-bar} in place of \code{S},
+also in \code{1 - S(G | X)}).
 
 Each clone's follow-up is split, on the survival time scale \code{t = day - riskStart + 1}, at the end of
 day \code{G} (day \code{G - 1} with \code{"deviationFirst"}) for \code{"initiateWithin"}, and, for the hazard

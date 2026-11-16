@@ -34,11 +34,12 @@ For a binary model at \code{G} (of an \code{"initiateWithin"} strategy, and of t
 \code{"notInitiateWithin"} strategy with \code{postGraceModel = "binary"}), the prediction is \code{pi(X)}, the
 probability of starting by \code{G}, over the persons under follow-up at \code{G}. For an initiation hazard
 model it is \code{1 - S(H | X)}, the probability of starting on days \verb{0..H} for its horizon \code{H} (\code{G} of a
-\code{"notInitiateWithin"} strategy, the largest \code{riskEnd} of a \code{"neverInitiate"} strategy), over the
-persons at risk on day 0; its complement \code{S(H | X)} gives the weights. The probability of following
-the strategy is \code{pi(X)} for \code{"initiateWithin"} and \code{S(H | X)} (or \code{1 - pi(X)}) for the strategies
-of not initiating; its inverse is the weight, so persons with a probability below \code{threshold} get
-weights above \code{1 / threshold}.
+\code{"notInitiateWithin"} strategy, or of an \code{"initiateWithin"} strategy with
+\code{initiateWithinModel = "hazard"}, the largest \code{riskEnd} of a \code{"neverInitiate"} strategy), over the
+persons at risk on day 0. The probability of following the strategy is \code{pi(X)} (or \code{1 - S(G | X)})
+for \code{"initiateWithin"} and \code{S(H | X)} (or \code{1 - pi(X)}) for the strategies of not initiating; its
+inverse is the weight, so persons with a probability below \code{threshold} get weights above
+\code{1 / threshold}.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:
