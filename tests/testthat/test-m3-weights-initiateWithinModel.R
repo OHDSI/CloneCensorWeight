@@ -299,11 +299,15 @@ test_that("A message says when covariate-by-time interactions are dropped as con
   expect_length(dropped, 1)
   expect_match(dropped, "logistic initiation hazard model through day 7 for strategy 2 .* has no covariate-by-time interactions although covariateTimeInteraction = \"day0\"")
   expect_match(dropped, "interval 0 of 2, each 7 days")
+  expect_match(dropped, "The first interval \\(days 0-6\\) is the only one in the fit.*use shorter intervals")
   expect_equal(ncol(models[[2]]$interactions$basis), 0)
   expect_false(any(grepl(":", names(models[[2]]$coefficients))))
   # "interval" has no column either with a single interval in the fit:
   messages <- capture_messages(fitCensoringModels(clones, data, m3Args("logistic", timeBasis = weekly, covariateTimeInteraction = "interval")))
-  expect_length(grep("covariateTimeInteraction = \"interval\"", messages), 1)
+  dropped <- grep("covariateTimeInteraction = \"interval\"", messages, value = TRUE)
+  expect_length(dropped, 1)
+  # ... without the advice that is about "day0":
+  expect_false(grepl("day0|day 0|shorter intervals", dropped))
   # Neither "none" nor daily intervals, where day 0 has its own interval, give the message:
   messages <- capture_messages(fitCensoringModels(clones, data, m3Args("logistic", timeBasis = weekly, covariateTimeInteraction = "none")))
   expect_false(any(grepl("covariate-by-time interactions", messages)))
@@ -313,4 +317,24 @@ test_that("A message says when covariate-by-time interactions are dropped as con
   # Without covariates there are no interactions to drop:
   messages <- capture_messages(fitCensoringModels(clones, data, m3Args("logistic", useCovariates = FALSE, timeBasis = weekly, covariateTimeInteraction = "day0")))
   expect_false(any(grepl("covariate-by-time interactions", messages)))
+})
+
+test_that("With daily intervals and no day-0 starts, the dropped-interaction message has no advice on shorter intervals", {
+  # Nobody starts on day 0, so interval 0 is not fit under the indicator basis and the "day0" column is
+  # constant: there is no day-0 effect to model, and shorter intervals would not help.
+  fixture <- createM3Fixture(150, riskStart = 0L, seed = 44, maxTreatmentDay = 6L)
+  fixture$persons$treatmentDay[!is.na(fixture$persons$treatmentDay) & fixture$persons$treatmentDay == 0L] <- 1L
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = 7), "eventsFirst")
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  messages <- capture_messages(models <- fitCensoringModels(clones, data, m3Args("logistic", covariateTimeInteraction = "day0")))
+  dropped <- grep("covariate-by-time interactions", messages, value = TRUE)
+  expect_length(dropped, 1)
+  expect_match(dropped, "has no covariate-by-time interactions although covariateTimeInteraction = \"day0\"")
+  expect_match(dropped, "Nobody \\(or everybody\\) at risk initiates on day 0, so there is no effect of the covariates there to model")
+  expect_false(grepl("shorter intervals|each 7 days", dropped))
+  expect_equal(ncol(models[[2]]$interactions$basis), 0)
 })

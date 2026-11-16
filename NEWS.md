@@ -91,4 +91,6 @@ New features:
   Choices that give the same censoring models are compared once.
 * `fitCensoringModels()` says when the columns of `covariateTimeInteraction` are left out because they
   take a single value over the intervals in the fit (for example `"day0"` with 7-day intervals and a
-  grace period ending on day 7 when nobody starts on day 7).
+  grace period ending on day 7 when nobody starts on day 7). For `"day0"` it says why: nobody (or
+  everybody) starts in the first interval, so there is no first-interval effect to model, or the first
+  interval is the only one in the fit, which shorter intervals can split.

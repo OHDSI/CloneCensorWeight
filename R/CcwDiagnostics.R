@@ -1229,9 +1229,13 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'                                    `.fixedPriorVariances`): its models are reused, for the specified
 #'                                    settings and for every other choice that uses them, instead of
 #'                                    refitted. When `fitCensoringModelsArgs` is not given, the
-#'                                    specified settings are those the models were fit with. Models fit
-#'                                    with other settings (other than the design choices compared) are
-#'                                    not reused.
+#'                                    specified settings are those the models were fit with. When they
+#'                                    were fit with settings other than `fitCensoringModelsArgs` (besides
+#'                                    the design choices compared), the models that depend on those
+#'                                    settings are fit again. For example, the binary model at G is
+#'                                    reused when only the hazard model's settings (`timeBasis` or
+#'                                    `hazardModelType`) differ, and the hazard models when only
+#'                                    `maxCohortSizeForFitting` differs.
 #'
 #' @return
 #' An object of class `CcwDiagnostics`: a list with `variants` (a tibble with `variant`,

@@ -1008,7 +1008,9 @@ fitCensoringModels <- function(clones,
 # Says when covariateTimeInteraction asks for interactions but .createInteractionBasis() leaves out some
 # or all of their columns (`requested`; `keptColumns` are left), because they take a single value over
 # the intervals in the fit (`rowIntervals`), so the model has fewer (or no) covariate-by-time
-# interactions than asked for.
+# interactions than asked for. For "day0", it also says why: nobody (or everybody) initiates in the first
+# interval, so there is no first-interval effect to model, or the first interval is the only one fit,
+# which shorter intervals can split.
 .messageDroppedInteractions <- function(covariateTimeInteraction, requested, keptColumns, rowIntervals, nIntervals, intervalLength, description) {
   if (covariateTimeInteraction == "none") {
     return(invisible(NULL))
@@ -1017,15 +1019,27 @@ fitCensoringModels <- function(clones,
   if (length(dropped) == 0 && length(keptColumns) > 0) {
     return(invisible(NULL))
   }
+  firstInterval <- if (intervalLength == 1) "day 0" else sprintf("the first interval (days 0-%d)", intervalLength - 1)
+  reason <- ""
+  if (covariateTimeInteraction == "day0") {
+    if (!0L %in% rowIntervals) {
+      reason <- sprintf(" Nobody (or everybody) at risk initiates on %s, so there is no effect of the covariates there to model.", firstInterval)
+    } else if (intervalLength == 1) {
+      reason <- " Day 0 is the only day in the fit, so the covariates' main effects are already their effects on day 0."
+    } else {
+      reason <- sprintf(" The first interval (days 0-%d) is the only one in the fit, for example when nobody starts in the days of the grace period after it; use shorter intervals to model the effects of the covariates on day 0.", intervalLength - 1)
+    }
+  }
   message(sprintf(
-    "The %s %s covariateTimeInteraction = \"%s\": %s a single value over the intervals in the fit (%s of %d%s; with the indicator basis, intervals in which nobody or everybody at risk initiates are not fit), so they would duplicate the covariates and are left out. For example, with intervalLength = 7 and a grace period ending on day 7, \"day0\" multiplies the first interval (days 0-6) and is left out when nobody starts on day 7; use shorter intervals to model the effects of the covariates on day 0",
+    "The %s %s covariateTimeInteraction = \"%s\": %s a single value over the intervals in the fit (%s of %d%s; with the indicator basis, intervals in which nobody or everybody at risk initiates are not fit), so they would duplicate the covariates and are left out.%s",
     description,
     if (length(keptColumns) == 0) "has no covariate-by-time interactions although" else sprintf("leaves out the interaction columns %s of", paste(dropped, collapse = ", ")),
     covariateTimeInteraction,
     if (length(keptColumns) == 0) "its interaction columns would take" else "they take",
     if (length(rowIntervals) == 0) "no intervals" else sprintf("interval%s %s", if (length(rowIntervals) == 1) "" else "s", paste(rowIntervals, collapse = ", ")),
     nIntervals,
-    if (intervalLength == 1) "" else sprintf(", each %d days", intervalLength)
+    if (intervalLength == 1) "" else sprintf(", each %d days", intervalLength),
+    reason
   ))
   invisible(NULL)
 }

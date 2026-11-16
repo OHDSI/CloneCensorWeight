@@ -688,6 +688,15 @@ test_that("computeCcwDiagnostics reuses given censoring models and fits only the
     computeCcwDiagnostics(clones, data, designArgs(useCovariates = FALSE), numberOfGroups = 5, censoringModels = models),
     "fit with other settings than fitCensoringModelsArgs"
   )
+  # The binary model at G does not depend on the hazard model's settings, so with only timeBasis
+  # different it is reused and the two hazard models are fit again:
+  weekly <- suppressMessages(fitCensoringModels(clones, data, designArgs(timeBasis = createTimeBasis(intervalLength = 7))))
+  messages <- capture_messages(fromWeekly <- computeCcwDiagnostics(clones, data, args, numberOfGroups = 5, censoringModels = weekly))
+  expect_true(any(grepl("fit with other settings than fitCensoringModelsArgs", messages)))
+  expect_true(any(grepl("^Reusing the fitted binary censoring model at day 7 for strategy 1", messages)))
+  expect_equal(sum(grepl("^Fitting", messages)), 2)
+  expect_false(any(grepl("^Fitting.*binary", messages)))
+  expect_equal(fromWeekly$weightSummary, fresh$weightSummary)
   expect_error(computeCcwDiagnostics(clones, data, args, censoringModels = list()), "CcwCensoringModels")
 })
 
