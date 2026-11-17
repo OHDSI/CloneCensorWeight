@@ -37,13 +37,15 @@ using \code{\link[=createCcwDiagnosticThresholds]{createCcwDiagnosticThresholds(
 \item{calibrationSeed}{The random seed of the empirical calibration: the null
 distribution of each calibration group is fitted by
 \code{\link[EmpiricalCalibration:fitMcmcNull]{EmpiricalCalibration::fitMcmcNull()}}, an MCMC, with this
-seed, so that calibrated p-values and confidence intervals
-are the same from run to run (and for any number of
-calibration threads). The random number stream of the
-caller is restored afterwards. \code{NULL} runs the MCMC
-unseeded, on the current random number stream, as
+seed and R's default random number kinds (whatever the
+caller's \code{\link[=RNGkind]{RNGkind()}}), so that calibrated p-values and
+confidence intervals are the same from run to run (and for
+any number of calibration threads). The random number
+stream of the caller is restored afterwards. \code{NULL} runs
+the MCMC unseeded, on the current random number stream, as
 CohortMethod does. Specifications saved without it (by an
-earlier version) load with \code{NULL}.}
+earlier version) load with \code{NULL}. A change of it alone
+makes \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} recompute only the summaries.}
 }
 \value{
 An object of type \code{CcwAnalysesSpecifications}.

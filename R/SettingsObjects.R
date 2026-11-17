@@ -1592,13 +1592,15 @@ CcwDiagnosticThresholds <- R6Class(
 #' @param calibrationSeed                     The random seed of the empirical calibration: the null
 #'                                            distribution of each calibration group is fitted by
 #'                                            [EmpiricalCalibration::fitMcmcNull()], an MCMC, with this
-#'                                            seed, so that calibrated p-values and confidence intervals
-#'                                            are the same from run to run (and for any number of
-#'                                            calibration threads). The random number stream of the
-#'                                            caller is restored afterwards. `NULL` runs the MCMC
-#'                                            unseeded, on the current random number stream, as
+#'                                            seed and R's default random number kinds (whatever the
+#'                                            caller's [RNGkind()]), so that calibrated p-values and
+#'                                            confidence intervals are the same from run to run (and for
+#'                                            any number of calibration threads). The random number
+#'                                            stream of the caller is restored afterwards. `NULL` runs
+#'                                            the MCMC unseeded, on the current random number stream, as
 #'                                            CohortMethod does. Specifications saved without it (by an
-#'                                            earlier version) load with `NULL`.
+#'                                            earlier version) load with `NULL`. A change of it alone
+#'                                            makes [runCcwAnalyses()] recompute only the summaries.
 #'
 #' @return
 #' An object of type `CcwAnalysesSpecifications`.

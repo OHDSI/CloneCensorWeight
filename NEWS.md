@@ -34,10 +34,13 @@ new defaults):
   of its analyses needs it.
 * The empirical calibration is seeded: `createCcwAnalysesSpecifications(calibrationSeed = 1)` fits the
   null distribution of each calibration group (`EmpiricalCalibration::fitMcmcNull()`, an MCMC) with
-  this seed and then restores the caller's random number stream, so the calibrated p-values and
-  confidence intervals and the EASE are the same from run to run and for any number of calibration
-  threads; unseeded, they moved between runs. `calibrationSeed = NULL` runs unseeded, as before, and
-  specifications saved without it load with `NULL`.
+  this seed and R's default random number kinds, whatever the caller's `RNGkind()`, and then restores
+  the caller's random number stream, so the calibrated p-values and confidence intervals and the EASE
+  are the same from run to run and for any number of calibration threads; unseeded, they moved between
+  runs. `calibrationSeed = NULL` runs unseeded, as before, and specifications saved without it load
+  with `NULL`. `runCcwAnalyses()` treats a change of `calibrationSeed` (including an output folder
+  whose specifications were saved without it) as a change of the summary only: it recomputes the
+  results and diagnostics summaries and keeps the other outputs.
 * The initiation hazard model has covariate-by-day-0 interactions by default
   (`createFitCensoringModelsArgs(covariateTimeInteraction = "day0")`; `"none"` with
   `hazardModelType = "cox"`), also with longer intervals, where they multiply the first interval.

@@ -302,7 +302,16 @@ runCcwAnalyses <- function(connectionDetails = NULL,
   specificationsFile <- file.path(outputFolder, "ccwAnalysesSpecifications.rds")
   if (file.exists(specificationsFile)) {
     oldSpecifications <- readRDS(specificationsFile)
-    if (!isTRUE(all.equal(oldSpecifications$toList(), specifications$toList()))) {
+    # calibrationSeed affects only the summary, so a change in it (or specifications saved before it
+    # existed) recomputes only the summary:
+    withoutSeed <- function(asList) {
+      asList$calibrationSeed <- NULL
+      return(asList)
+    }
+    if (!identical(oldSpecifications$calibrationSeed, specifications$calibrationSeed)) {
+      unlink(file.path(outputFolder, c("resultsSummary.rds", "diagnosticsSummary.rds")))
+    }
+    if (!isTRUE(all.equal(withoutSeed(oldSpecifications$toList()), withoutSeed(specifications$toList())))) {
       .clearCache()
       message(sprintf("Output files already exist in '%s', but the analysis settings have changed.", outputFolder))
       if (interactive()) {

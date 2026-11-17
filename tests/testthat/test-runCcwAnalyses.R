@@ -323,6 +323,16 @@ test_that("calibrationSeed makes calibration reproducible and leaves the global 
   set.seed(789)
   expect_identical(afterCalibration, runif(3))
 
+  # The caller's RNGkind() does not change the results, with one thread (in this session) or more
+  # (in fresh worker sessions, with the default kinds):
+  oldKind <- RNGkind()
+  on.exit(suppressWarnings(RNGkind(oldKind[1], oldKind[2], oldKind[3])), add = TRUE)
+  suppressWarnings(RNGkind("L'Ecuyer-CMRG", sample.kind = "Rounding"))
+  set.seed(123)
+  expect_identical(calibrate(1), first)
+  expect_identical(suppressMessages(calibrateEstimates(results, calibrationThreads = 2, calibrationSeed = 1)), first)
+  suppressWarnings(RNGkind(oldKind[1], oldKind[2], oldKind[3]))
+
   # calibrationSeed = NULL runs unseeded, on the caller's random numbers:
   set.seed(123)
   unseeded <- calibrate(NULL)
@@ -683,6 +693,27 @@ test_that("runCcwAnalyses deletes the outputs of changed specifications outside 
     tolerance = 1e-10,
     ignore_attr = TRUE
   )
+})
+
+test_that("runCcwAnalyses recomputes only the summaries when only calibrationSeed changed", {
+  seedFolder <- tempfile()
+  on.exit(unlink(seedFolder, recursive = TRUE))
+  dir.create(seedFolder)
+  file.copy(list.files(smallFolder, full.names = TRUE), seedFolder, recursive = TRUE)
+  writeLines("kept", file.path(seedFolder, "kept.txt"))
+  # Specifications saved unseeded (as those of earlier versions, without the field, compare):
+  unseeded <- smallSpecifications()
+  unseeded$calibrationSeed <- NULL
+  saveRDS(unseeded, file.path(seedFolder, "ccwAnalysesSpecifications.rds"))
+  modelFiles <- setdiff(list.files(seedFolder), c("ccwAnalysesSpecifications.rds", "resultsSummary.rds", "diagnosticsSummary.rds"))
+  modelTimes <- file.mtime(file.path(seedFolder, modelFiles))
+  rerun <- runQuietly(outputFolder = seedFolder, ccwAnalysesSpecifications = smallSpecifications())
+  expect_false(any(grepl("have changed", rerun$messages)))
+  expect_true(file.exists(file.path(seedFolder, "kept.txt")))
+  expect_equal(file.mtime(file.path(seedFolder, modelFiles)), modelTimes)
+  expect_true(any(grepl("Summarizing results", rerun$messages)))
+  expect_equal(readRDS(file.path(seedFolder, "ccwAnalysesSpecifications.rds"))$calibrationSeed, 1)
+  expect_equal(getResultsSummary(seedFolder), getResultsSummary(smallFolder))
 })
 
 test_that("runCcwAnalyses refits the censoring models for every outcome when asked", {

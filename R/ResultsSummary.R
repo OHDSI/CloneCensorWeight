@@ -255,7 +255,19 @@ calibrateGroup <- function(group, seed = NULL) {
     return(.addEmptyCalibration(group))
   }
   fitNull <- function() EmpiricalCalibration::fitMcmcNull(logRr = ncs$logRr, seLogRr = ncs$seLogRr)
-  null <- if (is.null(seed)) fitNull() else withr::with_seed(seed, fitNull())
+  # The kinds are pinned to R's defaults, which fresh worker sessions use, so that the caller's
+  # RNGkind() does not change the results nor make them depend on the calibration threads.
+  null <- if (is.null(seed)) {
+    fitNull()
+  } else {
+    withr::with_seed(
+      seed,
+      fitNull(),
+      .rng_kind = "Mersenne-Twister",
+      .rng_normal_kind = "Inversion",
+      .rng_sample_kind = "Rejection"
+    )
+  }
   ease <- EmpiricalCalibration::computeExpectedAbsoluteSystematicError(null)
   calibratedP <- EmpiricalCalibration::calibrateP(null = null, logRr = group$logRr, seLogRr = group$seLogRr)
   calibratedOneSidedP <- EmpiricalCalibration::calibrateP(
