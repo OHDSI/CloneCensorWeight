@@ -82,7 +82,8 @@
 #' @param clones             An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels    An object of class `CcwCensoringModels` as created by
 #'                           [fitCensoringModels()] on the same clones (same outcome, same-day
-#'                           ordering and competing events).
+#'                           ordering and competing events). [runCcwAnalyses()] also passes models
+#'                           fit on clones without an outcome, which it shares across outcomes.
 #' @param computeWeightsArgs An object of type `ComputeWeightsArgs` as created using
 #'                           [createComputeWeightsArgs()].
 #' @param outcomeTimeBasis   `NULL`, or the object of type `TimeBasis` (as created using
@@ -363,8 +364,11 @@ computeCensoringWeights <- function(clones,
   if (!identical(modelsMetaData$competingEvents, metaData$competingEvents)) {
     stop("The censoring models were fit on clones with a different competingEvents than the clones use")
   }
-  # The risk sets depend on the outcome (contract section 5.3), so models are not shared across outcomes:
-  if (!identical(as.numeric(modelsMetaData$outcomeId), as.numeric(metaData$outcomeId))) {
+  # The risk sets depend on the outcome (contract section 5.3), so models are not shared across outcomes,
+  # except models fit on clones without an outcome (outcomeId NA), which runCcwAnalyses() shares across
+  # outcomes with refitCensoringModelsForEveryOutcome = FALSE:
+  if (!isTRUE(is.na(modelsMetaData$outcomeId)) &&
+    !identical(as.numeric(modelsMetaData$outcomeId), as.numeric(metaData$outcomeId))) {
     stop("The censoring models were fit on the clones of a different outcome")
   }
   strategies <- metaData$strategies

@@ -22,9 +22,13 @@ created using \code{\link[=createTargetTreatmentOutcomes]{createTargetTreatmentO
 \item{analysesToExclude}{Analyses to exclude. See the Analyses to Exclude section
 for details.}
 
-\item{refitCensoringModelsForEveryOutcome}{Should the censoring models be fitted for every outcome
-(after removing persons with that outcome from the risk
-sets)? If \code{FALSE}, the models are shared across outcomes.}
+\item{refitCensoringModelsForEveryOutcome}{Should the censoring models be fitted for every outcome,
+on the clones of that outcome's study population (whose
+risk sets end at the outcome)? If \code{FALSE}, the models are
+fitted once, on the study population without an outcome
+(no persons with a prior outcome removed, risk sets that
+do not end at an outcome), and shared across outcomes. See
+\code{\link[=runCcwAnalyses]{runCcwAnalyses()}}.}
 
 \item{ccwDiagnosticThresholds}{An object of type \code{CcwDiagnosticThresholds} as created
 using \code{\link[=createCcwDiagnosticThresholds]{createCcwDiagnosticThresholds()}}.}
@@ -38,9 +42,7 @@ Create full clone-censor-weight analysis specifications
 \details{
 \subsection{Analyses to Exclude}{
 
-The driver that runs many analyses, \code{runCcwAnalyses()}, comes in a later version; in this version
-the specifications can be created, saved and loaded. It will run all combinations of
-target-treatment-outcomes and analyses. The
+\code{\link[=runCcwAnalyses]{runCcwAnalyses()}} runs all combinations of target-treatment-outcomes and analyses. The
 \code{analysesToExclude} argument removes some of them. It is a data frame with at least one of the
 columns \code{targetId}, \code{treatmentId}, \code{comparatorTreatmentId}, \code{outcomeId}, and \code{analysisId}. Rows of
 the reference table that match a row of \code{analysesToExclude} are skipped.

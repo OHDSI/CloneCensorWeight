@@ -94,3 +94,21 @@ New features:
   grace period ending on day 7 when nobody starts on day 7). For `"day0"` it says why: nobody (or
   everybody) starts in the first interval, so there is no first-interval effect to model, or the first
   interval is the only one in the fit, which shorter intervals can split.
+* `runCcwAnalyses()` runs every analysis of a `createCcwAnalysesSpecifications()` against every
+  target-treatment-outcome combination, in stages modelled on CohortMethod's `runCmAnalyses()`: data,
+  study populations, censoring models, covariate balance, outcome models and a summary. Files are
+  shared between analyses with the same settings for a stage, a censoring model shared by strategies
+  of different analyses is fit once, and a run resumes from the files that exist. With
+  `refitCensoringModelsForEveryOutcome = FALSE` (the default) the censoring models are fit once, on
+  the study population without an outcome, and shared by every outcome; `TRUE` fits them on each
+  outcome's clones. When the specifications in the output folder have changed, an interactive session
+  asks whether to delete the old outputs, and other sessions delete them with a message.
+  `createCcwMultiThreadingSettings()` and `createDefaultCcwMultiThreadingSettings()` set the threads
+  of each stage.
+* `getResultsSummary()` (one row per analysis, target-treatment-outcome and estimand, with the ratio
+  estimands empirically calibrated with the negative controls), `getDiagnosticsSummary()` (MDRR,
+  covariate balance, EASE, effective sample size, maximum weight and positivity against
+  `createCcwDiagnosticThresholds()`, with `unblind` and `unblindForEvidenceSynthesis` as in
+  CohortMethod) and `getFileReference()` read the outputs of `runCcwAnalyses()`.
+* `computeCensoringWeights()` and the diagnostics accept censoring models fit on clones without an
+  outcome (`metaData$outcomeId` `NA`), as `runCcwAnalyses()` shares them across outcomes.
