@@ -507,6 +507,20 @@ test_that("CcwAnalysesSpecifications round trip, validation and conversion", {
   )
   expect_error(createCcwAnalysesSpecifications(list(), list(createTestTargetTreatmentOutcomes())), "ccwAnalysisList")
   expect_error(createCcwAnalysesSpecifications(list(createTestAnalysis()), list(createTestAnalysis())), "TargetTreatmentOutcomes")
+
+  # The seed of the empirical calibration: 1 by default, NULL for unseeded
+  expect_equal(specifications$calibrationSeed, 1)
+  unseeded <- createCcwAnalysesSpecifications(list(createTestAnalysis()), list(createTestTargetTreatmentOutcomes()), calibrationSeed = NULL)
+  expect_null(unseeded$calibrationSeed)
+  expectRoundTrip(unseeded, CcwAnalysesSpecifications)
+  expectRoundTrip(
+    createCcwAnalysesSpecifications(list(createTestAnalysis()), list(createTestTargetTreatmentOutcomes()), calibrationSeed = 42),
+    CcwAnalysesSpecifications
+  )
+  expect_error(
+    createCcwAnalysesSpecifications(list(createTestAnalysis()), list(createTestTargetTreatmentOutcomes()), calibrationSeed = 1.5),
+    "calibrationSeed"
+  )
 })
 
 test_that("Saving and loading analysis and target-treatment-outcomes lists", {

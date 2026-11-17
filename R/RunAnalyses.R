@@ -482,7 +482,8 @@ runCcwAnalyses <- function(connectionDetails = NULL,
       mainFileName = mainFileName,
       diagnosticsSummaryFileName = diagnosticsSummaryFileName,
       calibrationThreads = multiThreadingSettings$calibrationThreads,
-      ccwDiagnosticThresholds = specifications$ccwDiagnosticThresholds
+      ccwDiagnosticThresholds = specifications$ccwDiagnosticThresholds,
+      calibrationSeed = specifications$calibrationSeed
     )
   }
   invisible(.publicReferenceTable(referenceTable))
@@ -959,7 +960,8 @@ getFileReference <- function(outputFolder) {
 #' `calibratedCi95Ub`, `calibratedP`, `calibratedOneSidedP`, `calibratedLogRr` and
 #' `calibratedSeLogRr`, as in CohortMethod: each estimand of each analysis and target-treatment
 #' combination is calibrated with its own negative controls, using
-#' [EmpiricalCalibration::fitMcmcNull()], and, for `"hr"` with at least 5 positive controls (outcomes
+#' [EmpiricalCalibration::fitMcmcNull()] (with the `calibrationSeed` of
+#' [createCcwAnalysesSpecifications()]), and, for `"hr"` with at least 5 positive controls (outcomes
 #' with `trueEffectSize` other than 1), a systematic error model for the confidence intervals. Synthetic
 #' positive controls have their true effect size on the hazard scale, so the confidence intervals of
 #' the other ratio estimands are calibrated with the negative controls only.

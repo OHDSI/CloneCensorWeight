@@ -31,6 +31,12 @@ new defaults):
   decision 9 item 2). `fitOutcomeModel()` stops with an error naming `robustVarianceEngine = "ccw"`
   when the loaded Cyclops lacks it (an older `vcov()` would silently return the model-based variance),
   and so does `runCcwAnalyses()`, before any work, when one of its analyses needs it.
+* The empirical calibration is seeded: `createCcwAnalysesSpecifications(calibrationSeed = 1)` fits the
+  null distribution of each calibration group (`EmpiricalCalibration::fitMcmcNull()`, an MCMC) with
+  this seed and then restores the caller's random number stream, so the calibrated p-values and
+  confidence intervals and the EASE are the same from run to run and for any number of calibration
+  threads; unseeded, they moved between runs. `calibrationSeed = NULL` runs unseeded, as before, and
+  specifications saved without it load with `NULL`.
 * The initiation hazard model has covariate-by-day-0 interactions by default
   (`createFitCensoringModelsArgs(covariateTimeInteraction = "day0")`; `"none"` with
   `hazardModelType = "cox"`), also with longer intervals, where they multiply the first interval.

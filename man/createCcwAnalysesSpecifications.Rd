@@ -9,7 +9,8 @@ createCcwAnalysesSpecifications(
   targetTreatmentOutcomesList,
   analysesToExclude = NULL,
   refitCensoringModelsForEveryOutcome = FALSE,
-  ccwDiagnosticThresholds = createCcwDiagnosticThresholds()
+  ccwDiagnosticThresholds = createCcwDiagnosticThresholds(),
+  calibrationSeed = 1
 )
 }
 \arguments{
@@ -32,6 +33,17 @@ do not end at an outcome), and shared across outcomes. See
 
 \item{ccwDiagnosticThresholds}{An object of type \code{CcwDiagnosticThresholds} as created
 using \code{\link[=createCcwDiagnosticThresholds]{createCcwDiagnosticThresholds()}}.}
+
+\item{calibrationSeed}{The random seed of the empirical calibration: the null
+distribution of each calibration group is fitted by
+\code{\link[EmpiricalCalibration:fitMcmcNull]{EmpiricalCalibration::fitMcmcNull()}}, an MCMC, with this
+seed, so that calibrated p-values and confidence intervals
+are the same from run to run (and for any number of
+calibration threads). The random number stream of the
+caller is restored afterwards. \code{NULL} runs the MCMC
+unseeded, on the current random number stream, as
+CohortMethod does. Specifications saved without it (by an
+earlier version) load with \code{NULL}.}
 }
 \value{
 An object of type \code{CcwAnalysesSpecifications}.

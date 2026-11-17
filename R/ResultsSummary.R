@@ -36,7 +36,8 @@ summarizeResults <- function(referenceTable,
                              mainFileName,
                              diagnosticsSummaryFileName,
                              calibrationThreads,
-                             ccwDiagnosticThresholds) {
+                             ccwDiagnosticThresholds,
+                             calibrationSeed = NULL) {
   keyColumns <- c("analysisId", "targetId", "treatmentId", "comparatorTreatmentId", "outcomeId")
   thresholds <- ccwDiagnosticThresholds
   subset <- referenceTable[referenceTable$outcomeModelFile != "", ]
@@ -133,7 +134,8 @@ summarizeResults <- function(referenceTable,
 
   results <- calibrateEstimates(
     results = dplyr::left_join(results, diagnostics[, c(keyColumns, "unblindForCalibration")], by = keyColumns),
-    calibrationThreads = calibrationThreads
+    calibrationThreads = calibrationThreads,
+    calibrationSeed = calibrationSeed
   )
   withEase <- results[!is.na(results$ease), ]
   if (nrow(withEase) == 0) {
@@ -210,8 +212,9 @@ summarizeResults <- function(referenceTable,
 }
 
 # Calibrates the ratio estimands per analysis, target-treatment combination and estimand, using the
-# negative controls whose diagnostics allow calibration (unblindForCalibration).
-calibrateEstimates <- function(results, calibrationThreads) {
+# negative controls whose diagnostics allow calibration (unblindForCalibration). Each group fits its null
+# distribution with calibrationSeed (unseeded when NULL), so the results do not depend on the threads.
+calibrateEstimates <- function(results, calibrationThreads, calibrationSeed = NULL) {
   results$rowIndex <- seq_len(nrow(results))
   isRatio <- grepl(.ratioEstimandPattern, results$estimand)
   groups <- split(
@@ -224,7 +227,7 @@ calibrateEstimates <- function(results, calibrationThreads) {
     cluster <- ParallelLogger::makeCluster(min(length(groups), calibrationThreads))
     on.exit(ParallelLogger::stopCluster(cluster))
     ParallelLogger::clusterRequire(cluster, "CloneCensorWeight")
-    calibrated <- ParallelLogger::clusterApply(cluster, unname(groups), calibrateGroup)
+    calibrated <- ParallelLogger::clusterApply(cluster, unname(groups), calibrateGroup, seed = calibrationSeed)
   }
   calibrated <- dplyr::bind_rows(c(calibrated, list(.addEmptyCalibration(results[!isRatio, ]))))
   calibrated <- calibrated[order(calibrated$rowIndex), ]
@@ -244,14 +247,15 @@ calibrateEstimates <- function(results, calibrationThreads) {
   return(group)
 }
 
-calibrateGroup <- function(group) {
+calibrateGroup <- function(group, seed = NULL) {
   usable <- !is.na(group$trueEffectSize) & !is.na(group$seLogRr) & group$seLogRr > 0 & group$unblindForCalibration
   ncs <- group[usable & group$trueEffectSize == 1, ]
   pcs <- group[usable & group$trueEffectSize != 1, ]
   if (nrow(ncs) < 5) {
     return(.addEmptyCalibration(group))
   }
-  null <- EmpiricalCalibration::fitMcmcNull(logRr = ncs$logRr, seLogRr = ncs$seLogRr)
+  fitNull <- function() EmpiricalCalibration::fitMcmcNull(logRr = ncs$logRr, seLogRr = ncs$seLogRr)
+  null <- if (is.null(seed)) fitNull() else withr::with_seed(seed, fitNull())
   ease <- EmpiricalCalibration::computeExpectedAbsoluteSystematicError(null)
   calibratedP <- EmpiricalCalibration::calibrateP(null = null, logRr = group$logRr, seLogRr = group$seLogRr)
   calibratedOneSidedP <- EmpiricalCalibration::calibrateP(

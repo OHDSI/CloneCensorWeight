@@ -296,6 +296,40 @@ test_that("Positive controls calibrate the confidence intervals of the hazard ra
   expect_equal(hr$calibratedP, EmpiricalCalibration::calibrateP(null, logRr, seLogRr)$p)
 })
 
+test_that("calibrationSeed makes calibration reproducible and leaves the global random numbers alone", {
+  # The MCMC of EmpiricalCalibration::fitMcmcNull() draws random numbers, so unseeded calibrated
+  # p-values and intervals move from run to run.
+  group <- function(estimand) {
+    dplyr::tibble(
+      analysisId = 1L, targetId = 4, treatmentId = 1, comparatorTreatmentId = 2, outcomeId = 1:7, estimand = estimand,
+      trueEffectSize = c(rep(1, 6), NA), logRr = c(0.05, -0.1, 0.12, 0.02, -0.04, 0.08, 0.3),
+      seLogRr = c(0.1, 0.12, 0.15, 0.1, 0.2, 0.1, 0.15), unblindForCalibration = TRUE
+    )
+  }
+  results <- dplyr::bind_rows(group("hr"), group("rr_365"))
+  calibrate <- function(seed) suppressMessages(calibrateEstimates(results, calibrationThreads = 1, calibrationSeed = seed))
+  set.seed(123)
+  first <- calibrate(1)
+  set.seed(456)
+  second <- calibrate(1)
+  expect_true(all(!is.na(first$calibratedP)))
+  expect_identical(second, first)
+  expect_false(isTRUE(all.equal(calibrate(2)$calibratedCi95Lb, first$calibratedCi95Lb)))
+
+  # The caller's random number stream is the same as without calibration:
+  set.seed(789)
+  calibrate(1)
+  afterCalibration <- runif(3)
+  set.seed(789)
+  expect_identical(afterCalibration, runif(3))
+
+  # calibrationSeed = NULL runs unseeded, on the caller's random numbers:
+  set.seed(123)
+  unseeded <- calibrate(NULL)
+  set.seed(123)
+  expect_identical(calibrate(NULL), unseeded)
+})
+
 test_that("Specifications with conflicting target-treatment-outcomes, or with nothing to run, stop", {
   analysis <- orchestrationAnalysis(1, list(initiate30, notInitiate30))
   outcome3 <- list(CohortMethod::createOutcome(3))

@@ -48,7 +48,8 @@ Imports:
     splines,
     SqlRender (>= 1.18.0),
     stats,
-    utils
+    utils,
+    withr
 Suggests:
     boot,
     Capr,

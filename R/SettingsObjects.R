@@ -1589,6 +1589,16 @@ CcwDiagnosticThresholds <- R6Class(
 #'                                            [runCcwAnalyses()].
 #' @param ccwDiagnosticThresholds             An object of type `CcwDiagnosticThresholds` as created
 #'                                            using [createCcwDiagnosticThresholds()].
+#' @param calibrationSeed                     The random seed of the empirical calibration: the null
+#'                                            distribution of each calibration group is fitted by
+#'                                            [EmpiricalCalibration::fitMcmcNull()], an MCMC, with this
+#'                                            seed, so that calibrated p-values and confidence intervals
+#'                                            are the same from run to run (and for any number of
+#'                                            calibration threads). The random number stream of the
+#'                                            caller is restored afterwards. `NULL` runs the MCMC
+#'                                            unseeded, on the current random number stream, as
+#'                                            CohortMethod does. Specifications saved without it (by an
+#'                                            earlier version) load with `NULL`.
 #'
 #' @return
 #' An object of type `CcwAnalysesSpecifications`.
@@ -1623,7 +1633,8 @@ createCcwAnalysesSpecifications <- function(ccwAnalysisList,
                                             targetTreatmentOutcomesList,
                                             analysesToExclude = NULL,
                                             refitCensoringModelsForEveryOutcome = FALSE,
-                                            ccwDiagnosticThresholds = createCcwDiagnosticThresholds()) {
+                                            ccwDiagnosticThresholds = createCcwDiagnosticThresholds(),
+                                            calibrationSeed = 1) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -1640,6 +1651,7 @@ CcwAnalysesSpecifications <- R6Class(
     analysesToExclude = NULL,
     refitCensoringModelsForEveryOutcome = NULL,
     ccwDiagnosticThresholds = NULL,
+    calibrationSeed = NULL,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertList(self$ccwAnalysisList, min.len = 1, add = errorMessages)
@@ -1653,6 +1665,7 @@ CcwAnalysesSpecifications <- R6Class(
       checkmate::assertDataFrame(self$analysesToExclude, null.ok = TRUE, add = errorMessages)
       checkmate::assertFlag(self$refitCensoringModelsForEveryOutcome, add = errorMessages)
       checkmate::assertR6(self$ccwDiagnosticThresholds, "CcwDiagnosticThresholds", add = errorMessages)
+      checkmate::assertInt(self$calibrationSeed, null.ok = TRUE, add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
       excludeColumns <- c("targetId", "treatmentId", "comparatorTreatmentId", "outcomeId", "analysisId")
       if (!is.null(self$analysesToExclude) && !any(excludeColumns %in% colnames(self$analysesToExclude))) {
