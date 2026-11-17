@@ -1,11 +1,13 @@
-# Test-only workaround for a bug in Andromeda <= 1.2.1: flushAndromeda() starts with
+# Test-only workaround for a bug in Andromeda 1.2.0 and 1.2.1: flushAndromeda() starts with
 # `if (isAndromeda(andromeda()))`, which calls the function Andromeda::andromeda() instead of using
-# its argument, so every flush creates (and leaks) a new temporary duckdb database. Andromeda flushes
-# on every `x$name <- <tbl>`, so the tests spent about half their time opening databases. The patch
-# below uses the argument, as intended; it changes no results. (So a flush in the tests checkpoints the
-# Andromeda database itself, and with evictCache briefly lowers its memory limit, which the unpatched
-# Andromeda that users run does to the throwaway database instead.) It is applied only while the
-# installed Andromeda still has the bug, so it switches itself off once Andromeda is fixed.
+# its argument, so every flush creates a new temporary duckdb database that lives until garbage
+# collection. Andromeda flushes on every `x$name <- <tbl>`, so the tests spent about half their time
+# opening databases. The patch below tests the argument, as intended. Only the condition changes: the
+# CHECKPOINT and the cache eviction already ran on the argument, so for an Andromeda argument (which
+# every caller in this package's dependencies passes) the patched and unpatched versions flush the same
+# database and give the same results. (The fix is on the local Andromeda
+# branch fix-flush-andromeda, as version 1.2.2.) It is applied only while the installed Andromeda still
+# has the bug, so it switches itself off once Andromeda is fixed.
 local({
   flush <- Andromeda::flushAndromeda
   if (any(grepl("isAndromeda(andromeda())", deparse(body(flush)), fixed = TRUE))) {
