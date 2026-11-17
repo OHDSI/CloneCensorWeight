@@ -94,3 +94,40 @@ New features:
   grace period ending on day 7 when nobody starts on day 7). For `"day0"` it says why: nobody (or
   everybody) starts in the first interval, so there is no first-interval effect to model, or the first
   interval is the only one in the fit, which shorter intervals can split.
+* `runCcwAnalyses()` runs every analysis of a `createCcwAnalysesSpecifications()` against every
+  target-treatment-outcome combination, in stages modelled on CohortMethod's `runCmAnalyses()`: data,
+  study populations, censoring models, covariate balance, outcome models and a summary. Files are
+  shared between analyses with the same settings for a stage, a censoring model shared by strategies
+  of different analyses is fit once, and a run resumes from the files that exist. With
+  `refitCensoringModelsForEveryOutcome = FALSE` (the default) the censoring models are fit once, on
+  the study population without an outcome, and shared by every outcome; `TRUE` fits them on each
+  outcome's clones. When the specifications in the output folder have changed, an interactive session
+  asks whether to delete the old outputs, and other sessions delete them with a message.
+  `createCcwMultiThreadingSettings()` and `createDefaultCcwMultiThreadingSettings()` set the threads
+  of each stage. `createCcwAnalysesSpecifications()` stops when target-treatment-outcomes with the
+  same cohorts have different covariate concept IDs or repeat an outcome, and `runCcwAnalyses()` when
+  `analysesToExclude` leaves nothing to run.
+* `getResultsSummary()` (one row per analysis, target-treatment-outcome and estimand, with the ratio
+  estimands empirically calibrated with the negative controls, and the confidence intervals of the
+  hazard ratio also with at least 5 positive controls, whose true effect sizes are on the hazard
+  scale), `getDiagnosticsSummary()` (MDRR, covariate balance, EASE, effective sample size and maximum
+  weight (for every outcome, so they also decide which negative controls calibrate) and positivity against
+  `createCcwDiagnosticThresholds()`, with `unblind` and `unblindForEvidenceSynthesis` as in
+  CohortMethod) and `getFileReference()` read the outputs of `runCcwAnalyses()`.
+* `computeCensoringWeights()` and the diagnostics accept censoring models fit on clones without an
+  outcome (`metaData$outcomeId` `NA`), as `runCcwAnalyses()` shares them across outcomes.
+  `bootstrapCcwAnalysis()` given such models refits them without an outcome in every replicate, so
+  the replicates repeat the estimator of the full-data estimate.
+* The results data model, modelled on CohortMethod's: `exportToCsv()` writes the results of
+  `runCcwAnalyses()` to CSV files and `Results_<databaseId>.zip`, with counts below `minCellCount`
+  written as `-minCellCount`; `getResultsDataModelSpecifications()` describes the tables, all
+  prefixed `ccw_`, with `database_id` in the primary key of every site-specific table and strategy
+  IDs in the keys of the tables per strategy (`strategy_id`) and per contrast (`target_strategy_id`,
+  `comparator_strategy_id`); `createResultsDataModel()`, `uploadResults()`, `migrateDataModel()` and
+  `getDataMigrator()` create, fill and migrate the tables with ResultModelManager. The DDL of this
+  first version is frozen; later changes go through migrations. `inst/Results_Eunomia.zip` holds an
+  export of a Eunomia run for tests.
+* `getResultsSummary()` gains the weighted days of follow-up and weighted outcomes of each strategy
+  (`targetWeightedDays`, `targetWeightedOutcomes` and the comparator's), and the outcome model files
+  of `runCcwAnalyses()` keep the attrition and the follow-up distribution of the clones of outcomes
+  of interest.

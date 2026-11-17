@@ -87,12 +87,7 @@ createStudyPopulation <- function(cloneCensorWeightData,
   if (outcomeId %% 1 != 0) {
     stop("outcomeId must be a (64-bit) integer")
   }
-  if (!grepl("start$", createStudyPopulationArgs$startAnchor, ignore.case = TRUE)) {
-    stop("The risk window must start relative to the cohort start (startAnchor = 'cohort start')")
-  }
-  if (createStudyPopulationArgs$riskWindowStart < 0) {
-    stop("The risk window cannot start before the index date (riskWindowStart must be >= 0)")
-  }
+  .checkRiskWindowStart(createStudyPopulationArgs)
 
   population <- CohortMethod::createStudyPopulation(
     cohortMethodData = cloneCensorWeightData,
@@ -100,6 +95,19 @@ createStudyPopulation <- function(cloneCensorWeightData,
     outcomeId = outcomeId,
     createStudyPopulationArgs = createStudyPopulationArgs
   )
+  return(.addStudyPopulationMetaData(population, outcomeId, createStudyPopulationArgs))
+}
+
+.checkRiskWindowStart <- function(createStudyPopulationArgs) {
+  if (!grepl("start$", createStudyPopulationArgs$startAnchor, ignore.case = TRUE)) {
+    stop("The risk window must start relative to the cohort start (startAnchor = 'cohort start')")
+  }
+  if (createStudyPopulationArgs$riskWindowStart < 0) {
+    stop("The risk window cannot start before the index date (riskWindowStart must be >= 0)")
+  }
+}
+
+.addStudyPopulationMetaData <- function(population, outcomeId, createStudyPopulationArgs) {
   metaData <- attr(population, "metaData")
   metaData$outcomeId <- outcomeId
   metaData$nominalRiskEnd <- list(
@@ -109,4 +117,20 @@ createStudyPopulation <- function(cloneCensorWeightData,
   )
   attr(population, "metaData") <- metaData
   return(population)
+}
+
+# The study population without an outcome, for censoring models shared across outcomes
+# (runCcwAnalyses() with refitCensoringModelsForEveryOutcome = FALSE): the persons and risk windows of
+# createStudyPopulation(), without removing persons with a prior outcome, and with no outcomes
+# (daysToEvent NA, metaData$outcomeId NA), so clones of it end only at deviation, death, or the end of the
+# risk window. Every study population created with the same arguments for an outcome is a subset of it.
+.createStudyPopulationWithoutOutcome <- function(cloneCensorWeightData, createStudyPopulationArgs) {
+  .checkRiskWindowStart(createStudyPopulationArgs)
+  population <- CohortMethod::createStudyPopulation(
+    cohortMethodData = cloneCensorWeightData,
+    outcomeId = NULL,
+    createStudyPopulationArgs = createStudyPopulationArgs
+  )
+  population$daysToEvent <- rep(NA_integer_, nrow(population))
+  return(.addStudyPopulationMetaData(population, NA_real_, createStudyPopulationArgs))
 }

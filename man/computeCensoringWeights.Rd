@@ -16,7 +16,8 @@ computeCensoringWeights(
 
 \item{censoringModels}{An object of class \code{CcwCensoringModels} as created by
 \code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones (same outcome, same-day
-ordering and competing events).}
+ordering and competing events). \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} also passes models
+fit on clones without an outcome, which it shares across outcomes.}
 
 \item{computeWeightsArgs}{An object of type \code{ComputeWeightsArgs} as created using
 \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.}

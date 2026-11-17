@@ -1217,9 +1217,8 @@ FitOutcomeModelArgs <- R6Class(
 #' Create a clone-censor-weight analysis specification
 #'
 #' @details
-#' Create a set of analysis choices. In this version the specification can be saved and loaded (see
-#' [saveCcwAnalysisList()]); the driver that runs many analyses, `runCcwAnalyses()`, comes in a later
-#' version.
+#' Create a set of analysis choices. The specification can be saved and loaded (see
+#' [saveCcwAnalysisList()]), and [runCcwAnalyses()] runs a list of them.
 #'
 #' @param analysisId                     An integer that will be used later to refer to this specific
 #'                                       set of analysis choices.
@@ -1482,9 +1481,7 @@ CcwDiagnosticThresholds <- R6Class(
 #' @details
 #' ## Analyses to Exclude
 #'
-#' The driver that runs many analyses, `runCcwAnalyses()`, comes in a later version; in this version
-#' the specifications can be created, saved and loaded. It will run all combinations of
-#' target-treatment-outcomes and analyses. The
+#' [runCcwAnalyses()] runs all combinations of target-treatment-outcomes and analyses. The
 #' `analysesToExclude` argument removes some of them. It is a data frame with at least one of the
 #' columns `targetId`, `treatmentId`, `comparatorTreatmentId`, `outcomeId`, and `analysisId`. Rows of
 #' the reference table that match a row of `analysesToExclude` are skipped.
@@ -1495,9 +1492,13 @@ CcwDiagnosticThresholds <- R6Class(
 #'                                            created using [createTargetTreatmentOutcomes()].
 #' @param analysesToExclude                   Analyses to exclude. See the Analyses to Exclude section
 #'                                            for details.
-#' @param refitCensoringModelsForEveryOutcome Should the censoring models be fitted for every outcome
-#'                                            (after removing persons with that outcome from the risk
-#'                                            sets)? If `FALSE`, the models are shared across outcomes.
+#' @param refitCensoringModelsForEveryOutcome Should the censoring models be fitted for every outcome,
+#'                                            on the clones of that outcome's study population (whose
+#'                                            risk sets end at the outcome)? If `FALSE`, the models are
+#'                                            fitted once, on the study population without an outcome
+#'                                            (no persons with a prior outcome removed, risk sets that
+#'                                            do not end at an outcome), and shared across outcomes. See
+#'                                            [runCcwAnalyses()].
 #' @param ccwDiagnosticThresholds             An object of type `CcwDiagnosticThresholds` as created
 #'                                            using [createCcwDiagnosticThresholds()].
 #'
@@ -1572,6 +1573,24 @@ CcwAnalysesSpecifications <- R6Class(
       analysisIds <- sapply(self$ccwAnalysisList, function(analysis) analysis$analysisId)
       if (any(duplicated(analysisIds))) {
         stop("Duplicate analysis IDs are not allowed")
+      }
+      # Target-treatment-outcomes with the same cohorts share the CloneCensorWeightData (with the union
+      # of their outcomes) and the names of the outcome model files:
+      ttos <- self$targetTreatmentOutcomesList
+      cohortKeys <- vapply(ttos, function(tto) {
+        paste(tto$targetId, tto$treatmentId, if (is.null(tto$comparatorTreatmentId)) NA else tto$comparatorTreatmentId)
+      }, character(1))
+      conceptIds <- vapply(ttos, function(tto) {
+        paste(paste(sort(tto$includedCovariateConceptIds), collapse = ","), paste(sort(tto$excludedCovariateConceptIds), collapse = ","))
+      }, character(1))
+      if (any(tapply(conceptIds, cohortKeys, function(x) length(unique(x))) > 1)) {
+        stop("Target-treatment-outcomes with the same targetId, treatmentId and comparatorTreatmentId must have the same includedCovariateConceptIds and excludedCovariateConceptIds, because they share the data")
+      }
+      outcomeKeys <- unlist(lapply(seq_along(ttos), function(i) {
+        paste(cohortKeys[i], vapply(ttos[[i]]$outcomes, function(outcome) as.numeric(outcome$outcomeId), numeric(1)))
+      }))
+      if (any(duplicated(outcomeKeys))) {
+        stop("An outcome appears more than once for the same targetId, treatmentId and comparatorTreatmentId")
       }
     },
     fromList = function(list, requireTyping) {

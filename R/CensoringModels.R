@@ -331,6 +331,9 @@ fitCensoringModels <- function(clones,
 .censoringFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
   argsList$postGraceModel <- NULL
   argsList$initiateWithinModel <- NULL
+  # The number of threads (set by runCcwAnalyses() from its multi-threading settings) does not change
+  # the fit:
+  argsList$control$threads <- NULL
   if (component == "binary") {
     argsList$hazardModelType <- NULL
     argsList$timeBasis <- NULL

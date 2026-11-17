@@ -34,11 +34,16 @@ Imports:
     Cyclops (>= 4.0.1),
     DatabaseConnector (>= 6.0.0),
     DBI,
+    digest,
     dplyr,
+    EmpiricalCalibration,
     FeatureExtraction (>= 3.5.0),
     jsonlite,
     methods,
+    ParallelLogger,
     R6,
+    readr,
+    ResultModelManager,
     rlang,
     splines,
     SqlRender (>= 1.18.0),
@@ -63,7 +68,8 @@ Suggests:
     survival (>= 3.8-6),
     testthat (>= 3.0.0),
     trtswitch (>= 0.2.8),
-    TTE (>= 1.1.2)
+    TTE (>= 1.1.2),
+    zip
 Remotes:
     ohdsi/Cyclops@develop,
     ohdsi/CohortMethod@left-censored
