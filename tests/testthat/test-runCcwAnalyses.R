@@ -692,7 +692,8 @@ test_that("runCcwAnalyses runs with an open connection, cross-validated censorin
     fitOutcomeModelArgs = createFitOutcomeModelArgs(
       modelType = "logistic",
       horizons = 340,
-      # 31-day intervals have a boundary at the end of the grace period:
+      # 31-day intervals have a boundary at the end of the grace period (they keep the test fast; the
+      # model warns that notInitiate30 censors clones at starts inside the first interval):
       timeBasis = createTimeBasis(type = "indicator", intervalLength = 31)
     ),
     competingEvents = "none",
@@ -716,15 +717,23 @@ test_that("runCcwAnalyses runs with an open connection, cross-validated censorin
       }
     })
   }
+  # The warning about the 31-day intervals (see above):
+  muffleInsideIntervals <- function(expr) {
+    withCallingHandlers(expr, warning = function(w) {
+      if (startsWith(conditionMessage(w), "Clones are censored inside the intervals of the pooled logistic outcome model's grid")) {
+        invokeRestart("muffleWarning")
+      }
+    })
+  }
   referenceTable <- NULL
-  utils::capture.output(suppressMessages(muffleZeroCoefficients(referenceTable <- runCcwAnalyses(
+  utils::capture.output(suppressMessages(muffleInsideIntervals(muffleZeroCoefficients(referenceTable <- runCcwAnalyses(
     connection = connection,
     cdmDatabaseSchema = "main",
     outputFolder = outputFolder,
     # Cyclops threads do not change the cross-validated fits:
     multiThreadingSettings = createCcwMultiThreadingSettings(censoringModelCvThreads = 2),
     ccwAnalysesSpecifications = specifications
-  ))))
+  )))))
   # The connection stays open:
   expect_equal(nrow(DatabaseConnector::querySql(connection, "SELECT 1 AS one;")), 1)
 
@@ -748,7 +757,7 @@ test_that("runCcwAnalyses runs with an open connection, cross-validated censorin
     outcomeTimeBasis = analysis$fitOutcomeModelArgs$timeBasis
   ))
   on.exit(close(weightedClones), add = TRUE)
-  expected <- suppressMessages(fitOutcomeModel(weightedClones, analysis$fitOutcomeModelArgs))$estimates
+  expected <- suppressMessages(muffleInsideIntervals(fitOutcomeModel(weightedClones, analysis$fitOutcomeModelArgs)))$estimates
   results <- getResultsSummary(outputFolder)
   expect_equal(results$estimand, expected$estimand)
   expect_true("or" %in% results$estimand)
