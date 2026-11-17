@@ -9,6 +9,8 @@ glmControl <- glm.control(epsilon = 1e-12, maxit = 100)
 test_that("Binary model at G matches glm on the hand-built risk set", {
   for (riskStart in 0:1) {
     for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
+      # (The default tier runs riskStart 0 with eventsFirst and 1 with deviationFirst.)
+      if (!isFullTestRun() && (riskStart == 1) != (sameDayOrdering == "deviationFirst")) next
       fixture <- createM3Fixture(150, riskStart = riskStart, seed = 2)
       data <- createM3Data(fixture)
       clones <- buildM3Clones(fixture$persons, m3Strategies(), sameDayOrdering)
@@ -44,6 +46,8 @@ test_that("Cox initiation hazard matches coxph and survfit, per strategy horizon
   skip_if_not_installed("survival")
   for (riskStart in 0:1) {
     for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
+      # (The default tier runs riskStart 0 with eventsFirst and 1 with deviationFirst.)
+      if (!isFullTestRun() && (riskStart == 1) != (sameDayOrdering == "deviationFirst")) next
       fixture <- createM3Fixture(150, riskStart = riskStart, seed = 3)
       data <- createM3Data(fixture)
       clones <- buildM3Clones(fixture$persons, m3Strategies("notInitiateWithin", "neverInitiate", graceEnd = 10), sameDayOrdering)
@@ -438,6 +442,8 @@ test_that("Laplace and normal priors at a fixed variance match glmnet", {
   }
   for (priorType in c("laplace", "normal")) {
     for (hazardModelType in c("logistic", "cox")) {
+      # (The default tier runs laplace with logistic and normal with cox.)
+      if (!isFullTestRun() && (priorType == "normal") != (hazardModelType == "cox")) next
       prior <- Cyclops::createPrior(priorType, exclude = c(0), useCrossValidation = TRUE)
       args <- m3Args(hazardModelType, prior = prior, timeBasis = createTimeBasis("linear"))
       args$control <- Cyclops::createControl(noiseLevel = "silent", tolerance = 1e-12, convergenceType = "gradient", maxIterations = 10000)

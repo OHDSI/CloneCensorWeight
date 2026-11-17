@@ -256,6 +256,8 @@ test_that("Calibration and positivity report the models of graceStart > 0 and na
   })
   for (graceRegime in c("binaryAtG", "naturalGrace")) {
     for (initiateWithinModel in c("binary", "hazard")) {
+      # (The default tier runs binaryAtG with the hazard model and naturalGrace with the binary model.)
+      if (!isFullTestRun() && (graceRegime == "naturalGrace") == (initiateWithinModel == "hazard")) next
       models <- suppressMessages(fitCensoringModels(clones, data, gArgs(initiateWithinModel = initiateWithinModel, graceRegime = graceRegime)))
       calibration <- suppressMessages(computeCensoringModelCalibration(clones, models))
       overall <- calibration[calibration$grouping == "overall" & calibration$strategyId == 1, ]
@@ -344,6 +346,8 @@ test_that("graceStart > 0 and naturalGrace with the Cox hazard model: Breslow su
   early <- exp(1 / 7)
   for (initiateWithinModel in c("binary", "hazard")) {
     for (graceRegime in c("binaryAtG", "naturalGrace")) {
+      # (The default tier runs the binary model with binaryAtG and the hazard model with naturalGrace.)
+      if (!isFullTestRun() && (initiateWithinModel == "hazard") != (graceRegime == "naturalGrace")) next
       args <- gArgs(initiateWithinModel = initiateWithinModel, graceRegime = graceRegime, hazardModelType = "cox")
       models <- suppressMessages(fitCensoringModels(clones, data, args))
       segments <- collectSegments(suppressMessages(computeCensoringWeights(clones, models, gNoTruncation())))

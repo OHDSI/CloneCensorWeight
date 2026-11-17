@@ -5,8 +5,18 @@ library(testthat)
 # Cox, pooled logistic, Kaplan-Meier and bootstrap paths that use them.
 
 # Simulated data, clones and censoring models (with covariates and no prior, so the weights vary by
-# person) of initiateWithin(5) vs `comparatorType`. The caller closes `data` and `clones`.
+# person) of initiateWithin(5) vs `comparatorType`. Each analysis is built once and shared by the tests
+# of this file, which do not change or close it.
+msmAnalyses <- new.env()
 msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eventsFirst", hazardModelType = "logistic", postGraceModel = "binary", seed = 1) {
+  key <- paste(comparatorType, sameDayOrdering, hazardModelType, postGraceModel, seed)
+  if (is.null(msmAnalyses[[key]])) {
+    msmAnalyses[[key]] <- newMsmAnalysis(comparatorType, sameDayOrdering, hazardModelType, postGraceModel, seed)
+  }
+  return(msmAnalyses[[key]])
+}
+
+newMsmAnalysis <- function(comparatorType, sameDayOrdering, hazardModelType, postGraceModel, seed) {
   data <- simulateCloneCensorWeightData(
     n = 300, maxDays = 20, graceEnd = 5, initiationHazard = 0.05, outcomeHazard = 0.01, deathHazard = 0.005, seed = seed
   )
@@ -26,11 +36,6 @@ msmAnalysis <- function(comparatorType = "neverInitiate", sameDayOrdering = "eve
     covariateTimeInteraction = "none"
   )))
   return(list(data = data, clones = clones, models = models))
-}
-
-closeMsmAnalysis <- function(analysis) {
-  close(analysis$clones)
-  close(analysis$data)
 }
 
 # truncateMsmWeights = FALSE: these tests check the section 11.1 behaviour, which it reproduces (section
@@ -98,7 +103,6 @@ handMsmWeights <- function(models, segments, riskStart) {
 test_that("The Cox MSM uses the msmWeights weights: unstabilized and stabilized both match coxph", {
   skip_if_not_installed("survival")
   analysis <- msmAnalysis("neverInitiate")
-  on.exit(closeMsmAnalysis(analysis))
   # The weights of computeCensoringWeights() are stabilized (its default):
   weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE))
   on.exit(close(weighted), add = TRUE)
@@ -136,7 +140,6 @@ test_that("The Cox MSM uses the msmWeights weights: unstabilized and stabilized 
 
 test_that("The Kaplan-Meier and Aalen-Johansen rows do not depend on msmWeights or on the stabilization", {
   analysis <- msmAnalysis("notInitiateWithin")
-  on.exit(closeMsmAnalysis(analysis))
   horizons <- c(3, 10, 20)
   for (truncation in list(createWeightTruncation("none"), createWeightTruncation("percentile", 0.9))) {
     weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE, truncation = truncation))
@@ -165,7 +168,6 @@ test_that("The Kaplan-Meier and Aalen-Johansen rows do not depend on msmWeights 
 test_that("The pooled logistic MSM uses the msmWeights weights, as glm does", {
   skip_if_not_installed("sandwich")
   analysis <- msmAnalysis("neverInitiate")
-  on.exit(closeMsmAnalysis(analysis))
   timeBasis <- createTimeBasis("linear", intervalLength = 1)
   weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE), outcomeTimeBasis = timeBasis)
   on.exit(close(weighted), add = TRUE)
@@ -256,7 +258,6 @@ test_that("The stored numerator reconstructs the other weight for every strategy
     }
     close(weighted$stabilized)
     close(weighted$unstabilized)
-    closeMsmAnalysis(analysis)
   }
 })
 
@@ -272,6 +273,8 @@ test_that("Stabilized and unstabilized weights reconstruct each other for every 
     list(comparatorType = "neverInitiate", postGraceModel = "binary"),
     list(comparatorType = "notInitiateWithin", postGraceModel = "binary", sameDayOrdering = "deviationFirst", hazardModelType = "cox")
   )
+  # The default tier leaves out the first configuration; the others cover every value of each choice:
+  configurations <- testConfigurations(configurations, configurations[2:4])
   truncations <- list(
     none = createWeightTruncation("none"),
     varying = createWeightTruncation("percentile", 0.9, basis = "varying"),
@@ -300,7 +303,6 @@ test_that("Stabilized and unstabilized weights reconstruct each other for every 
         results[[truncation]][[kind]] <- result
       }
     }
-    closeMsmAnalysis(analysis)
 
     s <- results$none$stabilized$segments
     u <- results$none$unstabilized$segments
@@ -453,7 +455,6 @@ test_that("Bootstrap replicates fit the Cox MSM with the msmWeights weights", {
 test_that("Weighted clones without stabilization numerators stop with a message to rerun computeCensoringWeights", {
   # Review of contract 11.1: weighted clones made before the numerator was stored gave a raw dplyr error.
   analysis <- msmAnalysis("notInitiateWithin")
-  on.exit(closeMsmAnalysis(analysis))
   weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = TRUE))
   on.exit(close(weighted), add = TRUE)
   segments <- dplyr::collect(weighted$segments)
@@ -471,7 +472,6 @@ test_that("The cap bounds the weights of computeCensoringWeights, and the MSM we
   # Contract 11.1 as documented at review: the other weight is formed from the truncated weight, so the
   # cap computed on the stabilized scale does not bound the unstabilized MSM weights of neverInitiate.
   analysis <- msmAnalysis("neverInitiate")
-  on.exit(closeMsmAnalysis(analysis))
   truncation <- createWeightTruncation("percentile", 0.9)
   for (stabilized in c(TRUE, FALSE)) {
     weighted <- weightMsm(analysis, msmComputeWeightsArgs(stabilized = stabilized, truncation = truncation))

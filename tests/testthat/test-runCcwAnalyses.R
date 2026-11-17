@@ -433,6 +433,9 @@ estimateColumns <- c(
   "comparatorOutcomes", "estimate", "ci95Lb", "ci95Ub", "p", "oneSidedP", "logRr", "seLogRr", "se"
 )
 
+# Analysis 4 bootstraps with 2 replicates in the full tier and 1 in the default tier (each replicate
+# reruns the analysis):
+bootstrapReplicates <- testConfigurations(2, 1)
 mainAnalyses <- list(
   orchestrationAnalysis(1, list(initiate30, notInitiate30)),
   orchestrationAnalysis(2, list(initiate30, notInitiate30), fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 365)),
@@ -441,7 +444,7 @@ mainAnalyses <- list(
     modelType = "km",
     horizons = 365,
     varianceEstimator = "bootstrap",
-    bootstrapArgs = createBootstrapArgs(replicates = 2)
+    bootstrapArgs = createBootstrapArgs(replicates = bootstrapReplicates)
   ))
 )
 mainSpecifications <- createCcwAnalysesSpecifications(
@@ -516,7 +519,7 @@ test_that("runCcwAnalyses runs several analyses on Eunomia and fits a shared cen
   expect_null(negativeControlModel$curves)
   bootstrapModel <- readRDS(file.path(mainFolder, referenceTable$outcomeModelFile[referenceTable$analysisId == 4]))
   expect_equal(bootstrapModel$varianceEstimator, "bootstrap")
-  expect_equal(bootstrapModel$metaData$bootstrap$replicates, 2)
+  expect_equal(bootstrapModel$metaData$bootstrap$replicates, bootstrapReplicates)
 })
 
 test_that("runCcwAnalyses gives the estimates of the single-study functions with censoring models shared across outcomes", {
@@ -663,7 +666,8 @@ test_that("runCcwAnalyses refits the censoring models for every outcome when ask
   analysis <- smallSpecifications()$ccwAnalysisList[[1]]
   data <- loadCloneCensorWeightData(file.path(refitFolder, referenceTable$ccwDataFile[1]))
   on.exit(close(data), add = TRUE)
-  for (outcomeId in c(3, 101)) {
+  # (The default tier runs the pipeline by hand for outcome 3, the full tier also for outcome 101.)
+  for (outcomeId in testConfigurations(c(3, 101), 3)) {
     # The standard single-study pipeline:
     population <- suppressMessages(createStudyPopulation(data, outcomeId = outcomeId, createStudyPopulationArgs = analysis$createStudyPopulationArgs))
     clones <- suppressMessages(createClones(population, data, analysis$createClonesArgs))

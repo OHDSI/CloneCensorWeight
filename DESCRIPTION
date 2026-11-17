@@ -74,6 +74,9 @@ Remotes:
     ohdsi/CohortMethod@left-censored
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+Config/testthat/parallel: true
+Config/testthat/start-first: runCcwAnalyses, integration-bootstrap, integration-designChoicesDiagnostics,
+    integration-designChoicesSensitivity, resultsDataModel
 URL: https://ohdsi.github.io/CloneCensorWeight
 BugReports: https://github.com/ohdsi/CloneCensorWeight/issues
 Config/roxygen2/version: 8.1.1

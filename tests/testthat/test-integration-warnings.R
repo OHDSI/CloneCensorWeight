@@ -65,7 +65,8 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
   expect_match(warnings, "intervals of 3 days counted from riskStart = 0", fixed = TRUE)
   expect_match(warnings, "strategy 1 (Initiate within 7 days) at the end of day 7 (t = 8); strategy 2 (Do not initiate within 7 days) at the end of day 7 (t = 8)", fixed = TRUE)
   expect_match(warnings, "Use an intervalLength that divides t. With intervalLength = 1, an indicator time basis with armByTimeInteraction = TRUE reproduces the weighted Kaplan-Meier risks", fixed = TRUE)
-  for (intervalLength in c(1, 2, 4, 8)) {
+  # (Grids of 2 and 8 days in the default tier; 1, 2, 4 and 8 in the full tier.)
+  for (intervalLength in testConfigurations(c(1, 2, 4, 8), c(2, 8))) {
     expect_length(withoutInside(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength))), 0)
   }
 
@@ -257,7 +258,8 @@ test_that("bootstrapCcwAnalysis warns about day-0 covariate windows once, for th
     )),
     fitCensoringModelsArgs = createFitCensoringModelsArgs(prior = Cyclops::createPrior("none")),
     computeWeightsArgs = createComputeWeightsArgs(),
-    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 20, bootstrapArgs = createBootstrapArgs(replicates = 2, seed = 1))
+    # (One replicate in the default tier, which also shows that the replicate does not warn again.)
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 20, bootstrapArgs = createBootstrapArgs(replicates = testConfigurations(2, 1), seed = 1))
   )))
   expect_length(grep(day0Warning, warnings), 1)
 })
@@ -324,6 +326,9 @@ test_that("bootstrapCcwAnalysis warns when the replicates sit on one side of the
   # 20 replicates take about a minute. With fewer than 20 replicates nothing is assessed, so the other
   # bootstrap tests (test-integration-bootstrap.R) do not warn.
   skip_on_cran()
+  # Full tier: the criterion itself (.bootstrapReplicateShift()) is tested by hand in the default tier
+  # (the test above).
+  skipUnlessFullTests()
   data <- simulateCloneCensorWeightData(
     n = 120, maxDays = 15, graceEnd = 3, initiationHazard = 0.1, outcomeHazard = 0.02, deathHazard = 0.005,
     initiationCoefficients = rep(0.4, 5), seed = 1
@@ -388,4 +393,46 @@ test_that("bootstrapCcwAnalysis warns when the replicates sit on one side of the
   expect_match(shiftWarnings, "rd_15 (20 replicates above it and 0 below, sign test p = 1.9e-06; median replicate", fixed = TRUE)
   expect_match(shiftWarnings, "metaData$bootstrap$replicateShift", fixed = TRUE)
   expect_length(setdiff(warnings, shiftWarnings), 0)
+})
+
+test_that("bootstrapCcwAnalysis words the shift warning from the statistics it records", {
+  # The light form of the test above: 2 replicates, with the criterion (tested by hand above) mocked to
+  # flag the risk difference.
+  data <- simulateCloneCensorWeightData(
+    n = 120, maxDays = 15, graceEnd = 3, initiationHazard = 0.1, outcomeHazard = 0.02, deathHazard = 0.005,
+    initiationCoefficients = rep(0.4, 5), seed = 1
+  )
+  on.exit(close(data))
+  realShift <- .bootstrapReplicateShift
+  local_mocked_bindings(.bootstrapReplicateShift = function(t0, replicates) {
+    shift <- realShift(t0, replicates)
+    shift$shifted[shift$estimand == "rd_15"] <- TRUE
+    return(shift)
+  })
+  warnings <- capture_warnings(result <- suppressMessages(bootstrapCcwAnalysis(
+    cloneCensorWeightData = data,
+    outcomeId = 3,
+    createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowEnd = 15, endAnchor = "cohort start"),
+    createClonesArgs = createCreateClonesArgs(
+      strategies = list(
+        createTreatmentStrategy(1, "Initiate within 3 days", "initiateWithin", graceEnd = 3),
+        createTreatmentStrategy(2, "Do not initiate within 3 days", "notInitiateWithin", graceEnd = 3)
+      ),
+      competingEvents = "none"
+    ),
+    fitCensoringModelsArgs = createFitCensoringModelsArgs(useCovariates = FALSE),
+    computeWeightsArgs = createComputeWeightsArgs(),
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "cox", horizons = 15, bootstrapArgs = createBootstrapArgs(replicates = 2, seed = 1))
+  )))
+  shift <- result$metaData$bootstrap$replicateShift
+  expect_equal(shift, realShift(result$estimates, result$replicates) |> dplyr::mutate(shifted = c(NA, TRUE)))
+  expect_equal(shift$estimand, c("hr", "rd_15"))
+  shiftWarnings <- grep(shiftWarning, warnings, value = TRUE)
+  expect_length(shiftWarnings, 1)
+  expect_match(shiftWarnings, sprintf(
+    "of rd_15 (%d replicates above it and %d below, sign test p = %.2g; median replicate %.2f bootstrap SD %s it)",
+    shift$above[2], shift$below[2], shift$signTestP[2], abs(shift$medianShift[2]), if (shift$medianShift[2] >= 0) "above" else "below"
+  ), fixed = TRUE)
+  expect_match(shiftWarnings, "metaData$bootstrap$replicateShift", fixed = TRUE)
+  expect_false(grepl("of hr (", shiftWarnings, fixed = TRUE))
 })

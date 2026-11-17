@@ -993,10 +993,13 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #'
 #' @example inst/examples/clones.R
 #' @examples
+#' # With the Cox hazard model, which has no covariate-by-time interactions, there are fewer variants
+#' # than with the default pooled logistic model, which keeps the example fast:
 #' sensitivity <- computeCcwSensitivity(
 #'   clones = clones,
 #'   cloneCensorWeightData = data,
 #'   fitCensoringModelsArgs = createFitCensoringModelsArgs(
+#'     hazardModelType = "cox",
 #'     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
 #'   ),
 #'   fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 30)
@@ -1339,10 +1342,13 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'
 #' @example inst/examples/clones.R
 #' @examples
+#' # With the Cox hazard model, which has no covariate-by-time interactions, 8 variants are compared
+#' # rather than the 16 of the default pooled logistic model, which keeps the example fast:
 #' censoringModels <- fitCensoringModels(
 #'   clones = clones,
 #'   cloneCensorWeightData = data,
 #'   fitCensoringModelsArgs = createFitCensoringModelsArgs(
+#'     hazardModelType = "cox",
 #'     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
 #'   )
 #' )

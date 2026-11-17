@@ -133,7 +133,8 @@ test_that("Clones are split at the end of day tau + 1, so balance reads W(tau + 
     # tau + 1 = 1 is before riskStart = 2: the split is at the end of day riskStart (t = 1).
     list(graceEnd = 0, riskStart = 2)
   )
-  for (configuration in configurations) {
+  # (The default tier leaves out riskStart = 1.)
+  for (configuration in testConfigurations(configurations, configurations[c(1, 3)])) {
     analysis <- integrationAnalysis("neverInitiate", graceEnd = configuration$graceEnd, riskStart = configuration$riskStart)
     weighted <- suppressMessages(computeCensoringWeights(analysis$clones, analysis$models, unweightedArgs()))
     clones <- collectTable(weighted$clones, "cloneRowId")
@@ -535,6 +536,9 @@ keepEventsOn <- function(fixture, reason, days) {
 
 test_that("The default control fits a weighted Cox MSM on a million segments as coxph does", {
   skip_on_cran()
+  # Full tier: a check at scale (20,000 persons). The default tier compares the default control with
+  # the references on small data ("The default outcome-model control agrees with the references").
+  skipUnlessFullTests()
   skip_if_not_installed("survival")
   # The clones of 20,000 simulated persons split on the daily grid (about 1e6 segments). Newton steps
   # stopped by the standardized-gradient ("kkt") criterion reached maxIterations at the optimum here.
