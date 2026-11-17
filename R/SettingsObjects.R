@@ -1187,7 +1187,8 @@ BootstrapArgs <- R6Class(
 #'                             spline, linear and raw polynomial bases (where clones of both strategies
 #'                             often have the same weights and hazards, so it is close to 1), and at no
 #'                             particular interval for an orthogonal polynomial basis. It is not a
-#'                             summary of the effect over follow-up.
+#'                             summary of the effect over follow-up, and it is `NA` when either
+#'                             strategy has no outcomes, or only outcomes, in the first interval.
 #' @param msmWeights           The weights of the Cox and pooled logistic models: `"unstabilized"` or
 #'                             `"stabilized"` (see Details). The weighted Kaplan-Meier and
 #'                             Aalen-Johansen estimates (of `"km"`, and the rows at the horizons of

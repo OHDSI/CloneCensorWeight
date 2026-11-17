@@ -37,7 +37,8 @@ the time basis is 0: in the first interval for the indicator, natural
 spline, linear and raw polynomial bases (where clones of both strategies
 often have the same weights and hazards, so it is close to 1), and at no
 particular interval for an orthogonal polynomial basis. It is not a
-summary of the effect over follow-up.}
+summary of the effect over follow-up, and it is \code{NA} when either
+strategy has no outcomes, or only outcomes, in the first interval.}
 
 \item{msmWeights}{The weights of the Cox and pooled logistic models: \code{"unstabilized"} or
 \code{"stabilized"} (see Details). The weighted Kaplan-Meier and

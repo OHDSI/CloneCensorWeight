@@ -85,6 +85,19 @@ new defaults):
   `"initiateWithin"`. The diagnostics of analyses with an `"initiateWithin"` strategy compare twice as
   many choices (both regimes), and the default variants of `computeCcwSensitivity()` add
   `graceRegime`.
+* The pooled logistic outcome model with `armByTimeInteraction = TRUE` reports the first-interval odds
+  ratio (`"or"`) as `NA` when either strategy has no outcomes, or only outcomes, in the first interval.
+  Those cells have a fixed hazard and are left out of the fit, and the `target` coefficient reported as
+  the odds ratio was then the odds ratio of a later interval, chosen by the column pivoting, with a
+  finite standard error. The risks are unchanged. In `runCcwAnalyses()` such outcomes no longer enter
+  the calibration of `or`.
+* The pooled logistic outcome model warns when a strategy censors clones at a start on days that end no
+  interval of its grid (`intervalLength > 1` with a `"notInitiateWithin"` or `"neverInitiate"` strategy,
+  or an `"initiateWithin"` strategy with `graceStart > 0`). A clone censored inside an interval counted
+  as at risk for the whole interval, while the clones that remain carry the weights that make up for
+  it, which biases the risks and the first-interval odds ratio. Daily intervals reproduce the weighted
+  Kaplan-Meier risks; the warning about a grid that ends no interval at the end of a grace period no
+  longer says that any grid with such an interval does.
 
 New features:
 
@@ -180,7 +193,7 @@ Documentation:
 
 * New vignettes `SingleStudy` (one target trial on Synthea: first AMI, metoprolol within 7 days vs not;
   every step of the pipeline with its diagnostics, and a comparison with naive and landmark analyses),
-  `MultipleAnalyses` (two grace periods x three outcome models x the outcome and 20 negative controls
+  `MultipleAnalyses` (two grace periods x three outcome models x the outcome and 18 negative controls
   through `runCcwAnalyses()`, empirical calibration, `exportToCsv()`, and `createResultsDataModel()` and
   `uploadResults()` into SQLite) and `ResultsSchema` (the results data model, generated from
   `inst/csv/resultsDataModelSpecification.csv`). The database-dependent code is not evaluated when the

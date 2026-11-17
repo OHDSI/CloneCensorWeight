@@ -9,6 +9,7 @@ library(testthat)
 # - bootstrapCcwAnalysis(): replicates that sit predominantly on one side of the full-data estimate.
 
 gridWarning <- "No interval of the pooled logistic outcome model's grid"
+insideWarning <- "Clones are censored inside the intervals of the pooled logistic outcome model's grid"
 smoothWarning <- "smooth time basis"
 day0Warning <- "models? initiation on day 0"
 shiftWarning <- "sit predominantly on one side"
@@ -49,43 +50,48 @@ pooledWarnings <- function(analysis, timeBasis) {
   return(capture_warnings(suppressMessages(fitOutcomeModel(weighted, args))))
 }
 
+# The warnings other than the one about clones censored inside intervals (tested on its own below).
+withoutInside <- function(warnings) {
+  return(warnings[!grepl(insideWarning, warnings)])
+}
+
 test_that("The pooled logistic outcome model warns when no interval ends at the end of the grace period", {
   analysis <- pooledAnalysis()
   on.exit(closeAnalysis(analysis))
   # The grace period of both strategies ends at the end of day 7, t = 8:
-  warnings <- pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 3))
+  warnings <- withoutInside(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 3)))
   expect_length(warnings, 1)
   expect_match(warnings, gridWarning)
   expect_match(warnings, "intervals of 3 days counted from riskStart = 0", fixed = TRUE)
   expect_match(warnings, "strategy 1 (Initiate within 7 days) at the end of day 7 (t = 8); strategy 2 (Do not initiate within 7 days) at the end of day 7 (t = 8)", fixed = TRUE)
-  expect_match(warnings, "indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks", fixed = TRUE)
+  expect_match(warnings, "Use an intervalLength that divides t. With intervalLength = 1, an indicator time basis with armByTimeInteraction = TRUE reproduces the weighted Kaplan-Meier risks", fixed = TRUE)
   for (intervalLength in c(1, 2, 4, 8)) {
-    expect_length(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength)), 0)
+    expect_length(withoutInside(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength))), 0)
   }
 
   # The end of day 7 is at t = 6 with riskStart = 2:
   later <- pooledAnalysis(riskStart = 2)
   on.exit(closeAnalysis(later), add = TRUE)
-  expect_length(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 3)), 0)
-  warnings <- pooledWarnings(later, createTimeBasis("indicator", intervalLength = 4))
+  expect_length(withoutInside(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 3))), 0)
+  warnings <- withoutInside(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 4)))
   expect_length(warnings, 1)
   expect_match(warnings, "at the end of day 7 (t = 6)", fixed = TRUE)
 
   # With deviationFirst, the clones that deviate on day 7 end on day 6, t = 7:
   deviationFirst <- pooledAnalysis(sameDayOrdering = "deviationFirst")
   on.exit(closeAnalysis(deviationFirst), add = TRUE)
-  expect_length(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 7)), 0)
-  warnings <- pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 8))
+  expect_length(withoutInside(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 7))), 0)
+  warnings <- withoutInside(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 8)))
   expect_length(warnings, 1)
   expect_match(warnings, "at the end of day 6 (t = 7)", fixed = TRUE)
 
   # A grace period that ends before riskStart does not censor clones during follow-up:
   afterGrace <- pooledAnalysis(riskStart = 9)
   on.exit(closeAnalysis(afterGrace), add = TRUE)
-  expect_length(pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3)), 0)
+  expect_length(withoutInside(pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3))), 0)
   # (The odds ratio of this fit is not identified, no target outcome falling in its reference interval, and
   # its variance can come out negative, with an "NaNs produced" warning, depending on the weights.)
-  warnings <- pooledWarnings(afterGrace, createTimeBasis("naturalSpline", intervalLength = 1, df = 3))
+  warnings <- withoutInside(pooledWarnings(afterGrace, createTimeBasis("naturalSpline", intervalLength = 1, df = 3)))
   expect_false(any(grepl(gridWarning, warnings) | grepl(smoothWarning, warnings)))
 })
 
@@ -104,12 +110,46 @@ test_that("The pooled logistic outcome model warns about a smooth time basis wit
     expect_match(warnings, "Use an indicator time basis (createTimeBasis(type = \"indicator\")) on a grid with an interval ending there, with armByTimeInteraction = TRUE", fixed = TRUE, info = type)
   }
   # A smooth basis on a grid with no interval ending at the end of the grace period gets both warnings:
-  warnings <- pooledWarnings(analysis, createTimeBasis("naturalSpline", intervalLength = 3, df = 3))
+  warnings <- withoutInside(pooledWarnings(analysis, createTimeBasis("naturalSpline", intervalLength = 3, df = 3)))
   expect_length(warnings, 2)
   expect_match(warnings[1], gridWarning)
   expect_match(warnings[2], smoothWarning)
   # The indicator basis on a daily grid gets neither:
   expect_length(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 1)), 0)
+})
+
+test_that("The pooled logistic outcome model warns when clones are censored at starts inside its intervals", {
+  # notInitiateWithin(7) censors its clones at a start on any of days 0 to 7, which no grid of intervals
+  # longer than a day can follow: the weighted risk set of an interval counts the censored clones and the
+  # weights that make up for them.
+  analysis <- pooledAnalysis()
+  on.exit(closeAnalysis(analysis))
+  for (intervalLength in c(2, 4, 8)) {
+    warnings <- pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength))
+    expect_length(warnings, 1)
+    expect_match(warnings, insideWarning, info = intervalLength)
+    expect_match(warnings, sprintf("intervals of %d days counted from riskStart = 0): strategy 2 (Do not initiate within 7 days) at a start on day(s) 0 to 7 (t = 1 to 8).", intervalLength), fixed = TRUE, info = intervalLength)
+    expect_match(warnings, "Use intervalLength = 1", fixed = TRUE)
+  }
+  expect_length(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 1)), 0)
+  # Off the grid at the end of the grace period too: both warnings.
+  warnings <- pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 3))
+  expect_length(warnings, 2)
+  expect_true(any(grepl(insideWarning, warnings)) && any(grepl(gridWarning, warnings)))
+
+  # With deviationFirst, a clone that deviates on day d is last under follow-up on day d - 1, so a start on
+  # day 0 ends its clone before follow-up starts:
+  deviationFirst <- pooledAnalysis(sameDayOrdering = "deviationFirst")
+  on.exit(closeAnalysis(deviationFirst), add = TRUE)
+  expect_match(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 7)), "at a start on day(s) 1 to 7 (t = 1 to 7)", fixed = TRUE)
+  # With riskStart = 2, a start on day 0 or 1 ends its clone before follow-up starts:
+  later <- pooledAnalysis(riskStart = 2)
+  on.exit(closeAnalysis(later), add = TRUE)
+  expect_match(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 3)), "at a start on day(s) 2 to 7 (t = 1 to 6)", fixed = TRUE)
+  # No start censors a clone during follow-up when the grace period ends before riskStart:
+  afterGrace <- pooledAnalysis(riskStart = 9)
+  on.exit(closeAnalysis(afterGrace), add = TRUE)
+  expect_false(any(grepl(insideWarning, pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3)))))
 })
 
 # Covariate windows that end on day 0 ----------------------------------------------------------------

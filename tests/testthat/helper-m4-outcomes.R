@@ -190,11 +190,11 @@ createM4WeightedClones <- function(fixture, cutIntervalLength = NA_integer_) {
 }
 
 # Evaluates `expr` without the warnings of a pooled logistic outcome model with a grace period (a smooth
-# time basis, or a grid with no interval ending at the end of the grace period; Phase1Contracts section
-# 11.6), for tests of other properties of such models. test-integration-warnings.R tests the warnings.
+# time basis, a grid with no interval ending at the end of the grace period (Phase1Contracts section
+# 11.6), or clones censored at starts inside the intervals), for tests of other properties of such models. test-integration-warnings.R tests the warnings.
 withoutGracePeriodWarnings <- function(expr) {
   return(withCallingHandlers(expr, warning = function(w) {
-    if (grepl("^(No interval of the pooled logistic outcome model's grid|The pooled logistic outcome model's smooth time basis)", conditionMessage(w))) {
+    if (grepl("^(No interval of the pooled logistic outcome model's grid|The pooled logistic outcome model's smooth time basis|Clones are censored inside the intervals of the pooled logistic outcome model's grid)", conditionMessage(w))) {
       invokeRestart("muffleWarning")
     }
   }))
