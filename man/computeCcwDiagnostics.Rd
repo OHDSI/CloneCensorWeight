@@ -136,10 +136,13 @@ clones <- createClones(
     )
   )
 )
+# With the Cox hazard model, which has no covariate-by-time interactions, 8 variants are compared
+# rather than the 16 of the default pooled logistic model, which keeps the example fast:
 censoringModels <- fitCensoringModels(
   clones = clones,
   cloneCensorWeightData = data,
   fitCensoringModelsArgs = createFitCensoringModelsArgs(
+    hazardModelType = "cox",
     prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
   )
 )
