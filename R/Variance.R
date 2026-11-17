@@ -245,8 +245,8 @@
 
 # Stops unless the loaded Cyclops has vcov(fit, type = "robust") (Cyclops C2, plan section 5), that is,
 # unless its `vcovMethod` has a `type` argument. An older vcov.cyclopsFit() would silently ignore `type`
-# (it takes `...`) and return the model-based variance. Its version cannot tell: the development
-# versions with and without it are both 4.0.1.
+# (it takes `...`) and return the model-based variance. The DESCRIPTION requires Cyclops 4.0.2, the first
+# version with it, but development builds of 4.0.1 with and without it exist, so this checks the method.
 .checkCyclopsRobustVcov <- function(vcovMethod = utils::getS3method("vcov", "cyclopsFit")) {
   if (!"type" %in% names(formals(vcovMethod))) {
     stop(sprintf(

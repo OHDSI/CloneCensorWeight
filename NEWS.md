@@ -26,11 +26,12 @@ new defaults):
   `"ccw"`, because of the refit. The standard errors of the Kaplan-Meier and Aalen-Johansen estimates
   stay this package's own.
 * The default robust variance needs a Cyclops whose `vcov()` has `type = "robust"`. No released
-  Cyclops has it, and its development versions with and without it are both 4.0.1, so the DESCRIPTION
-  keeps `Cyclops (>= 4.0.1)` and `Remotes: ohdsi/Cyclops@develop`, where it is to be merged (plan
-  decision 9 item 2). `fitOutcomeModel()` stops with an error naming `robustVarianceEngine = "ccw"`
-  when the loaded Cyclops lacks it (an older `vcov()` would silently return the model-based variance),
-  and so does `runCcwAnalyses()`, before any work, when one of its analyses needs it.
+  Cyclops has it; it comes with Cyclops 4.0.2, so the DESCRIPTION requires `Cyclops (>= 4.0.2)`, with
+  `Remotes: ohdsi/Cyclops@develop`, where it is to be merged (plan decision 9 item 2). Development
+  builds of Cyclops 4.0.1 with and without it exist, so `fitOutcomeModel()` also stops with an error
+  naming `robustVarianceEngine = "ccw"` when the loaded Cyclops lacks it (an older `vcov()` would
+  silently return the model-based variance), and so does `runCcwAnalyses()`, before any work, when one
+  of its analyses needs it.
 * The empirical calibration is seeded: `createCcwAnalysesSpecifications(calibrationSeed = 1)` fits the
   null distribution of each calibration group (`EmpiricalCalibration::fitMcmcNull()`, an MCMC) with
   this seed and then restores the caller's random number stream, so the calibrated p-values and

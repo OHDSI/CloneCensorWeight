@@ -31,7 +31,7 @@ Depends:
 Imports:
     checkmate,
     CohortMethod (>= 6.0.0),
-    Cyclops (>= 4.0.1),
+    Cyclops (>= 4.0.2),
     DatabaseConnector (>= 6.0.0),
     DBI,
     digest,
