@@ -174,7 +174,8 @@ test_that("summarizeResults applies the thresholds, calibrates with the eligible
       ),
       counts = dplyr::tibble(
         strategyId = 1:2, clones = c(100L, 90L), persons = c(100L, 90L), outcomes = c(5L, 4L),
-        competingEvents = c(1L, 0L), personDays = c(1000, 900)
+        competingEvents = c(1L, 0L), personDays = c(1000, 900), weightedPersonDays = c(1010, 880),
+        weightedOutcomes = c(5.5, 3.9)
       ),
       diagnostics = list(values = dplyr::tibble(
         # The outcome of interest fails the MDRR, and the last negative control the positivity:
@@ -230,6 +231,8 @@ test_that("summarizeResults applies the thresholds, calibrates with the eligible
   expect_equal(hr$oneSidedP, EmpiricalCalibration::computeTraditionalP(0.4, 0.15, twoSided = FALSE, upper = TRUE))
   expect_equal(hr$targetSubjects, 100)
   expect_equal(hr$comparatorDays, 900)
+  expect_equal(hr$targetWeightedOutcomes, 5.5)
+  expect_equal(hr$comparatorWeightedDays, 880)
   rd <- results[results$outcomeId == 1 & results$estimand == "rd_365", ]
   expect_true(is.na(rd$calibratedP) && is.na(rd$logRr) && is.na(rd$oneSidedP))
   expect_equal(rd$se, 0.005)
@@ -427,6 +430,20 @@ test_that("runCcwAnalyses gives the estimates of the single-study functions with
     expect_equal(unique(actual$targetOutcomes), outcomeModel$counts$outcomes[1])
     mdrr <- computeMdrr(clones)$mdrr
     expect_equal(getDiagnosticsSummary(mainFolder)$mdrr[getDiagnosticsSummary(mainFolder)$analysisId == 1 & getDiagnosticsSummary(mainFolder)$outcomeId == outcomeId], mdrr)
+    # The outcome of interest also keeps the attrition and the follow-up of the clones:
+    savedModel <- readRDS(file.path(mainFolder, referenceTable$outcomeModelFile[referenceTable$analysisId == 1 & referenceTable$outcomeId == outcomeId]))
+    if (outcomeId == 3) {
+      expect_equal(savedModel$attrition, attr(clones, "metaData")$attrition)
+      survivalTime <- dplyr::collect(clones$clones)
+      expect_equal(
+        savedModel$followUpDistribution$medianDays,
+        as.numeric(tapply(survivalTime$survivalTime, survivalTime$strategyId, stats::median))
+      )
+      expect_equal(savedModel$followUpDistribution$maxDays, as.numeric(tapply(survivalTime$survivalTime, survivalTime$strategyId, max)))
+    } else {
+      expect_null(savedModel$attrition)
+      expect_null(savedModel$followUpDistribution)
+    }
     close(weightedClones)
     close(clones)
   }

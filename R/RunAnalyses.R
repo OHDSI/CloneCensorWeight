@@ -149,8 +149,9 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
 #'    weighted clones of the outcome's study population. The saved `CcwOutcomeModel` also holds
 #'    `diagnostics`: the [computeMdrr()] result, [computePositivity()] of the censoring models, and,
 #'    for outcomes of interest, [computeWeightSummary()] of the weighted clones and `curves`, from
-#'    [computeCumulativeIncidence()] at every event time. `diagnostics$values` holds the values that
-#'    the summary compares with the diagnostic thresholds.
+#'    [computeCumulativeIncidence()] at every event time, `attrition` (that of the clones) and
+#'    `followUpDistribution` (quantiles of the days of follow-up of the clones of each strategy).
+#'    `diagnostics$values` holds the values that the summary compares with the diagnostic thresholds.
 #' 7. **Summary** (`resultsSummary.rds`, `diagnosticsSummary.rds`): see [getResultsSummary()] and
 #'    [getDiagnosticsSummary()].
 #'
@@ -829,9 +830,31 @@ runCcwAnalyses <- function(connectionDetails = NULL,
   )
   if (params$outcomeOfInterest) {
     outcomeModel$curves <- computeCumulativeIncidence(weightedClones)
+    outcomeModel$attrition <- attr(clones, "metaData")$attrition
+    outcomeModel$followUpDistribution <- .computeFollowUpDistribution(clones)
   }
   .saveFile(outcomeModel, params$outcomeModelFile)
   return(NULL)
+}
+
+# The quantiles of the days of follow-up (survivalTime) of the clones of each strategy.
+.computeFollowUpDistribution <- function(clones) {
+  followUp <- clones$clones |>
+    select("strategyId", "survivalTime") |>
+    collect()
+  return(dplyr::bind_rows(lapply(sort(unique(followUp$strategyId)), function(strategyId) {
+    quantiles <- stats::quantile(followUp$survivalTime[followUp$strategyId == strategyId], c(0, 0.1, 0.25, 0.5, 0.75, 0.9, 1), names = FALSE)
+    tibble(
+      strategyId = as.integer(strategyId),
+      minDays = quantiles[1],
+      p10Days = quantiles[2],
+      p25Days = quantiles[3],
+      medianDays = quantiles[4],
+      p75Days = quantiles[5],
+      p90Days = quantiles[6],
+      maxDays = quantiles[7]
+    )
+  })))
 }
 
 # The diagnostics of one outcome model, and the values compared with the CcwDiagnosticThresholds:
@@ -914,8 +937,9 @@ getFileReference <- function(outputFolder) {
 #' (`"hr"`, `"or"`, `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`,
 #' `"rmst_<h>"`, `"rmtl_<h>"`; see [fitOutcomeModel()]), with the counts per strategy (the target
 #' strategy is strategy 1, the comparator strategy 2): `targetSubjects` (persons), `targetClones`,
-#' `targetDays` (days of follow-up), `targetOutcomes` and `targetCompetingEvents`, and the same for the
-#' comparator; and `estimate`, `ci95Lb`, `ci95Ub`, `p`, and `se` (additive estimands), or `logRr` and
+#' `targetDays` (days of follow-up), `targetOutcomes`, `targetCompetingEvents`, `targetWeightedDays`
+#' and `targetWeightedOutcomes` (weighted by the weights of [computeCensoringWeights()]), and the same
+#' for the comparator; and `estimate`, `ci95Lb`, `ci95Ub`, `p`, and `se` (additive estimands), or `logRr` and
 #' `seLogRr` (ratio estimands), as in [fitOutcomeModel()]. Ratio estimands (`"hr"`, `"or"`, `"rr_<h>"`)
 #' also have `oneSidedP` (for a ratio above 1) and, when there are at least 5 negative controls (outcomes
 #' with `trueEffectSize = 1`) with a standard error whose diagnostics allow calibration (see

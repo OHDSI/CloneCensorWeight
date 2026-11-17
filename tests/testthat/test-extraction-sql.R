@@ -43,7 +43,9 @@ extractionSqlParameters <- function() {
 
 test_that("Every SQL file is covered by the render tests", {
   sqlFolder <- system.file("sql", "sql_server", package = "CloneCensorWeight")
-  expect_setequal(list.files(sqlFolder, pattern = "\\.sql$"), names(extractionSqlParameters()))
+  # The results data model DDL is tested in test-resultsDataModel.R:
+  sqlFiles <- setdiff(list.files(sqlFolder, pattern = "\\.sql$"), "CreateResultsDataModel.sql")
+  expect_setequal(sqlFiles, names(extractionSqlParameters()))
 })
 
 test_that("Every SQL file renders and translates for every supported platform", {

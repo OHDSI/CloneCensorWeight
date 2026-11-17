@@ -112,3 +112,16 @@ New features:
   CohortMethod) and `getFileReference()` read the outputs of `runCcwAnalyses()`.
 * `computeCensoringWeights()` and the diagnostics accept censoring models fit on clones without an
   outcome (`metaData$outcomeId` `NA`), as `runCcwAnalyses()` shares them across outcomes.
+* The results data model, modelled on CohortMethod's: `exportToCsv()` writes the results of
+  `runCcwAnalyses()` to CSV files and `Results_<databaseId>.zip`, with counts below `minCellCount`
+  written as `-minCellCount`; `getResultsDataModelSpecifications()` describes the tables, all
+  prefixed `ccw_`, with `database_id` in the primary key of every site-specific table and strategy
+  IDs in the keys of the tables per strategy (`strategy_id`) and per contrast (`target_strategy_id`,
+  `comparator_strategy_id`); `createResultsDataModel()`, `uploadResults()`, `migrateDataModel()` and
+  `getDataMigrator()` create, fill and migrate the tables with ResultModelManager. The DDL of this
+  first version is frozen; later changes go through migrations. `inst/Results_Eunomia.zip` holds an
+  export of a Eunomia run for tests.
+* `getResultsSummary()` gains the weighted days of follow-up and weighted outcomes of each strategy
+  (`targetWeightedDays`, `targetWeightedOutcomes` and the comparator's), and the outcome model files
+  of `runCcwAnalyses()` keep the attrition and the follow-up distribution of the clones of outcomes
+  of interest.

@@ -103,8 +103,9 @@ otherwise it is computed for outcomes of interest only.
 weighted clones of the outcome's study population. The saved \code{CcwOutcomeModel} also holds
 \code{diagnostics}: the \code{\link[=computeMdrr]{computeMdrr()}} result, \code{\link[=computePositivity]{computePositivity()}} of the censoring models, and,
 for outcomes of interest, \code{\link[=computeWeightSummary]{computeWeightSummary()}} of the weighted clones and \code{curves}, from
-\code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every event time. \code{diagnostics$values} holds the values that
-the summary compares with the diagnostic thresholds.
+\code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every event time, \code{attrition} (that of the clones) and
+\code{followUpDistribution} (quantiles of the days of follow-up of the clones of each strategy).
+\code{diagnostics$values} holds the values that the summary compares with the diagnostic thresholds.
 \item \strong{Summary} (\code{resultsSummary.rds}, \code{diagnosticsSummary.rds}): see \code{\link[=getResultsSummary]{getResultsSummary()}} and
 \code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}.
 }

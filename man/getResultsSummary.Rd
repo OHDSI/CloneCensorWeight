@@ -20,8 +20,9 @@ One row per analysis, target-treatment-outcome combination, and estimand of the 
 (\code{"hr"}, \code{"or"}, \code{"risk_target_<h>"}, \code{"risk_comparator_<h>"}, \code{"rd_<h>"}, \code{"rr_<h>"},
 \code{"rmst_<h>"}, \code{"rmtl_<h>"}; see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}), with the counts per strategy (the target
 strategy is strategy 1, the comparator strategy 2): \code{targetSubjects} (persons), \code{targetClones},
-\code{targetDays} (days of follow-up), \code{targetOutcomes} and \code{targetCompetingEvents}, and the same for the
-comparator; and \code{estimate}, \code{ci95Lb}, \code{ci95Ub}, \code{p}, and \code{se} (additive estimands), or \code{logRr} and
+\code{targetDays} (days of follow-up), \code{targetOutcomes}, \code{targetCompetingEvents}, \code{targetWeightedDays}
+and \code{targetWeightedOutcomes} (weighted by the weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}), and the same
+for the comparator; and \code{estimate}, \code{ci95Lb}, \code{ci95Ub}, \code{p}, and \code{se} (additive estimands), or \code{logRr} and
 \code{seLogRr} (ratio estimands), as in \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}. Ratio estimands (\code{"hr"}, \code{"or"}, \code{"rr_<h>"})
 also have \code{oneSidedP} (for a ratio above 1) and, when there are at least 5 negative controls (outcomes
 with \code{trueEffectSize = 1}) with a standard error whose diagnostics allow calibration (see
