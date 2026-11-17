@@ -177,6 +177,9 @@ New features:
   `getDataMigrator()` create, fill and migrate the tables with ResultModelManager. The DDL of this
   first version is frozen; later changes go through migrations. `inst/Results_Eunomia.zip` holds an
   export of a Eunomia run for tests.
+* `findResultsZipFile()` returns the one `Results_<databaseId>.zip` in an export folder, and stops,
+  naming them, when there is more than one (as after an earlier run with another `databaseId`). The
+  Strategus module uploads the zip it returns, rather than the first zip file of its results folder.
 * `convertUntypedListToCcwAnalysesSpecifications()` documents the two forms in which a Strategus
   module gets the specifications back, and stops with a clear message when given the
   `CcwAnalysesSpecifications` object instead of its `$toList()`, or a list without

@@ -110,6 +110,7 @@ reference:
       - getResultsDataModelSpecifications
       - createResultsDataModel
       - uploadResults
+      - findResultsZipFile
       - migrateDataModel
       - getDataMigrator
 

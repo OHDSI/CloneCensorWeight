@@ -182,6 +182,42 @@ uploadResults <- function(connectionDetails,
   invisible(NULL)
 }
 
+#' Find the results zip file in an export folder
+#'
+#' @description
+#' Finds the `Results_<databaseId>.zip` file that [exportToCsv()] made in `exportFolder`, as the
+#' Strategus module does before [uploadResults()].
+#'
+#' @param exportFolder The folder that [exportToCsv()] exported to.
+#'
+#' @return
+#' The full path of the one `Results_*.zip` file in `exportFolder`, or `NULL` when there is none. Stops
+#' with an error naming them when there is more than one (for example the zip of an earlier run, with
+#' another `databaseId`), because which one is meant is then ambiguous.
+#'
+#' @examples
+#' \dontrun{
+#' zipFileName <- findResultsZipFile("export")
+#' }
+#'
+#' @export
+findResultsZipFile <- function(exportFolder) {
+  checkmate::assertDirectoryExists(exportFolder)
+  exportFolder <- normalizePath(exportFolder)
+  zipFiles <- list.files(path = exportFolder, pattern = "^Results_.*\\.zip$", full.names = TRUE)
+  if (length(zipFiles) > 1) {
+    stop(
+      "The results folder ", exportFolder, " has more than one results zip file (",
+      paste(basename(zipFiles), collapse = ", "), "), so which one this run made is ambiguous. ",
+      "Remove those of earlier runs and upload again."
+    )
+  }
+  if (length(zipFiles) == 0) {
+    return(NULL)
+  }
+  return(zipFiles)
+}
+
 #' Migrate the results data model
 #'
 #' @description

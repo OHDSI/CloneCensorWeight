@@ -17,7 +17,8 @@ moduleCalls <- list(
   ),
   exportToCsv = c("outputFolder", "exportFolder", "databaseId", "minCellCount", "maxCores"),
   createResultsDataModel = c("connectionDetails", "databaseSchema", "tablePrefix"),
-  uploadResults = c("connectionDetails", "schema", "zipFileName", "purgeSiteDataBeforeUploading")
+  uploadResults = c("connectionDetails", "schema", "zipFileName", "purgeSiteDataBeforeUploading"),
+  findResultsZipFile = "exportFolder"
 )
 
 quietly <- function(expr) {
@@ -83,15 +84,7 @@ replayExecute <- function(jobContext, connectionDetails) {
 
 # What CloneCensorWeightModule$uploadResults() does: the one Results zip file in the results folder.
 replayUploadResults <- function(resultsSubFolder, resultsConnectionDetails) {
-  resultsFolder <- normalizePath(resultsSubFolder)
-  zipFiles <- list.files(path = resultsFolder, pattern = "^Results_.*\\.zip$", full.names = TRUE)
-  if (length(zipFiles) > 1) {
-    stop(
-      "The results folder ", resultsFolder, " has more than one results zip file (",
-      paste(basename(zipFiles), collapse = ", "), "), so which one this run made is ambiguous. ",
-      "Remove those of earlier runs and upload again."
-    )
-  }
+  zipFiles <- findResultsZipFile(resultsSubFolder)
   uploadResults(
     connectionDetails = resultsConnectionDetails,
     schema = "main",
