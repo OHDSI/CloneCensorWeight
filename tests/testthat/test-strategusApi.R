@@ -81,9 +81,17 @@ replayExecute <- function(jobContext, connectionDetails) {
   return(resultsDataModel)
 }
 
-# What CloneCensorWeightModule$uploadResults() does: the first zip file in the results folder.
+# What CloneCensorWeightModule$uploadResults() does: the one Results zip file in the results folder.
 replayUploadResults <- function(resultsSubFolder, resultsConnectionDetails) {
-  zipFiles <- list.files(path = normalizePath(resultsSubFolder), pattern = "\\.zip$", full.names = TRUE)
+  resultsFolder <- normalizePath(resultsSubFolder)
+  zipFiles <- list.files(path = resultsFolder, pattern = "^Results_.*\\.zip$", full.names = TRUE)
+  if (length(zipFiles) > 1) {
+    stop(
+      "The results folder ", resultsFolder, " has more than one results zip file (",
+      paste(basename(zipFiles), collapse = ", "), "), so which one this run made is ambiguous. ",
+      "Remove those of earlier runs and upload again."
+    )
+  }
   uploadResults(
     connectionDetails = resultsConnectionDetails,
     schema = "main",
@@ -265,6 +273,29 @@ test_that("createResultsDataModel and uploadResults: the first zip file uploads 
     uploadedRows <- DatabaseConnector::querySql(connection, sprintf("SELECT COUNT(*) FROM main.%s;", tableName))[1, 1]
     expect_equal(uploadedRows, csvRows, info = tableName)
   }
+})
+
+test_that("uploadResults stops when results zip files of other runs are in the results folder", {
+  # After a CDM refresh into the same results folder (a new databaseId), the old Results zip stays: an
+  # upload must not take it in place of the new one.
+  exportFolder <- handBuiltContext$moduleExecutionSettings$resultsSubFolder
+  staleZip <- file.path(exportFolder, "Results_000000001.zip")
+  file.copy(file.path(exportFolder, "Results_123456789.zip"), staleZip)
+  on.exit(unlink(staleZip))
+  resultsConnectionDetails <- newSqlite()
+  quietly(createResultsDataModel(connectionDetails = resultsConnectionDetails, databaseSchema = "main", tablePrefix = ""))
+  expect_error(
+    quietly(replayUploadResults(exportFolder, resultsConnectionDetails)),
+    "Results_000000001.zip, Results_123456789.zip"
+  )
+
+  # A zip that is not a Results zip (such as the results.zip the module makes when there is none) is not one
+  unlink(staleZip)
+  otherZip <- file.path(exportFolder, "results.zip")
+  file.copy(file.path(exportFolder, "Results_123456789.zip"), otherZip)
+  on.exit(unlink(otherZip), add = TRUE)
+  zipFile <- quietly(replayUploadResults(exportFolder, resultsConnectionDetails))
+  expect_equal(basename(zipFile), "Results_123456789.zip")
 })
 
 unlink(studyFolder, recursive = TRUE)
