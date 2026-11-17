@@ -154,6 +154,10 @@ New features:
   `getDataMigrator()` create, fill and migrate the tables with ResultModelManager. The DDL of this
   first version is frozen; later changes go through migrations. `inst/Results_Eunomia.zip` holds an
   export of a Eunomia run for tests.
+* `convertUntypedListToCcwAnalysesSpecifications()` documents the two forms in which a Strategus
+  module gets the specifications back, and stops with a clear message when given the
+  `CcwAnalysesSpecifications` object instead of its `$toList()`, or a list without
+  `ccwAnalysisList` or `targetTreatmentOutcomesList`.
 * `getResultsSummary()` gains the weighted days of follow-up and weighted outcomes of each strategy
   (`targetWeightedDays`, `targetWeightedOutcomes` and the comparator's), and the outcome model files
   of `runCcwAnalyses()` keep the attrition and the follow-up distribution of the clones of outcomes

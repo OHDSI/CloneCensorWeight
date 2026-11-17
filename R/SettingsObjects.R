@@ -1840,6 +1840,14 @@ loadTargetTreatmentOutcomesList <- function(file) {
 
 #' Convert untyped list to CcwAnalysesSpecifications
 #'
+#' @details
+#' A Strategus module stores the specifications as their `$toList()` and calls this function on what
+#' it is given back: that list itself when the analysis specifications were built in the same
+#' session, or the list that `ParallelLogger::loadSettingsFromJson()` returns for it, in which the
+#' settings objects have their classes again. Both convert to the same specifications. The function
+#' stops when given the `CcwAnalysesSpecifications` object itself instead of its `$toList()`, or a
+#' list without `ccwAnalysisList` or `targetTreatmentOutcomesList`.
+#'
 #' @param untypedList A list of untyped objects. For example, these could be objects from a call
 #'                    to `jsonlite::fromJSON()`. Importantly, `simplifyDataFrame` must be set to
 #'                    `FALSE` when doing so.
@@ -1875,5 +1883,16 @@ loadTargetTreatmentOutcomesList <- function(file) {
 #'
 #' @export
 convertUntypedListToCcwAnalysesSpecifications <- function(untypedList) {
+  # The two likely mistakes, which would otherwise fail with unrelated messages:
+  if (inherits(untypedList, "CcwAnalysesSpecifications")) {
+    stop("`untypedList` is a CcwAnalysesSpecifications object: pass its `$toList()` instead")
+  }
+  missingNames <- setdiff(c("ccwAnalysisList", "targetTreatmentOutcomesList"), names(untypedList))
+  if (length(missingNames) > 0) {
+    stop(sprintf(
+      "`untypedList` has no %s: it should be the `$toList()` of an object created by createCcwAnalysesSpecifications()",
+      paste(missingNames, collapse = " or ")
+    ))
+  }
   return(CcwAnalysesSpecifications$new(untypedList = untypedList))
 }

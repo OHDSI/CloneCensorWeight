@@ -17,6 +17,14 @@ An object of type \code{CcwAnalysesSpecifications}.
 \description{
 Convert untyped list to CcwAnalysesSpecifications
 }
+\details{
+A Strategus module stores the specifications as their \verb{$toList()} and calls this function on what
+it is given back: that list itself when the analysis specifications were built in the same
+session, or the list that \code{ParallelLogger::loadSettingsFromJson()} returns for it, in which the
+settings objects have their classes again. Both convert to the same specifications. The function
+stops when given the \code{CcwAnalysesSpecifications} object itself instead of its \verb{$toList()}, or a
+list without \code{ccwAnalysisList} or \code{targetTreatmentOutcomesList}.
+}
 \examples{
 analysis <- createCcwAnalysis(
   analysisId = 1,
