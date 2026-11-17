@@ -21,8 +21,8 @@
 #' period, before and after weighting, using [CohortMethod::computeCovariateBalance()].
 #'
 #' @details
-#' Let τ be the largest `graceEnd` of the two strategies, and d = τ + 1 (or the clone's `riskStart`, if
-#' later) the first day after the grace period. The clones compared are those of either strategy still
+#' Let \eqn{\tau}{tau} be the largest `graceEnd` of the two strategies, and d = \eqn{\tau}{tau} + 1
+#' (or the clone's `riskStart`, if later) the first day after the grace period. The clones compared are those of either strategy still
 #' under follow-up and uncensored on day d (`endDay >= d`); they are the target (strategy 1) and
 #' comparator (strategy 2) groups. Each clone has the covariates of its person. The "before" columns
 #' of the result compare these clones crudely; the "after" columns weight each clone by W(d), the

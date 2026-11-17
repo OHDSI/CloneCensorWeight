@@ -30,8 +30,8 @@ Compares the baseline covariates of the clones that still follow each strategy a
 period, before and after weighting, using \code{\link[CohortMethod:computeCovariateBalance]{CohortMethod::computeCovariateBalance()}}.
 }
 \details{
-Let τ be the largest \code{graceEnd} of the two strategies, and d = τ + 1 (or the clone's \code{riskStart}, if
-later) the first day after the grace period. The clones compared are those of either strategy still
+Let \eqn{\tau}{tau} be the largest \code{graceEnd} of the two strategies, and d = \eqn{\tau}{tau} + 1
+(or the clone's \code{riskStart}, if later) the first day after the grace period. The clones compared are those of either strategy still
 under follow-up and uncensored on day d (\code{endDay >= d}); they are the target (strategy 1) and
 comparator (strategy 2) groups. Each clone has the covariates of its person. The "before" columns
 of the result compare these clones crudely; the "after" columns weight each clone by W(d), the
