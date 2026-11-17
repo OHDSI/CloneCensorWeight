@@ -7,13 +7,13 @@ library(testthat)
 # are coded as days with riskStart = 1, so interval k (0-based) is the book's `time`. Gate: 1e-6 on the
 # outcome-model coefficients (signs flipped: the book models event == 0) and on the risks at months
 # 1..120, against a fresh run of the book code.
-# NHEFS is not shipped and never committed: the test reads it from the file named by the environment
-# variable CCW_NHEFS_PATH and skips without it. Source, date and checksum: extras/data/nhefs/SOURCE.md
-# (the owner's checkout); the reviewed transcription of the book code it follows is
-# extras/comparison/whatif/program17_3.R.
+# Nightly only (CCW_RUN_CROSSCHECKS=true). NHEFS is not shipped and never committed: the test reads
+# nhefs.csv, from the book's web page (https://miguelhernan.org/whatifbook), from the file named by the
+# environment variable CCW_NHEFS_PATH and skips without it.
 
 skipWhatIf <- function() {
   skip_on_cran()
+  skip_if(Sys.getenv("CCW_RUN_CROSSCHECKS") != "true", "Set CCW_RUN_CROSSCHECKS=true to run the cross-checks")
   path <- Sys.getenv("CCW_NHEFS_PATH")
   skip_if(path == "" || !file.exists(path), "Set CCW_NHEFS_PATH to the NHEFS csv to run the What If check")
   return(path)
