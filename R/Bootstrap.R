@@ -94,7 +94,12 @@
 #'                                  hyperparameters are fixed. Its `varianceEstimator` is not used.
 #' @param censoringModels           The censoring models of the full data, as created by
 #'                                  [fitCensoringModels()] with `fitCensoringModelsArgs` on the clones of
-#'                                  this analysis, or `NULL` to fit them.
+#'                                  this analysis, or `NULL` to fit them. Models fit on clones without an
+#'                                  outcome (`metaData$outcomeId` `NA`), which [runCcwAnalyses()] shares
+#'                                  across outcomes with `refitCensoringModelsForEveryOutcome = FALSE`, are
+#'                                  refit the same way in every replicate: on the clones of the
+#'                                  replicate's study population without an outcome, so the replicates
+#'                                  repeat the estimator of the full-data estimate.
 #' @param counts                    For testing: `NULL`, or a matrix of non-negative integer counts with
 #'                                  one row per person (in increasing order of `personSeqId`) and one
 #'                                  column per replicate, used instead of drawing counts. It sets the
@@ -241,6 +246,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   # fail it by chance, which would drop those replicates selectively.
   replicateCensoringModelsArgs <- fitCensoringModelsArgs$clone()
   replicateCensoringModelsArgs$errorOnHighCorrelation <- FALSE
+  # Censoring models fit without an outcome (shared across outcomes by runCcwAnalyses()) are refit
+  # without an outcome in every replicate, as the full-data models were:
+  censoringWithoutOutcome <- !is.null(censoringModels) && isTRUE(is.na(attr(censoringModels, "metaData")$outcomeId))
   failures <- character(0)
   for (replicate in seq_len(nReplicates)) {
     message(sprintf("Bootstrap replicate %d of %d", replicate, nReplicates))
@@ -257,7 +265,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
           computeWeightsArgs = computeWeightsArgs,
           fitOutcomeModelArgs = fitOutcomeModelArgs,
           fixedPriorVariances = fixedPriorVariances,
-          sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate])
+          sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate]),
+          censoringWithoutOutcome = censoringWithoutOutcome
         )),
         error = function(e) conditionMessage(e)
       ),
@@ -374,7 +383,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
                                   fitOutcomeModelArgs,
                                   censoringModels = NULL,
                                   fixedPriorVariances = NULL,
-                                  sourcePersonSeqIds = NULL) {
+                                  sourcePersonSeqIds = NULL,
+                                  censoringWithoutOutcome = FALSE) {
   population <- createStudyPopulation(
     cloneCensorWeightData = cloneCensorWeightData,
     outcomeId = outcomeId,
@@ -383,7 +393,16 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   clones <- createClones(population, cloneCensorWeightData, createClonesArgs)
   on.exit(close(clones))
   if (is.null(censoringModels)) {
-    censoringModels <- fitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs,
+    censoringClones <- clones
+    if (censoringWithoutOutcome) {
+      censoringClones <- createClones(
+        .createStudyPopulationWithoutOutcome(cloneCensorWeightData, createStudyPopulationArgs),
+        cloneCensorWeightData,
+        createClonesArgs
+      )
+      on.exit(close(censoringClones), add = TRUE)
+    }
+    censoringModels <- fitCensoringModels(censoringClones, cloneCensorWeightData, fitCensoringModelsArgs,
                                           .fixedPriorVariances = fixedPriorVariances,
                                           .sourcePersonSeqIds = sourcePersonSeqIds)
   }

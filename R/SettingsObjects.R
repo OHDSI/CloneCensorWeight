@@ -1217,9 +1217,8 @@ FitOutcomeModelArgs <- R6Class(
 #' Create a clone-censor-weight analysis specification
 #'
 #' @details
-#' Create a set of analysis choices. In this version the specification can be saved and loaded (see
-#' [saveCcwAnalysisList()]); the driver that runs many analyses, `runCcwAnalyses()`, comes in a later
-#' version.
+#' Create a set of analysis choices. The specification can be saved and loaded (see
+#' [saveCcwAnalysisList()]), and [runCcwAnalyses()] runs a list of them.
 #'
 #' @param analysisId                     An integer that will be used later to refer to this specific
 #'                                       set of analysis choices.
@@ -1574,6 +1573,24 @@ CcwAnalysesSpecifications <- R6Class(
       analysisIds <- sapply(self$ccwAnalysisList, function(analysis) analysis$analysisId)
       if (any(duplicated(analysisIds))) {
         stop("Duplicate analysis IDs are not allowed")
+      }
+      # Target-treatment-outcomes with the same cohorts share the CloneCensorWeightData (with the union
+      # of their outcomes) and the names of the outcome model files:
+      ttos <- self$targetTreatmentOutcomesList
+      cohortKeys <- vapply(ttos, function(tto) {
+        paste(tto$targetId, tto$treatmentId, if (is.null(tto$comparatorTreatmentId)) NA else tto$comparatorTreatmentId)
+      }, character(1))
+      conceptIds <- vapply(ttos, function(tto) {
+        paste(paste(sort(tto$includedCovariateConceptIds), collapse = ","), paste(sort(tto$excludedCovariateConceptIds), collapse = ","))
+      }, character(1))
+      if (any(tapply(conceptIds, cohortKeys, function(x) length(unique(x))) > 1)) {
+        stop("Target-treatment-outcomes with the same targetId, treatmentId and comparatorTreatmentId must have the same includedCovariateConceptIds and excludedCovariateConceptIds, because they share the data")
+      }
+      outcomeKeys <- unlist(lapply(seq_along(ttos), function(i) {
+        paste(cohortKeys[i], vapply(ttos[[i]]$outcomes, function(outcome) as.numeric(outcome$outcomeId), numeric(1)))
+      }))
+      if (any(duplicated(outcomeKeys))) {
+        stop("An outcome appears more than once for the same targetId, treatmentId and comparatorTreatmentId")
       }
     },
     fromList = function(list, requireTyping) {

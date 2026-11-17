@@ -7,7 +7,8 @@ library(testthat)
 # check: the reference table and the files shared between analyses, that a censoring model shared by
 # analyses is fit once, the estimates against the single-study functions, resume after deleted files,
 # the non-interactive handling of changed specifications, refitting the censoring models per outcome,
-# and that a multi-threaded run gives the results of a single-threaded one.
+# a run with an open connection (cross-validated censoring models, a pooled logistic outcome model and
+# competingEvents = "none"), and that a multi-threaded run gives the results of a single-threaded one.
 
 # Settings ---------------------------------------------------------------------------------------
 
@@ -37,6 +38,11 @@ orchestrationAnalysis <- function(analysisId,
                                   fitOutcomeModelArgs = createFitOutcomeModelArgs(horizons = 365),
                                   computeWeightsArgs = createComputeWeightsArgs(),
                                   sameDayOrdering = "eventsFirst",
+                                  competingEvents = "death",
+                                  # A fixed prior variance keeps the fits fast (no cross-validation):
+                                  fitCensoringModelsArgs = createFitCensoringModelsArgs(
+                                    prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
+                                  ),
                                   covariateSettings = FeatureExtraction::createCovariateSettings(
                                     useDemographicsGender = TRUE,
                                     useDemographicsAgeGroup = TRUE,
@@ -50,11 +56,8 @@ orchestrationAnalysis <- function(analysisId,
       riskWindowEnd = 365,
       endAnchor = "cohort start"
     ),
-    createClonesArgs = createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering),
-    # A fixed prior variance keeps the fits fast (no cross-validation):
-    fitCensoringModelsArgs = createFitCensoringModelsArgs(
-      prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
-    ),
+    createClonesArgs = createCreateClonesArgs(strategies = strategies, sameDayOrdering = sameDayOrdering, competingEvents = competingEvents),
+    fitCensoringModelsArgs = fitCensoringModelsArgs,
     computeWeightsArgs = computeWeightsArgs,
     computeCovariateBalanceArgs = CohortMethod::createComputeCovariateBalanceArgs(),
     fitOutcomeModelArgs = fitOutcomeModelArgs
@@ -257,6 +260,81 @@ test_that("summarizeResults applies the thresholds, calibrates with the eligible
   expect_true(all(getDiagnosticsSummary(outputFolder)$easeDiagnostic == "NOT EVALUATED"))
 })
 
+test_that("Positive controls calibrate the confidence intervals of the hazard ratio only", {
+  # Synthetic positive controls have their true effect size on the hazard scale (plan section 3.8 (e)).
+  trueEffectSize <- c(rep(1, 6), rep(2, 5), NA)
+  logRr <- c(0.05, -0.1, 0.12, 0.02, -0.04, 0.08, log(2) + c(0.1, 0.2, 0.05, 0.15, 0.12), 0.3)
+  seLogRr <- c(0.1, 0.12, 0.15, 0.1, 0.2, 0.1, 0.1, 0.12, 0.15, 0.1, 0.2, 0.15)
+  group <- function(estimand) {
+    dplyr::tibble(estimand = estimand, trueEffectSize = trueEffectSize, logRr = logRr, seLogRr = seLogRr, unblindForCalibration = TRUE)
+  }
+  set.seed(1)
+  hr <- calibrateGroup(group("hr"))
+  set.seed(1)
+  rr <- calibrateGroup(group("rr_365"))
+  controls <- !is.na(trueEffectSize)
+  negativeControls <- trueEffectSize %in% 1
+  set.seed(1)
+  null <- EmpiricalCalibration::fitMcmcNull(logRr = logRr[negativeControls], seLogRr = seLogRr[negativeControls])
+  model <- EmpiricalCalibration::fitSystematicErrorModel(
+    logRr = logRr[controls],
+    seLogRr = seLogRr[controls],
+    trueLogRr = log(trueEffectSize[controls]),
+    estimateCovarianceMatrix = FALSE
+  )
+  expected <- EmpiricalCalibration::calibrateConfidenceInterval(logRr = logRr, seLogRr = seLogRr, model = model)
+  expect_equal(hr$calibratedCi95Lb, exp(expected$logLb95Rr))
+  expect_equal(hr$calibratedCi95Ub, exp(expected$logUb95Rr))
+  expected <- EmpiricalCalibration::calibrateConfidenceInterval(
+    logRr = logRr, seLogRr = seLogRr, model = EmpiricalCalibration::convertNullToErrorModel(null)
+  )
+  expect_equal(rr$calibratedCi95Lb, exp(expected$logLb95Rr))
+  expect_equal(rr$calibratedCi95Ub, exp(expected$logUb95Rr))
+  expect_false(isTRUE(all.equal(hr$calibratedCi95Lb, rr$calibratedCi95Lb)))
+  # The p-values use the negative controls for every estimand:
+  expect_equal(rr$calibratedP, hr$calibratedP)
+  expect_equal(hr$calibratedP, EmpiricalCalibration::calibrateP(null, logRr, seLogRr)$p)
+})
+
+test_that("Specifications with conflicting target-treatment-outcomes, or with nothing to run, stop", {
+  analysis <- orchestrationAnalysis(1, list(initiate30, notInitiate30))
+  outcome3 <- list(CohortMethod::createOutcome(3))
+  outcome101 <- list(CohortMethod::createOutcome(101, outcomeOfInterest = FALSE, trueEffectSize = 1))
+  # The same cohorts in two entries share the data, so they need the same covariate concept IDs:
+  expect_error(createCcwAnalysesSpecifications(list(analysis), list(
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome3, excludedCovariateConceptIds = 1118084),
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome101)
+  )), "same includedCovariateConceptIds")
+  expect_error(createCcwAnalysesSpecifications(list(analysis), list(
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome3),
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = c(outcome3, outcome101))
+  )), "more than once")
+  # Outcomes of the same cohorts split over two entries, or other cohorts, are allowed:
+  expect_no_error(createCcwAnalysesSpecifications(list(analysis), list(
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome3, excludedCovariateConceptIds = 1118084),
+    createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome101, excludedCovariateConceptIds = 1118084),
+    createTargetTreatmentOutcomes(4, 1, NULL, outcomes = outcome3),
+    createTargetTreatmentOutcomes(4, 2, 1, outcomes = outcome3)
+  )))
+
+  specifications <- createCcwAnalysesSpecifications(
+    list(analysis),
+    list(createTargetTreatmentOutcomes(4, 1, 2, outcomes = outcome3)),
+    analysesToExclude = data.frame(analysisId = 1)
+  )
+  outputFolder <- tempfile()
+  on.exit(unlink(outputFolder, recursive = TRUE))
+  expect_error(
+    suppressMessages(runCcwAnalyses(
+      connectionDetails = DatabaseConnector::createConnectionDetails(dbms = "sqlite", server = tempfile()),
+      cdmDatabaseSchema = "main",
+      outputFolder = outputFolder,
+      ccwAnalysesSpecifications = specifications
+    )),
+    "nothing to run"
+  )
+})
+
 # Eunomia ----------------------------------------------------------------------------------------
 
 skip_on_cran()
@@ -383,9 +461,11 @@ test_that("runCcwAnalyses runs several analyses on Eunomia and fits a shared cen
   expect_true(all(is.na(results$calibratedP[!results$estimand %in% c("hr", "rr_365")])))
   expect_true(all(!is.na(diagnostics$ease[diagnostics$analysisId == 1])))
   expect_true(all(is.na(diagnostics$ease[diagnostics$analysisId != 1])))
-  # Diagnostics of the weights only for the outcome of interest; balance shared by all outcomes:
-  expect_true(all(!is.na(diagnostics$essFraction[diagnostics$outcomeId == 3])))
-  expect_true(all(is.na(diagnostics$essFraction[diagnostics$outcomeId != 3])))
+  # Diagnostics of the weights for every outcome, because they decide which negative controls
+  # calibrate; balance shared by all outcomes:
+  expect_true(all(!is.na(diagnostics$essFraction)))
+  expect_true(all(!is.na(diagnostics$maxWeight)))
+  expect_true(all(diagnostics$maxWeightBeforeTruncation >= diagnostics$maxWeight))
   expect_equal(length(unique(diagnostics$maxSdm[diagnostics$analysisId == 1])), 1)
   expect_true(all(diagnostics$balanceDiagnostic == "PASS"))
   expect_equal(diagnostics$unblind, diagnostics$unblindForEvidenceSynthesis & diagnostics$mdrrDiagnostic != "FAIL")
@@ -396,6 +476,9 @@ test_that("runCcwAnalyses runs several analyses on Eunomia and fits a shared cen
   expect_s3_class(outcomeModel$diagnostics$weightSummary, "CcwWeightSummary")
   expect_s3_class(outcomeModel$diagnostics$positivity, "CcwPositivity")
   expect_true(nrow(outcomeModel$curves) > 0)
+  negativeControlModel <- readRDS(file.path(mainFolder, referenceTable$outcomeModelFile[referenceTable$analysisId == 1 & referenceTable$outcomeId == 101]))
+  expect_null(negativeControlModel$diagnostics$weightSummary)
+  expect_null(negativeControlModel$curves)
   bootstrapModel <- readRDS(file.path(mainFolder, referenceTable$outcomeModelFile[referenceTable$analysisId == 4]))
   expect_equal(bootstrapModel$varianceEstimator, "bootstrap")
   expect_equal(bootstrapModel$metaData$bootstrap$replicates, 2)
@@ -565,6 +648,79 @@ test_that("runCcwAnalyses refits the censoring models for every outcome when ask
     results$estimate[results$outcomeId == 101],
     tolerance = 1e-12
   )))
+})
+
+test_that("runCcwAnalyses runs with an open connection, cross-validated censoring models, a pooled logistic outcome model and competingEvents = 'none'", {
+  analysis <- orchestrationAnalysis(
+    1,
+    list(initiate30, notInitiate30),
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(
+      modelType = "logistic",
+      horizons = 340,
+      # 31-day intervals have a boundary at the end of the grace period:
+      timeBasis = createTimeBasis(type = "indicator", intervalLength = 31)
+    ),
+    competingEvents = "none",
+    fitCensoringModelsArgs = createFitCensoringModelsArgs()
+  )
+  specifications <- createCcwAnalysesSpecifications(
+    ccwAnalysisList = list(analysis),
+    targetTreatmentOutcomesList = list(createTargetTreatmentOutcomes(4, 1, 2, outcomes = list(CohortMethod::createOutcome(3))))
+  )
+  outputFolder <- tempfile()
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit({
+    DatabaseConnector::disconnect(connection)
+    unlink(outputFolder, recursive = TRUE)
+  })
+  # Cross-validation shrinks the coefficients of the uninformative demographics to zero:
+  muffleZeroCoefficients <- function(expr) {
+    withCallingHandlers(expr, warning = function(w) {
+      if (grepl("All coefficients (except maybe the intercept) are zero", conditionMessage(w), fixed = TRUE)) {
+        invokeRestart("muffleWarning")
+      }
+    })
+  }
+  referenceTable <- NULL
+  utils::capture.output(suppressMessages(muffleZeroCoefficients(referenceTable <- runCcwAnalyses(
+    connection = connection,
+    cdmDatabaseSchema = "main",
+    outputFolder = outputFolder,
+    # Cyclops threads do not change the cross-validated fits:
+    multiThreadingSettings = createCcwMultiThreadingSettings(censoringModelCvThreads = 2),
+    ccwAnalysesSpecifications = specifications
+  ))))
+  # The connection stays open:
+  expect_equal(nrow(DatabaseConnector::querySql(connection, "SELECT 1 AS one;")), 1)
+
+  # The single-study pipeline, with the censoring models fit on the population without an outcome:
+  data <- loadCloneCensorWeightData(file.path(outputFolder, referenceTable$ccwDataFile))
+  on.exit(close(data), add = TRUE)
+  population <- suppressMessages(.createStudyPopulationWithoutOutcome(data, analysis$createStudyPopulationArgs))
+  clones <- suppressMessages(createClones(population, data, analysis$createClonesArgs))
+  censoringModels <- suppressMessages(muffleZeroCoefficients(fitCensoringModels(clones, data, analysis$fitCensoringModelsArgs)))
+  close(clones)
+  savedModels <- readRDS(file.path(outputFolder, referenceTable$censoringModelFile))
+  for (i in 1:2) {
+    expect_equal(savedModels[[i]]$priorVariance, censoringModels[[i]]$priorVariance, tolerance = 1e-5)
+    expect_equal(savedModels[[i]]$coefficients, censoringModels[[i]]$coefficients, tolerance = 1e-5)
+  }
+  population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = analysis$createStudyPopulationArgs))
+  clones <- suppressMessages(createClones(population, data, analysis$createClonesArgs))
+  on.exit(close(clones), add = TRUE)
+  weightedClones <- suppressMessages(computeCensoringWeights(
+    clones, censoringModels, analysis$computeWeightsArgs,
+    outcomeTimeBasis = analysis$fitOutcomeModelArgs$timeBasis
+  ))
+  on.exit(close(weightedClones), add = TRUE)
+  expected <- suppressMessages(fitOutcomeModel(weightedClones, analysis$fitOutcomeModelArgs))$estimates
+  results <- getResultsSummary(outputFolder)
+  expect_equal(results$estimand, expected$estimand)
+  expect_true("or" %in% results$estimand)
+  expect_equal(results$estimate, expected$estimate, tolerance = 1e-5)
+  # Deaths end the clones as observationEnd, so there are no competing events:
+  expect_true(all(results$targetCompetingEvents == 0 & results$comparatorCompetingEvents == 0))
+  expect_equal(getDiagnosticsSummary(outputFolder)$mdrr, computeMdrr(clones, modelType = "logistic")$mdrr)
 })
 
 test_that("A multi-threaded run gives the results of a single-threaded one", {

@@ -34,8 +34,8 @@ fraction of its clones under follow-up, averaged over the days of a band, from
 \item \code{maxWeight}, \code{maxWeightDiagnostic}: the largest weight the estimates use, after truncation
 (\verb{< maxWeightThreshold}). \code{maxWeightBeforeTruncation} is the largest one before truncation.
 \code{essFraction} and \code{maxWeight} are taken over the strategies, the bands of days of
-\code{\link[=computeWeightSummary]{computeWeightSummary()}}, and the scales of the weights the estimates use. They are not evaluated
-for outcomes not of interest.
+\code{\link[=computeWeightSummary]{computeWeightSummary()}}, and the scales of the weights the estimates use, for every outcome, so
+that they also decide which negative controls calibrate.
 \item \code{positivity}, \code{positivityDiagnostic}: the smallest predicted probability of following a strategy
 from the censoring models, from \code{\link[=computePositivity]{computePositivity()}} (\verb{>= positivityThreshold}).
 \code{positivityShareExtreme} is the largest share of persons with a probability below the threshold.

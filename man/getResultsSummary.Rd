@@ -30,6 +30,8 @@ with \code{trueEffectSize = 1}) with a standard error whose diagnostics allow ca
 \code{calibratedCi95Ub}, \code{calibratedP}, \code{calibratedOneSidedP}, \code{calibratedLogRr} and
 \code{calibratedSeLogRr}, as in CohortMethod: each estimand of each analysis and target-treatment
 combination is calibrated with its own negative controls, using
-\code{\link[EmpiricalCalibration:fitMcmcNull]{EmpiricalCalibration::fitMcmcNull()}}, and, with at least 5 positive controls, a systematic error
-model for the confidence intervals.
+\code{\link[EmpiricalCalibration:fitMcmcNull]{EmpiricalCalibration::fitMcmcNull()}}, and, for \code{"hr"} with at least 5 positive controls (outcomes
+with \code{trueEffectSize} other than 1), a systematic error model for the confidence intervals. Synthetic
+positive controls have their true effect size on the hazard scale, so the confidence intervals of
+the other ratio estimands are calibrated with the negative controls only.
 }

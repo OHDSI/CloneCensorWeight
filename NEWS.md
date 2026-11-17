@@ -104,14 +104,20 @@ New features:
   outcome's clones. When the specifications in the output folder have changed, an interactive session
   asks whether to delete the old outputs, and other sessions delete them with a message.
   `createCcwMultiThreadingSettings()` and `createDefaultCcwMultiThreadingSettings()` set the threads
-  of each stage.
+  of each stage. `createCcwAnalysesSpecifications()` stops when target-treatment-outcomes with the
+  same cohorts have different covariate concept IDs or repeat an outcome, and `runCcwAnalyses()` when
+  `analysesToExclude` leaves nothing to run.
 * `getResultsSummary()` (one row per analysis, target-treatment-outcome and estimand, with the ratio
-  estimands empirically calibrated with the negative controls), `getDiagnosticsSummary()` (MDRR,
-  covariate balance, EASE, effective sample size, maximum weight and positivity against
+  estimands empirically calibrated with the negative controls, and the confidence intervals of the
+  hazard ratio also with at least 5 positive controls, whose true effect sizes are on the hazard
+  scale), `getDiagnosticsSummary()` (MDRR, covariate balance, EASE, effective sample size and maximum
+  weight (for every outcome, so they also decide which negative controls calibrate) and positivity against
   `createCcwDiagnosticThresholds()`, with `unblind` and `unblindForEvidenceSynthesis` as in
   CohortMethod) and `getFileReference()` read the outputs of `runCcwAnalyses()`.
 * `computeCensoringWeights()` and the diagnostics accept censoring models fit on clones without an
   outcome (`metaData$outcomeId` `NA`), as `runCcwAnalyses()` shares them across outcomes.
+  `bootstrapCcwAnalysis()` given such models refits them without an outcome in every replicate, so
+  the replicates repeat the estimator of the full-data estimate.
 * The results data model, modelled on CohortMethod's: `exportToCsv()` writes the results of
   `runCcwAnalyses()` to CSV files and `Results_<databaseId>.zip`, with counts below `minCellCount`
   written as `-minCellCount`; `getResultsDataModelSpecifications()` describes the tables, all

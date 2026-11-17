@@ -88,6 +88,11 @@ reference:
     contents:
       - runCcwAnalyses
       - runCcwAnalysesOnData
+      - createCcwMultiThreadingSettings
+      - createDefaultCcwMultiThreadingSettings
+      - getFileReference
+      - getResultsSummary
+      - getDiagnosticsSummary
 
   - title: "Simulation"
     desc: "Synthetic data generation and Monte Carlo power analysis."

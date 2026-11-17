@@ -41,7 +41,12 @@ hyperparameters are fixed. Its \code{varianceEstimator} is not used.}
 
 \item{censoringModels}{The censoring models of the full data, as created by
 \code{\link[=fitCensoringModels]{fitCensoringModels()}} with \code{fitCensoringModelsArgs} on the clones of
-this analysis, or \code{NULL} to fit them.}
+this analysis, or \code{NULL} to fit them. Models fit on clones without an
+outcome (\code{metaData$outcomeId} \code{NA}), which \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} shares
+across outcomes with \code{refitCensoringModelsForEveryOutcome = FALSE}, are
+refit the same way in every replicate: on the clones of the
+replicate's study population without an outcome, so the replicates
+repeat the estimator of the full-data estimate.}
 
 \item{counts}{For testing: \code{NULL}, or a matrix of non-negative integer counts with
 one row per person (in increasing order of \code{personSeqId}) and one

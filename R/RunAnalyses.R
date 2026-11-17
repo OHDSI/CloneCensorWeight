@@ -146,9 +146,12 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
 #'    otherwise it is computed for outcomes of interest only.
 #' 6. **Outcome models** (`Analysis_<a>/om_t<t>_tr<tr>[_c<c>]_o<o>.rds`): [fitOutcomeModel()], or
 #'    [bootstrapCcwAnalysis()] when `fitOutcomeModelArgs$varianceEstimator = "bootstrap"`, on the
-#'    weighted clones of the outcome's study population. The saved `CcwOutcomeModel` also holds
+#'    weighted clones of the outcome's study population. With censoring models shared across outcomes,
+#'    every bootstrap replicate refits them on its own study population without an outcome, as for the
+#'    full data. The saved `CcwOutcomeModel` also holds
 #'    `diagnostics`: the [computeMdrr()] result, [computePositivity()] of the censoring models, and,
-#'    for outcomes of interest, [computeWeightSummary()] of the weighted clones and `curves`, from
+#'    for outcomes of interest, [computeWeightSummary()] of the weighted clones (whose values the
+#'    diagnostics use for every outcome) and `curves`, from
 #'    [computeCumulativeIncidence()] at every event time, `attrition` (that of the clones) and
 #'    `followUpDistribution` (quantiles of the days of follow-up of the clones of each strategy).
 #'    `diagnostics$values` holds the values that the summary compares with the diagnostic thresholds.
@@ -167,7 +170,10 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
 #' whether to delete them (answering no keeps them, and cancelling returns without running); outside an
 #' interactive session, as when called by a Strategus module, it deletes them with a message and
 #' recomputes everything. CohortMethod's `runCmAnalyses()` asks with [utils::askYesNo()] in both cases,
-#' whose default answer outside an interactive session is also to delete.
+#' whose default answer outside an interactive session is also to delete. Kept files are reused by
+#' name, as in CohortMethod, and the settings IDs in the names are numbered in order of first use in the
+#' new specifications, so a kept file can stand for other settings than those it was computed with.
+#' Answer no only when the kept files are known to be valid for the new specifications.
 #'
 #' Thread counts come only from `multiThreadingSettings`. `censoringModelCvThreads` and
 #' `outcomeCvThreads` set the `threads` of the Cyclops control of the censoring and outcome models,
@@ -669,6 +675,9 @@ runCcwAnalyses <- function(connectionDetails = NULL,
       countBefore - nrow(referenceTable),
       countBefore
     ))
+    if (nrow(referenceTable) == 0) {
+      stop("analysesToExclude removes every target-treatment-outcome-analysis combination, so there is nothing to run")
+    }
   }
   folders <- file.path(outputFolder, unique(referenceTable$analysisFolder))
   for (folder in folders[!dir.exists(folders)]) {
@@ -826,7 +835,7 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     censoringModels = censoringModels,
     fitOutcomeModelArgs = fitOutcomeModelArgs,
     positivityThreshold = params$positivityThreshold,
-    summarizeWeights = params$outcomeOfInterest
+    keepWeightSummary = params$outcomeOfInterest
   )
   if (params$outcomeOfInterest) {
     outcomeModel$curves <- computeCumulativeIncidence(weightedClones)
@@ -863,16 +872,18 @@ runCcwAnalyses <- function(connectionDetails = NULL,
 #   starting by the end of the horizon for "initiateWithin", of not starting for the others), over the
 #   censoring models of both strategies, and positivityShareExtreme, the largest shareExtreme of
 #   computePositivity();
-# - with summarizeWeights, from computeWeightSummary(): essFraction, the smallest effectiveSampleShare,
-#   and maxWeight, the largest weight, after truncation, and maxWeightBeforeTruncation, over the strategies,
-#   bands of days, and the scales of the weights the estimates use (that of computeCensoringWeights(),
-#   used by Kaplan-Meier and Aalen-Johansen, and msmWeights for the Cox and pooled logistic models).
+# - from computeWeightSummary(): essFraction, the smallest effectiveSampleShare, and maxWeight, the
+#   largest weight, after truncation, and maxWeightBeforeTruncation, over the strategies, bands of days,
+#   and the scales of the weights the estimates use (that of computeCensoringWeights(), used by
+#   Kaplan-Meier and Aalen-Johansen, and msmWeights for the Cox and pooled logistic models). They are
+#   computed for every outcome, because they decide which negative controls calibrate; the weight
+#   summary itself is kept with keepWeightSummary (outcomes of interest).
 .computeOutcomeDiagnostics <- function(clones,
                                        weightedClones,
                                        censoringModels,
                                        fitOutcomeModelArgs,
                                        positivityThreshold,
-                                       summarizeWeights) {
+                                       keepWeightSummary) {
   mdrr <- computeMdrr(clones, modelType = if (fitOutcomeModelArgs$modelType == "logistic") "logistic" else "cox")
   positivity <- computePositivity(clones, censoringModels, threshold = positivityThreshold)
   types <- vapply(attr(clones, "metaData")$strategies, function(strategy) strategy$type, character(1))
@@ -881,29 +892,26 @@ runCcwAnalyses <- function(connectionDetails = NULL,
   values <- tibble(
     mdrr = as.numeric(mdrr$mdrr),
     positivity = if (length(following) == 0) NA_real_ else min(following),
-    positivityShareExtreme = shareExtreme,
-    essFraction = NA_real_,
-    maxWeight = NA_real_,
-    maxWeightBeforeTruncation = NA_real_
+    positivityShareExtreme = shareExtreme
   )
-  weightSummary <- NULL
-  if (summarizeWeights) {
-    weightSummary <- computeWeightSummary(weightedClones)
-    weightsMetaData <- attr(weightedClones, "metaData")$weights
-    scales <- if (weightsMetaData$stabilized) "stabilized" else "unstabilized"
-    if (fitOutcomeModelArgs$modelType != "km") {
-      scales <- unique(c(scales, fitOutcomeModelArgs$msmWeights))
-    }
-    used <- weightSummary[weightSummary$scale %in% scales, ]
-    after <- used[used$truncation == "after", ]
-    before <- used[used$truncation == "before", ]
-    extreme <- function(x, f) {
-      x <- x[!is.na(x)]
-      if (length(x) == 0) NA_real_ else f(x)
-    }
-    values$essFraction <- extreme(after$effectiveSampleShare, min)
-    values$maxWeight <- extreme(after$maxWeight, max)
-    values$maxWeightBeforeTruncation <- extreme(before$maxWeight, max)
+  weightSummary <- computeWeightSummary(weightedClones)
+  weightsMetaData <- attr(weightedClones, "metaData")$weights
+  scales <- if (weightsMetaData$stabilized) "stabilized" else "unstabilized"
+  if (fitOutcomeModelArgs$modelType != "km") {
+    scales <- unique(c(scales, fitOutcomeModelArgs$msmWeights))
+  }
+  used <- weightSummary[weightSummary$scale %in% scales, ]
+  after <- used[used$truncation == "after", ]
+  before <- used[used$truncation == "before", ]
+  extreme <- function(x, f) {
+    x <- x[!is.na(x)]
+    if (length(x) == 0) NA_real_ else f(x)
+  }
+  values$essFraction <- extreme(after$effectiveSampleShare, min)
+  values$maxWeight <- extreme(after$maxWeight, max)
+  values$maxWeightBeforeTruncation <- extreme(before$maxWeight, max)
+  if (!keepWeightSummary) {
+    weightSummary <- NULL
   }
   return(list(values = values, mdrr = mdrr, positivity = positivity, weightSummary = weightSummary))
 }
@@ -947,8 +955,10 @@ getFileReference <- function(outputFolder) {
 #' `calibratedCi95Ub`, `calibratedP`, `calibratedOneSidedP`, `calibratedLogRr` and
 #' `calibratedSeLogRr`, as in CohortMethod: each estimand of each analysis and target-treatment
 #' combination is calibrated with its own negative controls, using
-#' [EmpiricalCalibration::fitMcmcNull()], and, with at least 5 positive controls, a systematic error
-#' model for the confidence intervals.
+#' [EmpiricalCalibration::fitMcmcNull()], and, for `"hr"` with at least 5 positive controls (outcomes
+#' with `trueEffectSize` other than 1), a systematic error model for the confidence intervals. Synthetic
+#' positive controls have their true effect size on the hazard scale, so the confidence intervals of
+#' the other ratio estimands are calibrated with the negative controls only.
 #'
 #' @param outputFolder Name of the folder where all the outputs have been written to.
 #'
@@ -985,8 +995,8 @@ getResultsSummary <- function(outputFolder) {
 #' - `maxWeight`, `maxWeightDiagnostic`: the largest weight the estimates use, after truncation
 #'   (`< maxWeightThreshold`). `maxWeightBeforeTruncation` is the largest one before truncation.
 #'   `essFraction` and `maxWeight` are taken over the strategies, the bands of days of
-#'   [computeWeightSummary()], and the scales of the weights the estimates use. They are not evaluated
-#'   for outcomes not of interest.
+#'   [computeWeightSummary()], and the scales of the weights the estimates use, for every outcome, so
+#'   that they also decide which negative controls calibrate.
 #' - `positivity`, `positivityDiagnostic`: the smallest predicted probability of following a strategy
 #'   from the censoring models, from [computePositivity()] (`>= positivityThreshold`).
 #'   `positivityShareExtreme` is the largest share of persons with a probability below the threshold.

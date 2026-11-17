@@ -100,9 +100,12 @@ strategy with a grace period. With shared censoring models it is shared by all o
 otherwise it is computed for outcomes of interest only.
 \item \strong{Outcome models} (\verb{Analysis_<a>/om_t<t>_tr<tr>[_c<c>]_o<o>.rds}): \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}, or
 \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}} when \code{fitOutcomeModelArgs$varianceEstimator = "bootstrap"}, on the
-weighted clones of the outcome's study population. The saved \code{CcwOutcomeModel} also holds
+weighted clones of the outcome's study population. With censoring models shared across outcomes,
+every bootstrap replicate refits them on its own study population without an outcome, as for the
+full data. The saved \code{CcwOutcomeModel} also holds
 \code{diagnostics}: the \code{\link[=computeMdrr]{computeMdrr()}} result, \code{\link[=computePositivity]{computePositivity()}} of the censoring models, and,
-for outcomes of interest, \code{\link[=computeWeightSummary]{computeWeightSummary()}} of the weighted clones and \code{curves}, from
+for outcomes of interest, \code{\link[=computeWeightSummary]{computeWeightSummary()}} of the weighted clones (whose values the
+diagnostics use for every outcome) and \code{curves}, from
 \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every event time, \code{attrition} (that of the clones) and
 \code{followUpDistribution} (quantiles of the days of follow-up of the clones of each strategy).
 \code{diagnostics$values} holds the values that the summary compares with the diagnostic thresholds.
@@ -122,7 +125,10 @@ already holds outputs of different specifications, then in an interactive sessio
 whether to delete them (answering no keeps them, and cancelling returns without running); outside an
 interactive session, as when called by a Strategus module, it deletes them with a message and
 recomputes everything. CohortMethod's \code{runCmAnalyses()} asks with \code{\link[utils:askYesNo]{utils::askYesNo()}} in both cases,
-whose default answer outside an interactive session is also to delete.
+whose default answer outside an interactive session is also to delete. Kept files are reused by
+name, as in CohortMethod, and the settings IDs in the names are numbered in order of first use in the
+new specifications, so a kept file can stand for other settings than those it was computed with.
+Answer no only when the kept files are known to be valid for the new specifications.
 
 Thread counts come only from \code{multiThreadingSettings}. \code{censoringModelCvThreads} and
 \code{outcomeCvThreads} set the \code{threads} of the Cyclops control of the censoring and outcome models,

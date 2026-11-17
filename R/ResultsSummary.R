@@ -259,7 +259,9 @@ calibrateGroup <- function(group) {
     twoSided = FALSE,
     upper = TRUE
   )
-  if (nrow(pcs) >= 5) {
+  # Synthetic positive controls have their true effect size on the hazard scale, so they calibrate
+  # only the hazard ratio (plan section 3.8 (e)); negative controls are null on every scale.
+  if (nrow(pcs) >= 5 && group$estimand[1] == "hr") {
     model <- EmpiricalCalibration::fitSystematicErrorModel(
       logRr = c(ncs$logRr, pcs$logRr),
       seLogRr = c(ncs$seLogRr, pcs$seLogRr),

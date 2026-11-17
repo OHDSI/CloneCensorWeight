@@ -20,7 +20,8 @@ Does not return anything. Is called for its side effect of migrating the tables.
 \description{
 Migrates the results data model tables from their current version to the version of this package,
 applying the migrations in \code{inst/sql/sql_server/migrations} that have not been applied yet. The
-applied migrations are recorded in the \code{ccw_migration} table, which is created if it does not exist.
+applied migrations are recorded in the \code{ccw_migration} table, which \code{\link[=createResultsDataModel]{createResultsDataModel()}}
+creates. This version of the package has no migrations: its tables are those of the first version.
 
 It is strongly advised to back up the data (the SQLite file, a backup of the PostgreSQL database, or
 the zip files of \code{\link[=exportToCsv]{exportToCsv()}}) before migrating.

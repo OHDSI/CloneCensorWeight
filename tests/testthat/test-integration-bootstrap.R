@@ -194,6 +194,31 @@ test_that("Replicates with boot.array counts equal a copy-based analysis of the 
   }
 })
 
+test_that("Censoring models fit without an outcome are refit without an outcome in every replicate", {
+  # runCcwAnalyses() shares censoring models fit on the study population without an outcome across
+  # outcomes. Replicates that are the full data must then reproduce the full-data estimate, as they do
+  # when the models are fit on the outcome's own clones.
+  data <- bootstrapData()
+  on.exit(close(data))
+  # With covariates: without them, the weights of a day are the same for every clone, and the
+  # Kaplan-Meier risks do not depend on the censoring population.
+  settings <- bootstrapSettings(replicates = 2, useCovariates = TRUE)
+  counts <- matrix(1L, 120, 2)
+  population <- suppressMessages(.createStudyPopulationWithoutOutcome(data, settings$createStudyPopulationArgs))
+  clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))
+  sharedModels <- suppressMessages(fitCensoringModels(clones, data, settings$fitCensoringModelsArgs))
+  close(clones)
+  shared <- runBootstrap(data, settings, censoringModels = sharedModels, counts = counts)
+  perOutcome <- runBootstrap(data, settings, counts = counts)
+  for (result in list(shared, perOutcome)) {
+    for (replicate in 1:2) {
+      expect_equal(unname(result$replicates[replicate, ]), result$estimates$estimate, tolerance = 1e-8)
+    }
+  }
+  # The two censoring populations give different estimates, so the check above can fail:
+  expect_false(isTRUE(all.equal(shared$estimates$estimate, perOutcome$estimates$estimate, tolerance = 1e-6)))
+})
+
 test_that("Bootstrap limits equal boot::boot.ci (perc and norm)", {
   skip_if_not_installed("boot")
   set.seed(1)
