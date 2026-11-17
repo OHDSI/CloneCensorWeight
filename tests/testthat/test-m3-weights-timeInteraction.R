@@ -87,7 +87,9 @@ test_that("Interaction coefficients and weights match glm on the expanded rows w
   data <- createM3Data(fixture)
   on.exit(close(data))
   horizon <- 3
-  for (configuration in configurations) {
+  # The default tier runs two configurations that cover each interaction type, ordering and interval
+  # length:
+  for (configuration in testConfigurations(configurations, configurations[2:3])) {
     label <- paste(configuration, collapse = ", ")
     sameDayOrdering <- configuration$sameDayOrdering
     clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", graceEnd = horizon), sameDayOrdering)

@@ -59,7 +59,8 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
   expect_match(warnings, "intervals of 3 days counted from riskStart = 0", fixed = TRUE)
   expect_match(warnings, "strategy 1 (Initiate within 7 days) at the end of day 7 (t = 8); strategy 2 (Do not initiate within 7 days) at the end of day 7 (t = 8)", fixed = TRUE)
   expect_match(warnings, "indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks", fixed = TRUE)
-  for (intervalLength in c(1, 2, 4, 8)) {
+  # (Grids of 2 and 8 days in the default tier; 1, 2, 4 and 8 in the full tier.)
+  for (intervalLength in testConfigurations(c(1, 2, 4, 8), c(2, 8))) {
     expect_length(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength)), 0)
   }
 
@@ -217,7 +218,8 @@ test_that("bootstrapCcwAnalysis warns about day-0 covariate windows once, for th
     )),
     fitCensoringModelsArgs = createFitCensoringModelsArgs(prior = Cyclops::createPrior("none")),
     computeWeightsArgs = createComputeWeightsArgs(),
-    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 20, bootstrapArgs = createBootstrapArgs(replicates = 2, seed = 1))
+    # (One replicate in the default tier, which also shows that the replicate does not warn again.)
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 20, bootstrapArgs = createBootstrapArgs(replicates = testConfigurations(2, 1), seed = 1))
   )))
   expect_length(grep(day0Warning, warnings), 1)
 })
@@ -284,6 +286,9 @@ test_that("bootstrapCcwAnalysis warns when the replicates sit on one side of the
   # 20 replicates take about a minute. With fewer than 20 replicates nothing is assessed, so the other
   # bootstrap tests (test-integration-bootstrap.R) do not warn.
   skip_on_cran()
+  # Full tier: the criterion itself (.bootstrapReplicateShift()) is tested by hand in the default tier
+  # (the test above).
+  skipUnlessFullTests()
   data <- simulateCloneCensorWeightData(
     n = 120, maxDays = 15, graceEnd = 3, initiationHazard = 0.1, outcomeHazard = 0.02, deathHazard = 0.005,
     initiationCoefficients = rep(0.4, 5), seed = 1

@@ -58,11 +58,14 @@ test_that("computeWeightDistribution reports the exact W(d) for every strategy t
   truncations <- list(none = createWeightTruncation("none"), percentile = createWeightTruncation("percentile", 0.9))
   # Days 0 to tau + 1 = 6, and later days (where the neverInitiate weight still changes):
   days <- c(0:6, 10, 20)
-  for (configuration in configurations) {
+  # The default tier leaves out the first configuration; the others cover every value of each choice:
+  for (configuration in testConfigurations(configurations, configurations[2:4])) {
     analysis <- do.call(distributionAnalysis, configuration)
     eventsFirst <- is.null(configuration$sameDayOrdering)
     for (stabilized in c(FALSE, TRUE)) {
       for (truncation in names(truncations)) {
+        # (The default tier runs the unstabilized weights untruncated and the stabilized ones truncated.)
+        if (!isFullTestRun() && stabilized != (truncation == "percentile")) next
         info <- paste(c(unlist(configuration), if (stabilized) "stabilized" else "unstabilized", truncation), collapse = " ")
         weighted <- suppressMessages(computeCensoringWeights(
           analysis$clones, analysis$models, createComputeWeightsArgs(stabilized = stabilized, truncation = truncations[[truncation]])

@@ -224,7 +224,8 @@ test_that("With postGraceModel = 'binary', the weighted comparator at tau + 1 re
   population <- suppressMessages(createStudyPopulation(day0$data, outcomeId = 3, createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
     riskWindowStart = 0, riskWindowEnd = 365, endAnchor = "cohort start"
   )))
-  for (sameDayOrdering in c("eventsFirst", "deviationFirst")) {
+  # (Both orderings in the full tier.)
+  for (sameDayOrdering in testConfigurations(c("eventsFirst", "deviationFirst"), "eventsFirst")) {
     clones <- suppressMessages(createClones(population, day0$data, createCreateClonesArgs(
       strategies = list(
         createTreatmentStrategy(1, "Start within 7 days", "initiateWithin", graceEnd = 7),

@@ -90,6 +90,8 @@ test_that("The truncated share does not depend on how the clones are cut", {
   models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"))))
   for (stabilized in c(FALSE, TRUE)) {
     for (truncation in list(createWeightTruncation("fixed", 1.5, otherScaleUpper = 1.5), createWeightTruncation("percentile", 0.9))) {
+      # (The default tier runs the fixed cap unstabilized and the percentile stabilized.)
+      if (!isFullTestRun() && stabilized != (truncation$type == "percentile")) next
       args <- createComputeWeightsArgs(stabilized = stabilized, truncation = truncation)
       coarse <- suppressMessages(computeCensoringWeights(clones, models, args))
       daily <- suppressMessages(computeCensoringWeights(clones, models, args, outcomeTimeBasis = createTimeBasis(intervalLength = 1)))

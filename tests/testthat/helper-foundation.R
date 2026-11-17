@@ -145,3 +145,22 @@ createFoundationSegments <- function(clones) {
   )
   return(list(segments = segments, personWeights = personWeights))
 }
+
+# Test tiers --------------------------------------------------------------------------------------
+# The default tier (R CMD check, devtools::test()) runs every exported function and every value of
+# every design choice at least once, in a light form. With CCW_FULL_TESTS=true the full tier also runs
+# the heavy versions: every configuration of the reference comparisons, the large statistical checks
+# and the slow integration runs. (The cross-checks against other packages need CCW_RUN_CROSSCHECKS=true.)
+isFullTestRun <- function() {
+  return(identical(Sys.getenv("CCW_FULL_TESTS"), "true"))
+}
+
+skipUnlessFullTests <- function() {
+  testthat::skip_if_not(isFullTestRun(), "Full tier: set CCW_FULL_TESTS=true to run it")
+}
+
+# The configurations a test loops over: `all` in the full tier, and otherwise `light`, a subset that
+# still covers every value of each choice the loop varies.
+testConfigurations <- function(all, light) {
+  return(if (isFullTestRun()) all else light)
+}

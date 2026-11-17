@@ -11,6 +11,9 @@ library(testthat)
 
 test_that("The weighted pipeline recovers the true risks that the unweighted analysis misses", {
   skip_on_cran()
+  # Full tier: a statistical check at n = 3000 with 5e5 persons for the truth. The default tier runs
+  # every step of this pipeline in the other tests.
+  skipUnlessFullTests()
   graceEnd <- 5
   maxDays <- 20
   horizons <- c(3, 13, 20)

@@ -5,7 +5,7 @@ library(testthat)
 # treatment cohort 2, diclofenac; outcome cohort 3, GI bleed) through getDbCloneCensorWeightData(
 # connectionDetails = ) -> createStudyPopulation -> createClones -> fitCensoringModels ->
 # computeCensoringWeights -> computeCovariateBalance -> fitOutcomeModel ("cox" and "km") ->
-# bootstrapCcwAnalysis (5 replicates), for "start celecoxib within 30 days" vs "do not start celecoxib
+# bootstrapCcwAnalysis (5 replicates; 2 outside the full tier), for "start celecoxib within 30 days" vs "do not start celecoxib
 # within 30 days", with risks at 180 and 365 days.
 #
 # In Eunomia every NSAID new user starts celecoxib or diclofenac on the index day, so the grace period is
@@ -190,7 +190,9 @@ test_that("The Eunomia NSAID design runs end to end and reproduces on rerun", {
   }
   # The bootstrap driver runs the whole analysis on the full (re-extracted) data first: a rerun of every
   # step from the study population to the outcome model.
-  bootstrapArgs <- createFitOutcomeModelArgs(horizons = horizons, bootstrapArgs = createBootstrapArgs(replicates = 5))
+  # (5 replicates in the full tier, 2 in the default tier: each replicate reruns the analysis.)
+  replicates <- testConfigurations(5, 2)
+  bootstrapArgs <- createFitOutcomeModelArgs(horizons = horizons, bootstrapArgs = createBootstrapArgs(replicates = replicates))
   bootstrap <- suppressMessages(bootstrapCcwAnalysis(
     cloneCensorWeightData = rerunData,
     outcomeId = 3,
@@ -204,9 +206,9 @@ test_that("The Eunomia NSAID design runs end to end and reproduces on rerun", {
   expect_s3_class(bootstrap, "CcwOutcomeModel")
   expect_equal(bootstrap$varianceEstimator, "bootstrap")
   expect_equal(bootstrap$metaData$bootstrap$failedReplicates, 0)
-  expect_equal(dim(bootstrap$bootstrapCounts), c(nCohort, 5))
-  expect_equal(unname(colSums(bootstrap$bootstrapCounts)), rep(nCohort, 5))
-  expect_equal(dim(bootstrap$replicates), c(5, nrow(cox$estimates)))
+  expect_equal(dim(bootstrap$bootstrapCounts), c(nCohort, replicates))
+  expect_equal(unname(colSums(bootstrap$bootstrapCounts)), rep(nCohort, replicates))
+  expect_equal(dim(bootstrap$replicates), c(replicates, nrow(cox$estimates)))
   expect_equal(colnames(bootstrap$replicates), cox$estimates$estimand)
   expect_true(all(is.finite(bootstrap$replicates)))
   expect_true(all(is.finite(bootstrap$estimates$lb95) & is.finite(bootstrap$estimates$ub95)))

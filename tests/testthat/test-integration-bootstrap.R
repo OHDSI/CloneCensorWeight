@@ -186,7 +186,8 @@ test_that("Replicates with boot.array counts equal a copy-based analysis of the 
   counts <- t(boot::boot.array(resamples))
   result <- runBootstrap(data, settings, counts = counts, returnCounts = TRUE)
   expect_equal(unname(result$bootstrapCounts), unname(counts))
-  for (replicate in 1:2) {
+  # (The default tier analyzes the copies of the first replicate by hand, the full tier of both.)
+  for (replicate in testConfigurations(1:2, 1)) {
     copied <- copyPersons(data, counts[, replicate])
     byHand <- suppressMessages(runAnalysisByHand(copied, settings))
     close(copied)
@@ -202,8 +203,10 @@ test_that("Censoring models fit without an outcome are refit without an outcome 
   on.exit(close(data))
   # With covariates: without them, the weights of a day are the same for every clone, and the
   # Kaplan-Meier risks do not depend on the censoring population.
-  settings <- bootstrapSettings(replicates = 2, useCovariates = TRUE)
-  counts <- matrix(1L, 120, 2)
+  # (Two replicates in the full tier, one in the default tier.)
+  replicates <- testConfigurations(2, 1)
+  settings <- bootstrapSettings(replicates = replicates, useCovariates = TRUE)
+  counts <- matrix(1L, 120, replicates)
   population <- suppressMessages(.createStudyPopulationWithoutOutcome(data, settings$createStudyPopulationArgs))
   clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))
   sharedModels <- suppressMessages(fitCensoringModels(clones, data, settings$fitCensoringModelsArgs))
@@ -211,7 +214,7 @@ test_that("Censoring models fit without an outcome are refit without an outcome 
   shared <- runBootstrap(data, settings, censoringModels = sharedModels, counts = counts)
   perOutcome <- runBootstrap(data, settings, counts = counts)
   for (result in list(shared, perOutcome)) {
-    for (replicate in 1:2) {
+    for (replicate in seq_len(replicates)) {
       expect_equal(unname(result$replicates[replicate, ]), result$estimates$estimate, tolerance = 1e-8)
     }
   }
@@ -408,7 +411,8 @@ test_that("With graceStart > 0, replicates fix the prior variance of the early h
   settings$createClonesArgs$strategies[[1]] <- createTreatmentStrategy(1, "Initiate on days 1 to 3", "initiateWithin", graceStart = 1, graceEnd = 3)
   # The binary models at G are fit on fewer persons than Cyclops' default minimum for cross-validation:
   settings$fitCensoringModelsArgs$control$minCVData <- 10
-  for (graceRegime in c("binaryAtG", "naturalGrace")) {
+  # (Both regimes in the full tier; the default tier runs "naturalGrace", the default being run elsewhere.)
+  for (graceRegime in testConfigurations(c("binaryAtG", "naturalGrace"), "naturalGrace")) {
     settings$fitCensoringModelsArgs$graceRegime <- graceRegime
     population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = settings$createStudyPopulationArgs))
     clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))

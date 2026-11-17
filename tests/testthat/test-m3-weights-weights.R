@@ -158,7 +158,8 @@ test_that("Binary and Cox weights match glm and survfit references, with segment
     list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "neverInitiate"),
     list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "neverInitiate")
   )
-  for (configuration in configurations) {
+  # The default tier runs two configurations that cover every riskStart, ordering and strategy type:
+  for (configuration in testConfigurations(configurations, configurations[c(2, 6)])) {
     sameDayOrdering <- configuration$sameDayOrdering
     fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 21)
     data <- createM3Data(fixture)
@@ -273,7 +274,8 @@ test_that("Pooled logistic weights match products of glm hazards", {
     list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "notInitiateWithin"),
     list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "notInitiateWithin")
   )
-  for (configuration in configurations) {
+  # The default tier runs three configurations that cover every riskStart, ordering and strategy type:
+  for (configuration in testConfigurations(configurations, configurations[1:3])) {
     sameDayOrdering <- configuration$sameDayOrdering
     fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 22)
     data <- createM3Data(fixture)
@@ -485,7 +487,8 @@ test_that("Edge cases: nobody starts by G, everyone starts on day 0, an interval
   # (eventsFirst, W = 1) or have no segments (deviationFirst).
   persons <- fixture$persons
   persons$treatmentDay <- 0L
-  for (configuration in list(c("eventsFirst", "logistic"), c("deviationFirst", "logistic"), c("deviationFirst", "cox"))) {
+  # (The default tier runs one configuration per ordering and model type.)
+  for (configuration in testConfigurations(list(c("eventsFirst", "logistic"), c("deviationFirst", "logistic"), c("deviationFirst", "cox")), list(c("eventsFirst", "logistic"), c("deviationFirst", "cox")))) {
     result <- computeSegments(persons, strategies, configuration[1], configuration[2])
     expect_equal(result$models[[1]]$numerator$propensityScore, 1)
     if (configuration[2] == "logistic") {
