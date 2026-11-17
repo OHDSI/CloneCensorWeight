@@ -93,7 +93,10 @@
 #' fitted, the odds ratio is still reported, and the risks are `NA`.
 #'
 #' The robust variance (`varianceEstimator = "robust"`) is the HC0 sandwich clustered on person, so all
-#' clones of a person share a cluster, treating the weights as fixed. For `"cox"` and `"km"` the
+#' clones of a person share a cluster, treating the weights as fixed. For the hazard ratio and the
+#' pooled logistic coefficients it is Cyclops' `vcov(fit, type = "robust")` by default, or this
+#' package's own sandwich with `robustVarianceEngine = "ccw"` (see [createFitOutcomeModelArgs()]). For
+#' `"cox"` and `"km"` the
 #' standard errors of the risks, their differences and ratios, and the restricted means are the
 #' infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
 #' for `"logistic"` they use the delta method with a numerical Jacobian. With `varianceEstimator =
@@ -179,6 +182,10 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
   if (fitOutcomeModelArgs$varianceEstimator == "modelBased" && fitOutcomeModelArgs$modelType == "km") {
     stop("varianceEstimator = \"modelBased\" is not available for modelType = \"km\"")
+  }
+  if (fitOutcomeModelArgs$varianceEstimator == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops" &&
+      fitOutcomeModelArgs$modelType != "km") {
+    .checkCyclopsRobustVcov()
   }
   start <- Sys.time()
 
@@ -471,15 +478,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # convergence criterion (the other settings of `control` kept), with a warning. Returns the fit, or NULL
 # with a warning when both fail. The covariates `unpenalizedIds` (the target indicator, the time basis
 # and their interactions) are excluded from the prior, as CohortMethod excludes the treatment variable.
-.fitOutcomeCyclopsModel <- function(cyclopsData, prior, control, unpenalizedIds, description) {
+# `startingCoefficients` (optional) are passed to Cyclops::fitCyclopsModel().
+.fitOutcomeCyclopsModel <- function(cyclopsData, prior, control, unpenalizedIds, description, startingCoefficients = NULL) {
   if (prior$priorType != "none") {
     prior$exclude <- unique(c(prior$exclude, unpenalizedIds))
   }
-  attempt <- .tryFitCyclopsModel(cyclopsData, prior, control)
+  attempt <- .tryFitCyclopsModel(cyclopsData, prior, control, startingCoefficients)
   if (!is.null(attempt$failure)) {
     defaultControl <- control
     defaultControl[c("algorithm", "convergenceType", "tolerance", "maxIterations")] <- list(NULL)
-    retry <- .tryFitCyclopsModel(cyclopsData, prior, defaultControl)
+    retry <- .tryFitCyclopsModel(cyclopsData, prior, defaultControl, startingCoefficients)
     if (is.null(retry$failure)) {
       warning(sprintf("Fitting the %s failed (%s), so it was fitted with Cyclops' default algorithm and convergence criterion", description, attempt$failure))
       attempt <- retry
@@ -497,11 +505,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # One Cyclops fit, with its warnings collected (not signalled) and `failure`: NULL, or the error message
 # or return flag of a failed fit.
-.tryFitCyclopsModel <- function(cyclopsData, prior, control) {
+.tryFitCyclopsModel <- function(cyclopsData, prior, control, startingCoefficients = NULL) {
   warnings <- character(0)
   fit <- withCallingHandlers(
     tryCatch(
-      Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
+      Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control, startingCoefficients = startingCoefficients),
       error = function(e) conditionMessage(e)
     ),
     warning = function(w) {
@@ -513,13 +521,14 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return(list(fit = fit, failure = failure, warnings = warnings))
 }
 
-# Fits the weighted counting-process Cox model with the target indicator as the only covariate, using
-# Cyclops cox_counting (Breslow ties). Returns the coefficient, or NA (with a warning) when there are
-# no events or the fit fails.
-.fitCyclopsCox <- function(segments, y, prior, control, label) {
+# Fits the weighted counting-process Cox model with the target indicator (covariate 1) as the only
+# covariate, using Cyclops cox_counting (Breslow ties), with `subjectId` (one per segment, for
+# vcov(type = "robust")) as the Cyclops subjects when given. Returns the fit, or NULL (with a warning)
+# when there are no events or the fit fails.
+.fitCyclopsCox <- function(segments, y, prior, control, label, subjectId = NULL) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s Cox model", label, label))
-    return(NA_real_)
+    return(NULL)
   }
   outcomes <- data.frame(
     rowId = seq_len(nrow(segments)),
@@ -528,13 +537,12 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     startTime = segments$startTime,
     weights = segments$weight
   )
+  if (!is.null(subjectId)) {
+    outcomes$subjectId <- subjectId
+  }
   covariates <- data.frame(rowId = which(segments$x == 1), covariateId = 1, covariateValue = 1)
   cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE, quiet = TRUE)
-  fit <- .fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label))
-  if (is.null(fit)) {
-    return(NA_real_)
-  }
-  return(as.numeric(stats::coef(fit)[["1"]]))
+  return(.fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label)))
 }
 
 # The hazard ratio row of the weighted Cox MSM of the outcome, with competing events treated as
@@ -545,13 +553,21 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   times <- .eventTimes(segments)
   segments <- .indexSegments(segments, times)
 
-  beta <- .fitCyclopsCox(segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome")
+  # Cyclops' robust variance clusters on the subjects of the data, so the persons are the subjects:
+  cyclopsRobust <- variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops"
+  fit <- .fitCyclopsCox(
+    segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome",
+    subjectId = if (cyclopsRobust) segments$personIndex else NULL
+  )
+  beta <- if (is.null(fit)) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
   coefficients <- c(target = beta)
   if (is.na(beta)) {
     return(list(estimates = .ratioRow("hr", NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
   }
   outcome <- .breslow(segments, segments$outcome == 1, beta, length(times))
-  if (variance == "robust") {
+  if (cyclopsRobust) {
+    vcov <- unname(stats::vcov(fit, type = "robust"))
+  } else if (variance == "robust") {
     vcov <- crossprod(cbind(.coxCoefficientInfluence(segments, outcome, length(data$personSeqIds))))
   } else if (variance == "modelBased") {
     vcov <- matrix(1 / outcome$information)
@@ -872,6 +888,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))
   models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance, groups))
+  # The rows and response column of each model, for Cyclops' robust variance:
+  modelRows <- list(list(subset = outcomeRows, response = "y"))
   if (is.null(models[[1]])) {
     return(.naEstimates("or", horizons, coefficientNames = colnames(design)))
   }
@@ -884,6 +902,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     } else {
       names(deathModel$coefficients) <- paste0("death:", names(deathModel$coefficients))
       models[[2]] <- deathModel
+      modelRows[[2]] <- list(subset = rep(TRUE, nrow(rows)), response = "death")
     }
   }
   coefficients <- unlist(lapply(models, function(model) model$coefficients))
@@ -900,7 +919,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   thetaVcov <- NULL
   vcov <- NULL
   if (variance != "none") {
-    if (variance == "robust") {
+    if (variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops") {
+      thetaVcov <- .cyclopsJointSandwich(models, rows, modelRows, theta, control)
+    } else if (variance == "robust") {
       thetaVcov <- .jointSandwich(models, length(data$personSeqIds))
     } else {
       thetaVcov <- .blockDiagonal(lapply(models, function(model) model$bread))

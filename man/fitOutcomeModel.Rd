@@ -124,7 +124,10 @@ are still reported. When the death model of the pooled logistic model with compe
 fitted, the odds ratio is still reported, and the risks are \code{NA}.
 
 The robust variance (\code{varianceEstimator = "robust"}) is the HC0 sandwich clustered on person, so all
-clones of a person share a cluster, treating the weights as fixed. For \code{"cox"} and \code{"km"} the
+clones of a person share a cluster, treating the weights as fixed. For the hazard ratio and the
+pooled logistic coefficients it is Cyclops' \code{vcov(fit, type = "robust")} by default, or this
+package's own sandwich with \code{robustVarianceEngine = "ccw"} (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}). For
+\code{"cox"} and \code{"km"} the
 standard errors of the risks, their differences and ratios, and the restricted means are the
 infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
 for \code{"logistic"} they use the delta method with a numerical Jacobian. With \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the inverse of the weighted information; the

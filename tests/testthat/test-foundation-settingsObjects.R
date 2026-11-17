@@ -325,6 +325,7 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
       armByTimeInteraction = TRUE,
       msmWeights = "stabilized",
       varianceEstimator = "bootstrap",
+      robustVarianceEngine = "ccw",
       bootstrapArgs = createBootstrapArgs(replicates = 100),
       prior = Cyclops::createPrior("laplace", variance = 0.5),
       control = Cyclops::createControl(tolerance = 1e-08)
@@ -344,6 +345,13 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expect_message(expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$msmWeights, "unstabilized"), "msmWeights = unstabilized")
   expect_message(expect_equal(FitOutcomeModelArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))$msmWeights, "unstabilized"), "msmWeights")
   expect_error(createFitOutcomeModelArgs(msmWeights = "truncated"), "msmWeights")
+  # Phase 2 item 1: Cyclops computes the robust variance by default; settings saved before
+  # robustVarianceEngine existed load with that default.
+  expect_equal(defaults$robustVarianceEngine, "cyclops")
+  untypedList <- jsonlite::fromJSON(createFitOutcomeModelArgs(robustVarianceEngine = "ccw")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$robustVarianceEngine <- NULL
+  expect_message(expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$robustVarianceEngine, "cyclops"), "saved without robustVarianceEngine: filled with the current default robustVarianceEngine = cyclops")
+  expect_error(createFitOutcomeModelArgs(robustVarianceEngine = "sandwich"), "robustVarianceEngine")
   expect_error(createFitOutcomeModelArgs(msmWeights = TRUE), "msmWeights")
   expect_error(createFitOutcomeModelArgs(useCovariates = TRUE), "Not yet supported")
   expect_error(createFitOutcomeModelArgs(stratified = TRUE), "Not yet supported")
