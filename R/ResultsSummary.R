@@ -18,7 +18,9 @@
 # calibrateEstimates() (R/RunAnalyses.R, Copyright Observational Health Data Sciences and
 # Informatics, Apache 2.0). See getResultsSummary() and getDiagnosticsSummary() for the columns.
 
-# Estimands that are ratios, which are calibrated (plan section 9 item 8 (ii)).
+# Estimands that are ratios, which are calibrated. Plan section 9 item 8 (ii) names `hr` and `rr_<h>`;
+# the first-interval odds ratio `or` is also calibrated (with the negative controls only, see
+# calibrateGroup()), an extension of the plan that awaits the owner's decision.
 .ratioEstimandPattern <- "^(hr|or|rr_[0-9]+)$"
 
 .diagnostic <- function(value, pass) {

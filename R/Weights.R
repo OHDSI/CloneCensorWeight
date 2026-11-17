@@ -92,6 +92,8 @@
 #'                           [fitCensoringModels()] on the same clones (same outcome, same-day
 #'                           ordering and competing events). [runCcwAnalyses()] also passes models
 #'                           fit on clones without an outcome, which it shares across outcomes.
+#'                           Stops when the clones are followed past the horizon of a
+#'                           `"neverInitiate"` model (models fit on a shorter risk window).
 #' @param computeWeightsArgs An object of type `ComputeWeightsArgs` as created using
 #'                           [createComputeWeightsArgs()].
 #' @param outcomeTimeBasis   `NULL`, or the object of type `TimeBasis` (as created using
@@ -155,6 +157,7 @@ computeCensoringWeights <- function(clones,
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(clones, "metaData")
   .checkModelsMatchClones(censoringModels, metaData)
+  .checkNeverInitiateHorizon(clones, censoringModels)
   graceEnds <- unlist(lapply(metaData$strategies, function(strategy) strategy$graceEnd))
   # The day after the grace periods, whose weight computeCovariateBalance() reads (NA: no grace period):
   balanceDay <- if (length(graceEnds) == 0) NA_integer_ else as.integer(max(graceEnds) + 1)
@@ -393,6 +396,24 @@ computeCensoringWeights <- function(clones,
       stop(sprintf("The censoring model of strategy %d does not match the strategy of the clones", strategyId))
     }
   }
+}
+
+# A neverInitiate model predicts through its horizon, the largest riskEnd of the clones it was fit on,
+# and its weights stay at W(horizon) after it. Clones followed past it (models fit on a population with
+# a shorter risk window) would be censored at initiation without weight, so stop.
+.checkNeverInitiateHorizon <- function(clones, censoringModels) {
+  for (model in censoringModels) {
+    if (model$type == "neverInitiate") {
+      maxRiskEnd <- .andromedaSql(clones, "SELECT MAX(riskEnd) AS maxRiskEnd FROM persons;")$maxRiskEnd
+      if (!is.na(maxRiskEnd) && maxRiskEnd > model$horizon) {
+        stop(sprintf(
+          "The censoring model of strategy %d was fit through day %d, but the clones are followed to day %d. Were the censoring models fit on these clones?",
+          model$strategyId, as.integer(model$horizon), as.integer(maxRiskEnd)
+        ))
+      }
+    }
+  }
+  invisible(NULL)
 }
 
 .dropTables <- function(andromeda, prefix) {
