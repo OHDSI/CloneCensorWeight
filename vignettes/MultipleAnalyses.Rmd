@@ -28,7 +28,7 @@ runSummary <- load("runSummary")
 
 In this vignette we focus on running several different analyses on several target-treatment-outcome combinations. This can be useful when we want to explore the sensitivity to analysis choices, such as the length of the grace period or the outcome model, and to include negative controls, whose estimates show the systematic error of a design and allow empirical calibration.
 
-This vignette assumes you are already familiar with the `CloneCensorWeight` package and are able to perform single studies (see the `SingleStudy` vignette). We use the same example: after a first acute myocardial infarction (AMI), start metoprolol within a grace period of $G$ days versus do not start it within $G$ days, with all-cause death within a year as the outcome. Here we compare two grace periods, $G = 1$ (start on the day of the AMI or the next day) and $G = 7$, and three outcome models, and we add 20 negative-control outcomes.
+This vignette assumes you are already familiar with the `CloneCensorWeight` package and are able to perform single studies (see the `SingleStudy` vignette). We use the same example: after a first acute myocardial infarction (AMI), start metoprolol within a grace period of $G$ days versus do not start it within $G$ days, with all-cause death within a year as the outcome. Here we compare two grace periods, $G = 1$ (start on the day of the AMI or the next day) and $G = 7$, and three outcome models, and we add 18 negative-control outcomes.
 
 The example runs on a synthetic database: a Synthea simulation of one million persons in the OMOP Common Data Model, version 5.4. Synthea assigns treatments by rule, so the confounding in these data is artificial: the example demonstrates the software, and its results are not clinical evidence. The outputs shown were computed on `r runSummary$runDate` with `CloneCensorWeight` `r runSummary$packageVersion` (commit `r runSummary$commit`); the code that produced them is shown, but not evaluated when this vignette is built. Counts below 11 are shown as "<11".
 
@@ -59,10 +59,12 @@ As in CohortMethod, the `excludedCovariateConceptIds` and `includedCovariateConc
 
 # Preparation for the example
 
-We need to tell R how to connect to the server where the data are (see the `SingleStudy` vignette). In this example the Synthea database is a DuckDB file, which we attach read-only to an in-memory DuckDB database, and we pass the open connection to every function:
+We need to tell R how to connect to the server where the data are (see the `SingleStudy` vignette). In this example the Synthea database is a DuckDB file, which we attach read-only to an in-memory DuckDB database, and we pass the open connection to every function. We also tell R where to write the intermediate and result files (`folder`):
 
 ```{r eval=FALSE}
 library(CloneCensorWeight)
+library(dplyr)
+folder <- "s:/temp/ccwVignette2"
 connection <- DatabaseConnector::connect(dbms = "duckdb", server = ":memory:")
 DatabaseConnector::executeSql(connection, "ATTACH 'synthetic.duckdb' AS syn (READ_ONLY);")
 cdmDatabaseSchema <- "syn.main"
@@ -78,9 +80,9 @@ The AMI design passes. With covariates measured up to the day before the AMI, th
 
 ## Preparing the cohorts
 
-We use the eligible, treatment and outcome cohorts of the `SingleStudy` vignette (cohort IDs 1, 2 and 3: first AMI, metoprolol eras, and death); see that vignette for their `Capr` definitions.
+We use the eligible, treatment and outcome cohorts of the `SingleStudy` vignette (cohort IDs 1, 2 and 3: first AMI, metoprolol eras, and death): the code below needs the `cohortDefinitionSet` created there with `Capr`.
 
-In addition to the outcome of interest, we want to include a set of negative-control outcomes: outcomes that metoprolol is not believed to cause or prevent, so that the true hazard ratio and risk ratio are 1. Their estimates show the systematic error of the design. Here we choose 20 conditions that occur at least 60 times in this cohort within a year of the AMI: infections, injuries and colon polyps. For simplicity we define each negative control as a concept and all of its descendants, and generate the cohorts with `CohortGenerator`. We call its functions with the `CohortGenerator::` prefix rather than attaching the package, because `CohortGenerator` also exports `createResultsDataModel()`, `uploadResults()` and `migrateDataModel()`, which would mask those of `CloneCensorWeight` used at the end of this vignette:
+In addition to the outcome of interest, we want to include a set of negative-control outcomes: outcomes that metoprolol is not believed to cause or prevent, so that the true hazard ratio and risk ratio are 1. Their estimates show the systematic error of the design. Here we choose 18 conditions (infections, injuries and colon polyps) from the concepts whose first occurrence falls within a year after a first AMI in at least 20 persons, counting the concept itself (not its descendants) among all persons with a first AMI and a year of prior observation, before the treatment exclusions of the eligible cohort. Some are rare in the eligible cohort: with $G = 7$, fewer than 11 clones of the strategy of not starting have a fracture of the ankle, a fracture of the clavicle or a facial laceration, so their estimates are imprecise. For simplicity we define each negative control as a concept and all of its descendants. Because the descendants count, no negative control should contain another, whose estimates would then not be independent: we left out "Sinusitis" and "Laceration - injury", which contain viral and bacterial sinusitis and three of the lacerations. We generate the cohorts with `CohortGenerator`. We call its functions with the `CohortGenerator::` prefix rather than attaching the package, because `CohortGenerator` also exports `createResultsDataModel()`, `uploadResults()`, `migrateDataModel()`, `getDataMigrator()` and `getResultsDataModelSpecifications()`, which would mask those of `CloneCensorWeight` used at the end of this vignette:
 
 ```{r eval=FALSE}
 negativeControlConceptIds <- c(
@@ -88,13 +90,11 @@ negativeControlConceptIds <- c(
   "Acute viral pharyngitis" = 4112343,
   "Acute bronchitis" = 260139,
   "Polyp of colon" = 4285898,
-  "Laceration - injury" = 443419,
   "Streptococcal sore throat" = 28060,
   "Sprain of ankle" = 81151,
   "COVID-19" = 37311061,
   "Concussion injury of brain" = 4001336,
   "Recurrent rectal polyp" = 37017023,
-  "Sinusitis" = 4283893,
   "Fracture of forearm" = 4278672,
   "Acute bacterial sinusitis" = 4294548,
   "Injury of neck" = 24818,
@@ -152,7 +152,7 @@ The first group of arguments define the eligible (target) cohort, the treatment 
 ```{r eval=FALSE}
 outcomeOfInterest <- CohortMethod::createOutcome(outcomeId = 3, outcomeOfInterest = TRUE)
 negativeControlOutcomes <- lapply(
-  101:120,
+  negativeControlCohorts$cohortId,
   function(outcomeId) {
     CohortMethod::createOutcome(
       outcomeId = outcomeId,
@@ -228,7 +228,7 @@ createClonesArgsG7 <- createCreateClonesArgs(
 We compare three outcome models:
 
 - `"cox"` (the default): the hazard ratio of a weighted Cox model, reported with the weighted Kaplan-Meier risks, risk differences and risk ratios;
-- `"logistic"`: a weighted pooled logistic model of the daily hazard of the outcome. Under a grace period the hazards of the two strategies are equal during the grace period and can change abruptly at its end, which a smooth function of time cannot follow. So we use an indicator (piecewise constant) time basis on intervals of 2 days, so that the first day after each grace period (day 2 for $G = 1$, day 8 for $G = 7$) starts an interval, with strategy-by-time interactions. Its risks then reproduce the weighted Kaplan-Meier risks; it also reports the odds ratio of the first interval (`"or"`);
+- `"logistic"`: a weighted pooled logistic model of the daily hazard of the outcome. Under a grace period the hazards of the two strategies can change abruptly at its end, which a smooth function of time cannot follow. So we use an indicator (piecewise constant) time basis on daily intervals, with strategy-by-time interactions. The intervals must be daily: the strategy of not starting censors its clones on the day of a start, on any day of the grace period, and with longer intervals a clone censored inside an interval would count as at risk for the whole interval, while the clones that remain carry the weights that make up for it (`fitOutcomeModel()` warns about this). On daily intervals its risks reproduce the weighted Kaplan-Meier risks. It also reports the odds ratio of the first interval (`"or"`), here day 0;
 - `"km"`: the weighted Kaplan-Meier risks only.
 
 ```{r eval=FALSE}
@@ -236,7 +236,7 @@ fitOutcomeModelArgsCox <- createFitOutcomeModelArgs(modelType = "cox", horizons 
 fitOutcomeModelArgsLogistic <- createFitOutcomeModelArgs(
   modelType = "logistic",
   horizons = 365,
-  timeBasis = createTimeBasis(type = "indicator", intervalLength = 2),
+  timeBasis = createTimeBasis(type = "indicator", intervalLength = 1),
   armByTimeInteraction = TRUE
 )
 fitOutcomeModelArgsKm <- createFitOutcomeModelArgs(modelType = "km", horizons = 365)
@@ -345,7 +345,9 @@ results |>
   knitr::kable(align = "rlrrrr")
 ```
 
-The estimand names give the horizon in days: `risk_target_365` and `risk_comparator_365` are the risks of death within 365 days under the two strategies, `rd_365` their difference and `rr_365` their ratio, `rmst_365` the difference in restricted mean survival time, `hr` the hazard ratio, and `or` the odds ratio of the first interval of the pooled logistic model. With $G = 1$, the strategies compare starting metoprolol on the AMI day or the next with not starting it by then; with $G = 7$, starting within a week with not starting within a week. In these synthetic data, all six analyses estimate a hazard ratio and a 365-day risk ratio close to 1, with both grace periods. The three outcome models agree on the risks: with daily weights, the pooled logistic model with an indicator time basis and strategy-by-time interactions reproduces the weighted Kaplan-Meier risks up to the 2-day grid, and the `"cox"` and `"km"` analyses report the same Kaplan-Meier risks.
+The estimand names give the horizon in days: `risk_target_365` and `risk_comparator_365` are the risks of death within 365 days under the two strategies, `rd_365` their difference and `rr_365` their ratio, `rmst_365` the difference in restricted mean survival time, `hr` the hazard ratio, and `or` the odds ratio of the first interval of the pooled logistic model. With $G = 1$, the strategies compare starting metoprolol on the AMI day or the next with not starting it by then; with $G = 7$, starting within a week with not starting within a week. In these synthetic data, all six analyses estimate a hazard ratio and a 365-day risk ratio close to 1, with both grace periods. The three outcome models agree on the risks: on daily intervals, the pooled logistic model with an indicator time basis and strategy-by-time interactions reproduces the weighted Kaplan-Meier risks, and the `"cox"` and `"km"` analyses report the same Kaplan-Meier risks.
+
+The `or` of death is `NA`. Its first interval is day 0, when the clones of both strategies are the same persons with the same weights (a person who starts on day 0 is still followed on that day under the strategy of not starting), and nobody dies on day 0 (or day 1) in these data, so there is no odds ratio to estimate. For an outcome that does occur on day 0, the `or` is 1 by design, with a standard error of 0 up to rounding. The `or` is not a summary of the effect over follow-up (see `createFitOutcomeModelArgs()`); the 365-day risk ratio is.
 
 ## Diagnostics
 
@@ -388,7 +390,7 @@ diagnostics |>
   knitr::kable()
 ```
 
-Every analysis passes the balance, positivity, weight and power diagnostics, for the outcome of interest and for the negative controls. Analysis 2 fails the systematic-error diagnostic. The diagnostics summary takes the largest EASE over the calibrated estimands of an analysis, and for the pooled logistic model these include the odds ratio of the first interval (`or`), which compares the strategies during the first two days only, when both strategies' clones follow the same course and few outcomes occur. Its negative-control estimates are noisy and spread more than their standard errors explain (EASE of about 0.25 for both grace periods, just above the threshold for $G = 1$ and just below it for $G = 7$), whereas the EASE of the 365-day risk ratio is about 0.05. The `or` estimand is not a summary of the effect over follow-up; see `createFitOutcomeModelArgs()`.
+Every analysis passes all diagnostics, for the outcome of interest and for the negative controls. The diagnostics summary takes the largest EASE over the calibrated estimands of an analysis, here the hazard ratio and the 365-day risk ratio, whose EASE is about 0.05 to 0.06 for both grace periods. The odds ratio of the first interval (`or`) of the pooled logistic analyses is not calibrated: it is `NA` for the negative controls with no outcome on day 0, and 1 by design, with a standard error of 0 up to rounding, for the others, which leaves fewer than 5 negative controls that can calibrate it.
 
 ## Empirical calibration and negative control distribution
 
@@ -411,7 +413,7 @@ EmpiricalCalibration::plotCalibrationEffect(
 knitr::include_graphics(file.path(dataFolder, "calibrationEffectHr_a4.png"))
 ```
 
-Each ratio estimand (the hazard ratio, the risk ratios, and the first-interval odds ratio) is calibrated separately per analysis, using the negative controls whose diagnostics allow it: the `calibrated*` columns of the results summary hold the calibrated estimates, confidence intervals and p-values, and `ease` in the diagnostics summary the expected absolute systematic error. The hazard ratios of the negative controls, and their calibration:
+Each ratio estimand (the hazard ratio, the risk ratios, and the first-interval odds ratio) is calibrated separately per analysis, using the negative controls whose diagnostics allow it and that have a positive standard error, when there are at least 5 of them: the `calibrated*` columns of the results summary hold the calibrated estimates, confidence intervals and p-values, and `ease` in the diagnostics summary the expected absolute systematic error. The empirical null distribution is fitted by Markov chain Monte Carlo (`EmpiricalCalibration::fitMcmcNull()`) for each analysis and estimand, without a fixed seed, so analyses with the same estimates (the 365-day risk ratios of analyses 1, 2 and 3, for example) can show slightly different calibrated intervals, and a rerun can change the calibrated values in the third decimal. The hazard ratios of the negative controls, and their calibration:
 
 ```{r echo=FALSE}
 ratioResults <- load("ratioResults")

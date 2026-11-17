@@ -88,6 +88,8 @@ A clone-censor-weight study needs three kinds of cohorts:
 
 Here we define them using the OHDSI `Capr` package. The eligible cohort is the first AMI ever, excluding persons who started another beta-blocker on or before the AMI day: in these data, persons who start carvedilol on the AMI day almost never start metoprolol, which would leave no comparable persons in the strategy of starting metoprolol. The treatment cohort holds every metoprolol era, and the outcome cohort is death.
 
+Note that this eligibility rule uses information from day 0: a start of another beta-blocker on the AMI day is itself a treatment decision, made at the time zero of the trial, so the emulated trial is restricted to persons for whom that alternative was not chosen on day 0. (Records of day 0 are kept out of the covariates for the same reason; see below.) A start of another beta-blocker after the AMI day is not part of either strategy: such a person stays in the strategy of not starting metoprolol, and is not censored. Restricting the exclusion to the days before the AMI would avoid using day-0 information, at the cost of the positivity problem described above.
+
 ```{r eval=FALSE}
 library(Capr)
 
@@ -127,24 +129,23 @@ deathCohort <- cohort(
 cohortDefinitionSet <- makeCohortSet(amiCohort, metoprololCohort, deathCohort)
 ```
 
-We use `CohortGenerator` to generate the cohorts:
+We use `CohortGenerator` to generate the cohorts. We call its functions with the `CohortGenerator::` prefix rather than attaching the package, because `CohortGenerator` also exports `createResultsDataModel()`, `uploadResults()`, `migrateDataModel()`, `getDataMigrator()` and `getResultsDataModelSpecifications()`, which, attached after `CloneCensorWeight`, would mask its functions of the same names (see the `MultipleAnalyses` vignette):
 
 ```{r eval=FALSE}
-library(CohortGenerator)
-cohortTableNames <- getCohortTableNames(cohortTable = cohortTable)
-createCohortTables(
+cohortTableNames <- CohortGenerator::getCohortTableNames(cohortTable = cohortTable)
+CohortGenerator::createCohortTables(
   connection = connection,
   cohortDatabaseSchema = cohortDatabaseSchema,
   cohortTableNames = cohortTableNames
 )
-generateCohortSet(
+CohortGenerator::generateCohortSet(
   connection = connection,
   cdmDatabaseSchema = cdmDatabaseSchema,
   cohortDatabaseSchema = cohortDatabaseSchema,
   cohortTableNames = cohortTableNames,
   cohortDefinitionSet = cohortDefinitionSet
 )
-getCohortCounts(
+CohortGenerator::getCohortCounts(
   connection = connection,
   cohortDatabaseSchema = cohortDatabaseSchema,
   cohortTable = cohortTable
@@ -244,7 +245,7 @@ createClonesArgs <- createCreateClonesArgs(
 clones <- createClones(studyPop, cloneCensorWeightData, createClonesArgs)
 ```
 
-Each person is cloned once per strategy. The days on which persons started metoprolol show why a grace period is needed: most start on day 0, 1 or 2, and almost nobody after day 4:
+Each person is cloned once per strategy. The days on which persons started metoprolol show why a grace period is needed: most start on day 0, 1 or 2, some on day 3, and almost nobody later (the later days are grouped, so that no small count can be recovered from the other tables):
 
 ```{r echo=FALSE}
 initiationByDay <- load("initiationByDay")
