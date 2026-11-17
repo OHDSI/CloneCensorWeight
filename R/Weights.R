@@ -27,7 +27,14 @@
 #'   `d > G`, where `pi(X)` is the probability of starting by `G` from the binary model when the models
 #'   were fit with `initiateWithinModel = "binary"` (the default), and `1 - S(G | X)` from the
 #'   initiation hazard model with `initiateWithinModel = "hazard"` (see [createFitCensoringModelsArgs()]
-#'   for when each is valid).
+#'   for when each is valid). With `graceRegime = "naturalGrace"`, `W(d) = 1` for all `d` for a clone
+#'   that started before day `G`, and `1 / p(X)` for `d > G` for a clone that started on day `G`, where
+#'   `p(X)` is the probability of starting on day `G` of the persons who reach it untreated (binary
+#'   model fit on them, or `1 - S(G | X) / S(G - 1 | X)`). With `graceStart = S > 0`, `W(d) =
+#'   1 / S(d - 1 | X)` for `d <= S` and `1 / S(S - 1 | X)` for `S < d <= G` (the weights of a
+#'   `"notInitiateWithin(S - 1)"` strategy), and after `G` also divided by `pi(X)` (or `p(X)`), now the
+#'   probability of starting on days `S..G` (on day `G`) of the persons who have not started before day
+#'   `S` (`G`).
 #' - `"notInitiateWithin"`: `W(d) = 1 / S(d - 1 | X)` for `d <= G` (with `S(-1) = 1`), where
 #'   `S(d | X)` is the probability of not initiating on days `0..d` from the initiation hazard model.
 #'   For `d > G`, `W(d) = 1 / S(G | X)` when the models were fit with `postGraceModel = "hazard"` (the
@@ -49,7 +56,8 @@
 #' day `G` (day `G - 1` with `"deviationFirst"`) for `"initiateWithin"`, and, for the hazard
 #' strategies, at every distinct outcome or competing-event time of any clone (of either strategy)
 #' that falls inside the clone's window where the weight varies (days `riskStart..G` for
-#' `"notInitiateWithin"`, all follow-up for `"neverInitiate"`). A segment `(startTime, stopTime]` gets
+#' `"notInitiateWithin"`, all follow-up for `"neverInitiate"`, days `riskStart..S - 1` for
+#' `"initiateWithin"` with `graceStart = S > 0`). A segment `(startTime, stopTime]` gets
 #' the weight of its last day, which is exact for estimators that use the weights only at event times
 #' (Cox, Kaplan-Meier and Aalen-Johansen).
 #'
@@ -197,7 +205,7 @@ computeCensoringWeights <- function(clones,
     FROM ccwWClones
     INNER JOIN ccwWParams
       ON ccwWClones.strategyId = ccwWParams.strategyId
-    WHERE ccwWParams.kind = 'binary'
+    WHERE ccwWParams.cutDay IS NOT NULL
       AND ccwWParams.cutDay - ccwWClones.riskStart + 1 > 0
       AND ccwWParams.cutDay - ccwWClones.riskStart + 1 < ccwWClones.survivalTime
     UNION
@@ -378,8 +386,10 @@ computeCensoringWeights <- function(clones,
   for (strategyId in seq_along(strategies)) {
     model <- censoringModels[[strategyId]]
     strategy <- strategies[[strategyId]]
+    graceStart <- if (is.null(model$graceStart)) 0L else model$graceStart
     if (model$strategyId != strategyId || model$type != strategy$type || model$treatment != strategy$treatment ||
-      (strategy$type != "neverInitiate" && model$horizon != strategy$graceEnd)) {
+      (strategy$type != "neverInitiate" && model$horizon != strategy$graceEnd) ||
+      (strategy$type == "initiateWithin" && graceStart != strategy$graceStart)) {
       stop(sprintf("The censoring model of strategy %d does not match the strategy of the clones", strategyId))
     }
   }
@@ -413,35 +423,57 @@ computeCensoringWeights <- function(clones,
   postGraceValues <- list()
   interactionValues <- list()
   interactionBasis <- list()
+  persons <- NULL
   for (model in censoringModels) {
-    # An initiateWithin(G) strategy with initiateWithinModel = "hazard": its weights are those of the
-    # binary model at G with pi(X) = 1 - S(G | X) and pi-bar = 1 - S-bar(G):
-    if (identical(model$type, "initiateWithin") && model$kind == "hazard") {
-      model <- .hazardAsBinaryModel(model)
+    # initiateWithin strategies: as a binary model at G (graceStart = 0), or as the initiation hazard model
+    # of the days before graceStart with the probability of following the strategy after G
+    # (.initiateWithinWeightModel()):
+    if (identical(model$type, "initiateWithin")) {
+      if (is.null(persons)) {
+        persons <- clones$persons |>
+          select("rowId", "personSeqId", "riskEnd", "outcomeDay", "deathDay", "treatmentDay", "comparatorTreatmentDay") |>
+          collect()
+      }
+      model <- .initiateWithinWeightModel(model, persons, attr(censoringModels, "metaData")$sameDayOrdering)
     }
     strategyId <- as.integer(model$strategyId)
     isLogistic <- model$modelType == "logistic"
-    hasPostGrace <- !is.null(model$postGrace)
+    # notInitiateWithin with postGraceModel = "binary": S(G | X) is replaced by 1 - pi(X) after G.
+    # initiateWithin with graceStart > 0: the survival of the day after G (switchDay) is the probability of
+    # following the strategy through G.
+    hasPostGrace <- !is.null(model$postGrace) || !is.null(model$postSurvival)
+    windowEnd <- if (model$kind == "hazard") as.integer(if (is.null(model$windowEnd)) model$horizon else model$windowEnd) else NA_integer_
     params[[strategyId]] <- tibble(
       strategyId = strategyId,
       kind = model$kind,
       modelType = model$modelType,
       horizon = as.integer(model$horizon),
-      windowEnd = if (model$kind == "hazard") as.integer(model$horizon) else NA_integer_,
+      windowEnd = windowEnd,
+      switchDay = if (model$kind == "binary") as.integer(model$horizon) else if (is.null(model$switchDay)) NA_integer_ else as.integer(model$switchDay),
       cutDay = NA_integer_,
       numerator = if (model$kind == "binary") as.numeric(model$numerator$propensityScore) else NA_real_,
       intervalLength = if (isLogistic) as.integer(model$timeBasis$intervalLength) else NA_integer_,
       nIntervals = if (isLogistic) as.integer(model$timeBasis$nIntervals) else NA_integer_,
       postGrace = hasPostGrace,
-      postGraceNumerator = if (hasPostGrace) as.numeric(model$postGrace$numerator$propensityScore) else NA_real_
+      postGraceNumerator = if (!is.null(model$postSurvival)) {
+        as.numeric(model$postNumerator)
+      } else if (hasPostGrace) {
+        1 - as.numeric(model$postGrace$numerator$propensityScore)
+      } else {
+        NA_real_
+      },
+      # The evalDay whose survival the post-grace survival replaces:
+      postEvalDay = if (!is.null(model$postSurvival)) windowEnd + 1L else if (hasPostGrace) windowEnd else NA_integer_
     )
     if (model$kind == "binary") {
       values[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$predictions$rowId, value = model$predictions$propensityScore)
     } else {
       values[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$predictions$rowId, value = model$predictions$linearPredictor)
     }
-    if (hasPostGrace) {
-      postGraceValues[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$postGrace$predictions$rowId, value = model$postGrace$predictions$propensityScore)
+    if (!is.null(model$postSurvival)) {
+      postGraceValues[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$postSurvival$rowId, value = model$postSurvival$survival)
+    } else if (hasPostGrace) {
+      postGraceValues[[strategyId]] <- tibble(strategyId = strategyId, rowId = model$postGrace$predictions$rowId, value = 1 - model$postGrace$predictions$propensityScore)
     }
     interactions <- model$interactions
     if (isLogistic && !is.null(interactions) && nrow(interactions$predictions) > 0) {
@@ -460,7 +492,9 @@ computeCensoringWeights <- function(clones,
         filter(.data$zValue != 0)
     }
     if (model$modelType == "cox") {
-      days <- seq(-1L, model$horizon)
+      # Through horizon + 1, the post-grace evalDay of an initiateWithin strategy's hazard model of the days
+      # before graceStart (its survival there is replaced, see .computeSurvival()):
+      days <- seq(-1L, model$horizon + 1L)
       coxBaseline[[strategyId]] <- tibble(
         strategyId = strategyId,
         day = days,
@@ -479,9 +513,9 @@ computeCensoringWeights <- function(clones,
   }
   params <- dplyr::bind_rows(params)
   sameDayOrdering <- attr(censoringModels, "metaData")$sameDayOrdering
-  binary <- params$kind == "binary"
-  # The last day with W = 1 for initiateWithin:
-  params$cutDay[binary] <- params$horizon[binary] - if (sameDayOrdering == "eventsFirst") 0L else 1L
+  # The last day before the switch of the weights at G of initiateWithin:
+  switches <- !is.na(params$switchDay)
+  params$cutDay[switches] <- params$switchDay[switches] - if (sameDayOrdering == "eventsFirst") 0L else 1L
   clones$ccwWParams <- params
   clones$ccwWValues <- dplyr::bind_rows(values)
   clones$ccwWCoxBaseline <- dplyr::bind_rows(c(
@@ -510,12 +544,14 @@ computeCensoringWeights <- function(clones,
 # The day whose survival gives the weight W(d) of the day `day` (an SQL expression of days since index),
 # from the strategy's row of ccwWParams: for binary models 1 after the switch and 0 before (see
 # .computeSurvival()), and for hazard models d - `offset` (d - 1 with "eventsFirst", d with
-# "deviationFirst"), capped at the end of the window in which the weight varies.
+# "deviationFirst"), capped at the end of the window in which the weight varies, or, for the hazard
+# model of the days before graceStart of an initiateWithin strategy, postEvalDay after the switch at G.
 .evalDaySql <- function(day, offset) {
   return(sprintf("
       CASE
         WHEN ccwWParams.kind = 'binary' THEN
           CASE WHEN %1$s > ccwWParams.cutDay THEN 1 ELSE 0 END
+        WHEN ccwWParams.cutDay IS NOT NULL AND %1$s > ccwWParams.cutDay THEN ccwWParams.postEvalDay
         ELSE LEAST(%1$s - %2$d, ccwWParams.windowEnd)
       END", day, offset))
 }
@@ -550,7 +586,8 @@ computeCensoringWeights <- function(clones,
     WHERE ccwWValues.rowId IS NULL
       AND CASE WHEN ccwWParams.kind = 'binary' THEN %1$s.evalDay = 1 ELSE %1$s.evalDay >= 0 END;", table))$n
   # The weights after G of notInitiateWithin with postGraceModel = "binary" (evalDay = G) need the binary
-  # model at G:
+  # model at G, and those of initiateWithin with graceStart > 0 (evalDay = graceStart) the probability of
+  # following the strategy:
   missing <- missing + .andromedaSql(clones, sprintf("
     SELECT COUNT(*) AS n
     FROM %1$s
@@ -561,7 +598,7 @@ computeCensoringWeights <- function(clones,
         AND %1$s.rowId = ccwWPostGrace.rowId
     WHERE ccwWPostGrace.rowId IS NULL
       AND ccwWParams.postGrace
-      AND %1$s.evalDay = ccwWParams.windowEnd;", table))$n
+      AND %1$s.evalDay = ccwWParams.postEvalDay;", table))$n
   if (missing > 0) {
     stop(sprintf("%d segment(s) need the censoring model's prediction for a person outside its risk set. Were the censoring models fit on these clones?", missing))
   }
@@ -693,15 +730,17 @@ computeCensoringWeights <- function(clones,
     WHERE ccwWNeeded.modelType = 'logistic';")
   # notInitiateWithin with postGraceModel = "binary": from the day the weight no longer changes
   # (evalDay = G: day G + 1 with eventsFirst, day G with deviationFirst), 1 - pi(X) from the binary model
-  # at G replaces S(G | X), and 1 - pi-bar replaces the numerator's S-bar(G):
+  # at G replaces S(G | X), and 1 - pi-bar replaces the numerator's S-bar(G). initiateWithin with
+  # graceStart > 0: after the switch at G (evalDay = graceStart), the probability of following the
+  # strategy through G replaces S(graceStart | X), and its numerator S-bar:
   .andromedaExecute(clones, "
     UPDATE ccwWSurvival
-    SET survival = 1 - ccwWPostGrace.value,
-      numeratorSurvival = 1 - ccwWParams.postGraceNumerator
+    SET survival = ccwWPostGrace.value,
+      numeratorSurvival = ccwWParams.postGraceNumerator
     FROM ccwWParams, ccwWPostGrace
     WHERE ccwWSurvival.strategyId = ccwWParams.strategyId
       AND ccwWParams.postGrace
-      AND ccwWSurvival.evalDay = ccwWParams.windowEnd
+      AND ccwWSurvival.evalDay = ccwWParams.postEvalDay
       AND ccwWSurvival.strategyId = ccwWPostGrace.strategyId
       AND ccwWSurvival.rowId = ccwWPostGrace.rowId;")
   invisible(NULL)

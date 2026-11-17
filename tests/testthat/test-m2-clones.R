@@ -358,6 +358,54 @@ for (pair in list(
   }
 }
 
+test_that("Fixture clones of initiateWithin with graceStart > 0: a start before graceStart is a deviation", {
+  data <- createM2FixtureData()
+  on.exit(close(data))
+  population <- createM2FixturePopulation(data, 0)
+  strategies <- list(m2Strategy(1, "initiateWithin", 7, graceStart = 4), m2Strategy(2, "notInitiateWithin", 7))
+  # Person 1 starts on day 0 and person 12 on day 3 (the day of death), before graceStart = 4; persons 2
+  # (day 7), 5 (day 5, after its outcome on day 3) and 8 (day 4) start within days 4..7; the others
+  # deviate on day 7 as with graceStart = 0 (expectedM2Clones$initiateWithin7).
+  expected <- list(
+    eventsFirst = dplyr::tribble(
+      ~rowId, ~deviationDay, ~endDay, ~endReason,
+      1,      0,             0,       "deviation",
+      2,      NA,            25,      "outcome",
+      3,      7,             7,       "deviation",
+      4,      7,             7,       "outcome",
+      5,      NA,            3,       "outcome",
+      6,      NA,            4,       "death",
+      7,      NA,            5,       "observationEnd",
+      8,      NA,            4,       "outcome",
+      9,      7,             7,       "deviation",
+      11,     7,             0,       "outcome",
+      12,     3,             3,       "death"
+    ),
+    # Person 1 deviates on day 0 before any follow-up, so its clone is dropped; person 12 deviates on
+    # day 3 before its death that day:
+    deviationFirst = dplyr::tribble(
+      ~rowId, ~deviationDay, ~endDay, ~endReason,
+      2,      NA,            25,      "outcome",
+      3,      7,             6,       "deviation",
+      4,      7,             6,       "deviation",
+      5,      NA,            3,       "outcome",
+      6,      NA,            4,       "death",
+      7,      NA,            5,       "observationEnd",
+      8,      NA,            4,       "outcome",
+      9,      7,             6,       "deviation",
+      11,     7,             0,       "outcome",
+      12,     3,             2,       "deviation"
+    )
+  )
+  for (sameDayOrdering in names(expected)) {
+    result <- runM2Clones(population, data, strategies, sameDayOrdering)
+    initiate <- result$clones[result$clones$strategyId == 1, c("rowId", "deviationDay", "endDay", "endReason")]
+    rownames(initiate) <- NULL
+    expect_equal(initiate, as.data.frame(dplyr::mutate(expected[[sameDayOrdering]], dplyr::across(c("rowId", "deviationDay", "endDay"), as.integer))))
+    expect_equal(result$metaData$strategies[[1]]$graceStart, 4)
+  }
+})
+
 test_that("Fixture clones for a strategy on the comparator treatment role", {
   data <- createM2FixtureData()
   on.exit(close(data))
@@ -761,10 +809,6 @@ test_that("createClones stops for unsupported strategies and invalid input", {
     createCreateClonesArgs(strategies = list(createTreatmentStrategy(1, "Initiate", "initiateWithin", ...), m2Strategy(2, "neverInitiate")))
   }
   expect_error(
-    createClones(population, data, clonesArgs(graceStart = 2, graceEnd = 7)),
-    "Not yet supported in this version: graceStart > 0"
-  )
-  expect_error(
     createClones(population, data, clonesArgs(graceEnd = 7, prohibitedTreatments = "comparatorTreatment")),
     "Not yet supported in this version: prohibitedTreatments"
   )
@@ -828,7 +872,14 @@ test_that("createClones equals the slow reference on 1,000 random persons", {
          sameDayOrdering = "deviationFirst", competingEvents = "none"),
     list(riskWindowStart = 0, riskWindowEnd = 30, endAnchor = "cohort start", maxDaysAtRisk = 99999, minDaysAtRisk = 1, removeSubjectsWithPriorOutcome = TRUE,
          censorAtNewRiskWindow = TRUE, strategies = list(m2Strategy(1, "initiateWithin", 7), m2Strategy(2, "neverInitiate")),
-         sameDayOrdering = "deviationFirst", competingEvents = "none")
+         sameDayOrdering = "deviationFirst", competingEvents = "none"),
+    # graceStart > 0 (a start before day graceStart is a deviation), under both orderings and with
+    # riskStart after some early starts:
+    list(riskWindowStart = 0, riskWindowEnd = 30, endAnchor = "cohort start", maxDaysAtRisk = 99999, minDaysAtRisk = 1, removeSubjectsWithPriorOutcome = TRUE,
+         strategies = list(m2Strategy(1, "initiateWithin", 7, graceStart = 3), m2Strategy(2, "notInitiateWithin", 7)), sameDayOrdering = "eventsFirst", competingEvents = "death"),
+    list(riskWindowStart = 2, riskWindowEnd = 30, endAnchor = "cohort start", maxDaysAtRisk = 99999, minDaysAtRisk = 0, removeSubjectsWithPriorOutcome = FALSE,
+         strategies = list(m2Strategy(1, "initiateWithin", 9, graceStart = 4, treatment = "comparatorTreatment"), m2Strategy(2, "initiateWithin", 4)),
+         sameDayOrdering = "deviationFirst", competingEvents = "death")
   )
   endReasons <- character(0)
   droppedClones <- 0

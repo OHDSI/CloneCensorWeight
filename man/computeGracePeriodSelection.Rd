@@ -75,7 +75,10 @@ and its interval, not only the flag. \code{postGraceModel} concerns the \code{"n
 strategies; the check of an \code{"initiateWithin"} strategy of the same treatment and \code{G} uses the same
 person-time, and concerns \code{initiateWithinModel}: a flag there means that
 \code{initiateWithinModel = "hazard"} is likely biased and \code{"binary"} is the valid choice (see
-\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}). This holds for \code{graceRegime = "binaryAtG"} (the default). With
+\code{graceRegime = "naturalGrace"} both models give the probability of starting on day \code{G} of the
+persons who reach day \code{G} untreated, the risk set of the hazard model on day \code{G}, so the check does
+not choose between them.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

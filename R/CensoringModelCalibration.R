@@ -25,7 +25,12 @@
 #' The persons compared are those of the binary model's risk set at `G`: no outcome or death on or
 #' before day `G` (before day `G` with `sameDayOrdering = "deviationFirst"`) and `riskEnd >= G`. The
 #' observed value is the share of them who started the treatment on or before day `G` (a strategy
-#' with nobody under follow-up at `G` has no rows). The predictions are:
+#' with nobody under follow-up at `G` has no rows). For an `"initiateWithin"` strategy the risk set
+#' leaves out the persons who started before its `graceStart` `S` (they deviated), and, with
+#' `graceRegime = "naturalGrace"` (see [createFitCensoringModelsArgs()]), all persons who started before
+#' day `G`: the observed value is then the share who started on day `G` of the persons who reach it
+#' untreated, and the predictions are the probability of that (the last-interval weight). The
+#' predictions are:
 #'
 #' - `model = "binary"`: `pi(X)`, the probability of starting by `G` from the binary model at `G`
 #'   (the model of an `"initiateWithin"` strategy, and of the weights after `G` of a
@@ -34,7 +39,10 @@
 #' - `model = "hazard"`: `1 - S(G | X)` from the initiation hazard model of a `"notInitiateWithin"`
 #'   strategy, the probability of initiating on days `0..G`, whose complement gives the weights with
 #'   `postGraceModel = "hazard"`, or of an `"initiateWithin"` strategy fit with
-#'   `initiateWithinModel = "hazard"`, which gives its weights after `G`.
+#'   `initiateWithinModel = "hazard"`, which gives its weights after `G`. For an `"initiateWithin"`
+#'   strategy it is `1 - S(G | X) / S(F - 1 | X)`, the probability of starting on days `F..G` of the
+#'   persons who have not started before day `F`, where `F` is `S` (`F = 0`: `1 - S(G | X)`), or `G`
+#'   with `graceRegime = "naturalGrace"`.
 #'
 #' The persons are ranked by their prediction and split into `numberOfGroups` groups of about the same
 #' size (deciles by default); persons with tied predictions are kept in one group, so there can be
@@ -85,7 +93,8 @@
 #' @return
 #' A tibble of class `CcwCensoringModelCalibration` with columns `strategyId`, `model` (`"binary"` or
 #' `"hazard"`), `covariateTimeInteraction` (the setting of the hazard model, `NA` for the binary
-#' model), `grouping` (`"prediction"`: groups of the prediction, `group` 1 holding the lowest
+#' model), `graceRegime` (that of the models of an `"initiateWithin"` strategy, `NA` for the other
+#' strategies), `grouping` (`"prediction"`: groups of the prediction, `group` 1 holding the lowest
 #' predictions; `"overall"`: all persons, the calibration in the large; `"covariate"`: by
 #' `covariateId`), `covariateId`, `group`, `persons`, `predicted` (the mean prediction in the group)
 #' and `observed` (the share who started by `G`). The attribute `strategyLabels` holds the strategy
@@ -153,16 +162,24 @@ computeCensoringModelCalibration <- function(clones,
     }
     graceEnd <- as.integer(strategy$graceEnd)
     treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
-    riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, metaData$sameDayOrdering)
+    model <- censoringModels[[strategyId]]
+    # initiateWithin: the persons who have not started before graceStart, or before G with
+    # graceRegime = "naturalGrace":
+    graceRegime <- NA_character_
+    firstDay <- 0L
+    if (strategy$type == "initiateWithin") {
+      graceRegime <- if (is.null(model$graceRegime)) "binaryAtG" else model$graceRegime
+      firstDay <- .binaryModelFirstDay(strategy, graceRegime)
+    }
+    riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, metaData$sameDayOrdering, firstDay)
     if (nrow(riskSet) == 0) {
       next
     }
-    model <- censoringModels[[strategyId]]
     predictions <- list()
     if (model$kind == "binary") {
       predictions$binary <- model$predictions$propensityScore[match(riskSet$rowId, model$predictions$rowId)]
     } else {
-      predictions$hazard <- 1 - .computeHazardSurvival(model, riskSet$rowId, graceEnd)
+      predictions$hazard <- .hazardStartProbability(model, riskSet$rowId, firstDay, graceEnd)
       if (!is.null(model$postGrace)) {
         predictions$binary <- model$postGrace$predictions$propensityScore[match(riskSet$rowId, model$postGrace$predictions$rowId)]
       }
@@ -185,13 +202,14 @@ computeCensoringModelCalibration <- function(clones,
           strategyId = as.integer(strategyId),
           model = modelName,
           covariateTimeInteraction = if (modelName == "hazard") interaction else NA_character_,
+          graceRegime = graceRegime,
           .before = 1
         )
     }
   }
   calibration <- dplyr::bind_rows(c(
     list(tibble(
-      strategyId = integer(0), model = character(0), covariateTimeInteraction = character(0), grouping = character(0),
+      strategyId = integer(0), model = character(0), covariateTimeInteraction = character(0), graceRegime = character(0), grouping = character(0),
       covariateId = numeric(0), group = integer(0), persons = integer(0), predicted = numeric(0), observed = numeric(0)
     )),
     results
@@ -224,12 +242,13 @@ print.CcwCensoringModelCalibration <- function(x, ...) {
   overall <- data[data$grouping == "overall", ]
   if (nrow(overall) > 0) {
     groups <- data[data$grouping == "prediction", ]
-    key <- function(d) paste(d$strategyId, d$model, d$covariateTimeInteraction)
+    key <- function(d) paste(d$strategyId, d$model, d$covariateTimeInteraction, d$graceRegime)
     gaps <- tapply(abs(groups$observed - groups$predicted), key(groups), max)
     summary <- data.frame(
       strategyId = overall$strategyId,
       model = overall$model,
       interaction = overall$covariateTimeInteraction,
+      graceRegime = if (is.null(overall$graceRegime)) NA_character_ else overall$graceRegime,
       persons = overall$persons,
       observed = round(overall$observed, 4),
       predicted = round(overall$predicted, 4),
@@ -317,6 +336,9 @@ plotCensoringModelCalibration <- function(calibration,
     "Binary model at the end of the grace period",
     ifelse(is.na(interaction), "1 - S(G | X) from the initiation hazard model", sprintf("1 - S(G | X) from the initiation hazard model (interaction: %s)", interaction))
   )
+  # The natural-grace models (probability of starting on day G of the persons who reach it untreated):
+  naturalGrace <- !is.null(data$graceRegime) & data$graceRegime %in% "naturalGrace"
+  data$modelLabel[naturalGrace] <- paste(data$modelLabel[naturalGrace], "(natural grace: start on day G)")
   modelLabels <- unique(data$modelLabel[order(data$model != "binary", interaction)])
   data$modelLabel <- factor(data$modelLabel, levels = modelLabels)
   colors <- rep(c("#2a78d6", "#eb6834", "#1f9e6e", "#8a5cc2", "#c9a227"), length.out = length(modelLabels))

@@ -19,9 +19,9 @@ computeTrueRisks(
 \code{\link[=simulateCloneCensorWeightData]{simulateCloneCensorWeightData()}}.}
 
 \item{strategies}{A list of objects of type \code{TreatmentStrategy} as created using
-\code{\link[=createTreatmentStrategy]{createTreatmentStrategy()}}, all referring to the \code{"treatment"} role, with
-\code{graceStart = 0} and no \code{prohibitedTreatments}. Their position in the list is the
-\code{strategyId} of the result.}
+\code{\link[=createTreatmentStrategy]{createTreatmentStrategy()}}, all referring to the \code{"treatment"} role, with no
+\code{prohibitedTreatments}. Their position in the list is the \code{strategyId} of the
+result.}
 
 \item{horizons}{The days (since index) at which to compute the risks, from \code{riskStart} to
 \code{maxDays}. The risk at day h includes outcomes on day h.}
@@ -69,7 +69,13 @@ from P(A = a | A <= G, no outcome or death on or before day G, X); early starter
 start day. After day G, the outcome hazard follows that start day. This is the regime the
 binary-at-G censoring weight identifies.
 \item \code{initiateWithin(G)} with \code{graceRegime = "naturalGrace"}: the natural course through day G - 1;
-persons still untreated on day G start on day G.
+persons still untreated on day G start on day G. This is the regime the natural-grace
+(last-interval) weight identifies (\code{graceRegime = "naturalGrace"} in
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\item \code{initiateWithin} with \code{graceStart = S > 0}: as above, but nobody starts before day S. A person who
+would start before day S starts instead on a day drawn from the natural initiation hazard from day
+S on (the start day given no start before day S), and the start days drawn under \code{"binaryAtG"} are
+on days S to G.
 }
 
 Under DGP \code{"a"}, with G equal to the DGP's \code{graceEnd}, the two grace regimes give the same truth.

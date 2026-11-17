@@ -220,11 +220,13 @@ AbstractSerializableSettings <- R6Class(
 #'
 #' Strategy types:
 #'
-#' - `"initiateWithin"`: start the treatment on a day in `graceStart..graceEnd` (days since index).
+#' - `"initiateWithin"`: start the treatment on a day in `graceStart..graceEnd` (days since index). With
+#'   `graceStart > 0`, a start before day `graceStart` is a deviation.
 #' - `"notInitiateWithin"`: do not start the treatment on or before day `graceEnd`.
 #' - `"neverInitiate"`: never start the treatment during follow-up.
 #'
-#' This version only supports `graceStart = 0` and no `prohibitedTreatments` when creating clones.
+#' `graceStart` applies to `"initiateWithin"` only and must be 0 for the other types. This version does
+#' not support `prohibitedTreatments` when creating clones.
 #'
 #' @param strategyId           An integer identifying the strategy. Used for labels and serialization;
 #'                             within an analysis the strategies are numbered by their position.
@@ -233,7 +235,8 @@ AbstractSerializableSettings <- R6Class(
 #'                             `"neverInitiate"`.
 #' @param treatment            The role of the treatment the strategy refers to: `"treatment"` or
 #'                             `"comparatorTreatment"`.
-#' @param graceStart           First day (since index) of the grace period.
+#' @param graceStart           First day (since index) of the grace period of an `"initiateWithin"`
+#'                             strategy (0 for the other types).
 #' @param graceEnd             Last day (since index) of the grace period. Required for
 #'                             `"initiateWithin"` and `"notInitiateWithin"`; must be `NULL` for
 #'                             `"neverInitiate"`.
@@ -305,6 +308,9 @@ TreatmentStrategy <- R6Class(
         if (self$graceEnd < self$graceStart) {
           stop("graceEnd must be greater than or equal to graceStart")
         }
+      }
+      if (self$type != "initiateWithin" && self$graceStart != 0) {
+        stop(sprintf("graceStart must be 0 for strategy type '%s': it applies to 'initiateWithin' strategies only", self$type))
       }
       if (self$treatment %in% self$prohibitedTreatments) {
         stop("A strategy cannot prohibit its own treatment")
@@ -642,6 +648,50 @@ TimeBasis <- R6Class(
 #' `1 - S(G | X)` with the observed share who started by `G` (with the same caveat: under grace-period
 #' selection the observed share is that of the selected survivors).
 #'
+#' **The `"initiateWithin"` regime (`graceRegime`).** "Start within the grace period" does not say on
+#' which day of it a person starts, and two regimes are in use (plan section 2.2). They agree up to
+#' `G` and differ after it when the start day within the grace period changes later risk.
+#'
+#' - **`"binaryAtG"`** (the default): the clones still followed after `G` (those that started by `G`)
+#'   are weighted by `1 / pi(X)`, the inverse probability of starting by `G` of the persons under
+#'   follow-up at `G`. The weight is the same for a start on day 0 and on day `G`, so each person still
+#'   followed at `G` is represented by the starters of the same covariates, pooled over their start
+#'   days: after `G`, the regime follows the risk of a start on a day drawn from the starters' start
+#'   days. This is standard clone-censor-weight practice and gives stable weights.
+#' - **`"naturalGrace"`** (Cain et al. 2010; Wanis et al. 2024): persons who would start during the grace
+#'   period start on their own day, and persons still untreated on day `G` start on day `G`. Its
+#'   weights are the last-interval weights: 1 for the clones that started before day `G`, and
+#'   `1 / P(start on day G | not started before G, X)` for those that start on day `G`. With
+#'   `initiateWithinModel = "binary"` that probability comes from a binary model at `G` fit by
+#'   [CohortMethod::createPs()] on the persons who reach day `G` untreated and under follow-up, with the
+#'   response "started on day `G`"; with `"hazard"` it is the initiation hazard of day `G`,
+#'   `1 - S(G | X) / S(G - 1 | X)`, whose risk set on day `G` is the same persons (so the grace-period
+#'   selection that biases `initiateWithinModel = "hazard"` under `"binaryAtG"` does not arise). With
+#'   the pooled logistic hazard model the last interval must be day `G` alone (`graceEnd` a multiple of
+#'   `intervalLength`). The weights of few clones (those that start on day `G`) vary, so they are less
+#'   stable than those of `"binaryAtG"`. Only those clones stand for the persons who reach day `G`
+#'   untreated, so the regime needs starts on day `G`: [fitCensoringModels()] warns when nobody starts
+#'   on day `G`, and [computePositivity()] shows covariate strata where few do. When few day-`G`
+#'   starters carry the weight after `G`, the standard errors of risks at horizons shortly after `G`
+#'   fall with the estimate and their intervals can under-cover (simulation of plan section 9 item 7,
+#'   `G = 7`, 6000 persons with about 140 day-7 starters and 14 of their outcomes by day 14: coverage
+#'   0.89 to 0.90 at day 14, 0.95 to 0.96 at day 60; with 24000 persons, 0.94 to 0.95 at day 14).
+#'   The stabilized weights after `G` multiply by the same quantity for every clone (the marginal
+#'   probability of starting by `G` of the persons under follow-up at `G`), so the weighted
+#'   Kaplan-Meier risks do not depend on stabilization.
+#'
+#' [computeTrueRisks()] gives the truth of either regime (its argument `graceRegime`). The choice is a
+#' choice of estimand, not of model: [computeCcwSensitivity()] reports both.
+#'
+#' **`"initiateWithin"` strategies with `graceStart = S > 0`.** A start before day `S` is a deviation,
+#' so the weights of days up to `S` are those of a `"notInitiateWithin(S - 1)"` strategy, `1 / S(d - 1 |
+#' X)` from the initiation hazard model through `S - 1` (with `initiateWithinModel = "binary"`; the
+#' fit is shared with such a strategy in the analysis) or through `G` (with `"hazard"`). The binary model
+#' at `G` (and the hazard model's probability, `1 - S(G | X) / S(S - 1 | X)`) is then that of starting
+#' on days `S..G` of the persons who have not started before day `S`, and multiplies `S(S - 1 | X)`
+#' after `G`. With the pooled logistic hazard model and `initiateWithinModel = "hazard"`, `S` must be a
+#' multiple of `intervalLength`.
+#'
 #' **Covariate-by-time interactions.** With `covariateTimeInteraction = "day0"` (the default), the
 #' pooled logistic initiation hazard model also has, for each covariate, its product with an indicator
 #' of the first interval of the time basis. With daily intervals (`timeBasis` with
@@ -656,8 +706,9 @@ TimeBasis <- R6Class(
 #' covariates; the time-basis columns are never penalized. The Cox model has no interactions, so with
 #' `hazardModelType = "cox"` the default is `"none"`, and `"day0"` and `"interval"` are not available.
 #'
-#' Settings saved before `covariateTimeInteraction`, `postGraceModel` and `initiateWithinModel` existed
-#' load with `"day0"` (`"none"` for the Cox model), `"hazard"` and `"binary"`.
+#' Settings saved before `covariateTimeInteraction`, `postGraceModel`, `initiateWithinModel` and
+#' `graceRegime` existed load with `"day0"` (`"none"` for the Cox model), `"hazard"`, `"binary"` and
+#' `"binaryAtG"`.
 #'
 #' @param hazardModelType          The hazard model: `"logistic"` (pooled logistic, the default) or
 #'                                 `"cox"` (see details for its ties caveat).
@@ -680,6 +731,11 @@ TimeBasis <- R6Class(
 #'                                 model at the end of the grace period) or `"hazard"`
 #'                                 (`1 / (1 - S(G | X))` from the initiation hazard model). See details
 #'                                 for when each is valid.
+#' @param graceRegime              The regime of `"initiateWithin"` strategies, which their weights after
+#'                                 the grace period identify: `"binaryAtG"` (`1 / pi(X)` for every clone
+#'                                 that started by `G`) or `"naturalGrace"` (the last-interval weight:
+#'                                 1 for clones that started before `G`, the inverse probability of
+#'                                 starting on day `G` for those that start on day `G`). See details.
 #' @param censoringMechanisms      The censoring mechanisms to weight for. This version supports only
 #'                                 `"artificial"` (deviation from a strategy). Censoring at the end of
 #'                                 observation is not weighted, so it is assumed to be independent of
@@ -707,6 +763,7 @@ TimeBasis <- R6Class(
 #' args <- createFitCensoringModelsArgs(hazardModelType = "cox")
 #' args <- createFitCensoringModelsArgs(covariateTimeInteraction = "none", postGraceModel = "binary")
 #' args <- createFitCensoringModelsArgs(initiateWithinModel = "hazard")
+#' args <- createFitCensoringModelsArgs(graceRegime = "naturalGrace")
 #'
 #' @export
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
@@ -714,6 +771,7 @@ createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
                                          postGraceModel = "hazard",
                                          initiateWithinModel = "binary",
+                                         graceRegime = "binaryAtG",
                                          censoringMechanisms = "artificial",
                                          useCovariates = TRUE,
                                          excludeCovariateIds = c(),
@@ -748,6 +806,7 @@ FitCensoringModelsArgs <- R6Class(
     covariateTimeInteraction = "day0",
     postGraceModel = "hazard",
     initiateWithinModel = "binary",
+    graceRegime = "binaryAtG",
     censoringMechanisms = NULL,
     useCovariates = NULL,
     excludeCovariateIds = NULL,
@@ -764,6 +823,7 @@ FitCensoringModelsArgs <- R6Class(
       checkmate::assertChoice(self$covariateTimeInteraction, c("none", "day0", "interval"), add = errorMessages)
       checkmate::assertChoice(self$postGraceModel, c("binary", "hazard"), add = errorMessages)
       checkmate::assertChoice(self$initiateWithinModel, c("binary", "hazard"), add = errorMessages)
+      checkmate::assertChoice(self$graceRegime, c("binaryAtG", "naturalGrace"), add = errorMessages)
       if (identical(self$hazardModelType, "cox") && !identical(self$covariateTimeInteraction, "none")) {
         errorMessages$push("covariateTimeInteraction must be \"none\" with hazardModelType = \"cox\": covariate-by-time interactions are available only in the pooled logistic initiation hazard model (hazardModelType = \"logistic\")")
       }

@@ -48,8 +48,8 @@ new defaults):
   `population$subjectId`. Cyclops' minimum for cross-validation (`createControl(minCVData = 100)`) then
   counts persons, not rows, so small replicates can fail where they did not. This needs Cyclops 4.0.1,
   which keeps the rows of a subject together for every model type.
-* New arguments were inserted before existing ones: `covariateTimeInteraction`, `postGraceModel` and
-  `initiateWithinModel` after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
+* New arguments were inserted before existing ones: `covariateTimeInteraction`, `postGraceModel`,
+  `initiateWithinModel` and `graceRegime` after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
   `armByTimeInteraction` in `createFitOutcomeModelArgs()`. Calls that pass the later arguments by
   position must name them.
 * With the indicator time basis (the default), the numerator of the pooled logistic initiation hazard
@@ -61,6 +61,13 @@ new defaults):
   of the time. It applies to the binary models (through `CohortMethod::createPs()`) and to the hazard
   models. The selected prior variances, the coefficients and the weights change. A control with
   `cvRepetitions = 10` reproduces the earlier fits.
+* `createTreatmentStrategy()` stops when `graceStart` is not 0 for a `"notInitiateWithin"` or
+  `"neverInitiate"` strategy (it applies to `"initiateWithin"` only).
+* `computeCensoringModelCalibration()` and `computePositivity()` gain a `graceRegime` column, and the
+  `variant` labels of `computeCcwDiagnostics()` name the `graceRegime` when a strategy is
+  `"initiateWithin"`. The diagnostics of analyses with an `"initiateWithin"` strategy compare twice as
+  many choices (both regimes), and the default variants of `computeCcwSensitivity()` add
+  `graceRegime`.
 
 New features:
 
@@ -131,3 +138,20 @@ New features:
   (`targetWeightedDays`, `targetWeightedOutcomes` and the comparator's), and the outcome model files
   of `runCcwAnalyses()` keep the attrition and the follow-up distribution of the clones of outcomes
   of interest.
+* `"initiateWithin"` strategies with `graceStart > 0` (plan section 2.2): a start before day
+  `graceStart` is a deviation. `createClones()`, `fitCensoringModels()`, `computeCensoringWeights()` and
+  `computeTrueRisks()` support them. The weights of the days before `graceStart` come from the
+  initiation hazard model through `graceStart - 1` (with `initiateWithinModel = "binary"`; shared with a
+  `"notInitiateWithin(graceStart - 1)"` strategy) or through `G` (with `"hazard"`), and the binary
+  model at `G` is fit on the persons who have not started before `graceStart`.
+* `createFitCensoringModelsArgs(graceRegime = "naturalGrace")` gives `"initiateWithin"` strategies the
+  natural-grace (last-interval) weights of Cain et al. (2010) and Wanis et al. (2024): 1 for clones that
+  started before `G`, and the inverse probability of starting on day `G` of the persons who reach it
+  untreated for those that start on day `G` (binary model fit on them, or the day-`G` initiation hazard
+  with `initiateWithinModel = "hazard"`). The default, `"binaryAtG"`, keeps the binary-at-`G` weights
+  (plan decision 9 item 7). `computeTrueRisks(graceRegime = )` gives the truth of either regime. The
+  calibration and positivity diagnostics, `computeCcwDiagnostics()` and the default variants of
+  `computeCcwSensitivity()` include both regimes (leaving out a regime or `initiateWithinModel` that
+  the hazard model's `intervalLength` does not allow). `fitCensoringModels()` warns when, under
+  `"naturalGrace"`, persons reach day `G` untreated but nobody starts on day `G`, so that the regime is
+  not identified.

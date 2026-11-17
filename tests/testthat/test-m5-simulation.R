@@ -414,6 +414,30 @@ test_that("computeTrueRisks runs with nTruth = 1e6 in well under a minute", {
   expect_equal(nrow(truth), 4)
 })
 
+test_that("computeTrueRisks with graceStart > 0", {
+  # DGP "a": the effect acts only through starting by its graceEnd (30), so keeping persons from starting
+  # before day 5 changes nothing, under either regime (the paths are the same, so the risks are equal):
+  settings <- m5Settings()
+  initiate <- createTreatmentStrategy(1, "Initiate within 30 days", "initiateWithin", graceEnd = 30)
+  lateStart <- createTreatmentStrategy(2, "Initiate on days 5 to 30", "initiateWithin", graceStart = 5, graceEnd = 30)
+  for (graceRegime in c("binaryAtG", "naturalGrace")) {
+    truth <- computeTrueRisks(settings, list(initiate, lateStart), horizons = c(10, 60, 365), graceRegime = graceRegime, nTruth = 2e4, seed = 1)
+    expect_equal(truth$risk[truth$strategyId == 2], truth$risk[truth$strategyId == 1])
+  }
+  # DGP "b": the start day changes later risk. With graceStart = graceEnd, the strategy is "start on day
+  # G", and the two regimes coincide; a later window has a smaller benefit (higher risk at day 365) than
+  # starting from day 0, and the natural grace period (starts as late as G) a higher risk than binaryAtG.
+  settings <- m5Settings(dgp = "b")
+  onDay <- createTreatmentStrategy(3, "Initiate on day 30", "initiateWithin", graceStart = 30, graceEnd = 30)
+  truths <- lapply(c(binaryAtG = "binaryAtG", naturalGrace = "naturalGrace"), function(graceRegime) {
+    computeTrueRisks(settings, list(initiate, lateStart, onDay), horizons = 365, graceRegime = graceRegime, nTruth = 1e5, seed = 2)
+  })
+  expect_equal(truths$binaryAtG$risk[3], truths$naturalGrace$risk[3])
+  expect_gt(truths$binaryAtG$risk[2], truths$binaryAtG$risk[1])
+  expect_gt(truths$naturalGrace$risk[1], truths$binaryAtG$risk[1])
+  expect_gt(truths$naturalGrace$risk[2], truths$binaryAtG$risk[2])
+})
+
 test_that("computeTrueRisks checks its arguments", {
   settings <- m5Settings()
   initiate <- createTreatmentStrategy(1, "Initiate within 30 days", "initiateWithin", graceEnd = 30)
@@ -421,8 +445,6 @@ test_that("computeTrueRisks checks its arguments", {
   expect_error(computeTrueRisks(settings, list(initiate), horizons = 10, graceRegime = "other", nTruth = 10), "graceRegime")
   expect_error(computeTrueRisks(settings[-1], list(initiate), horizons = 10, nTruth = 10), "settings")
   expect_error(computeTrueRisks(settings, list(initiate$toList()), horizons = 10, nTruth = 10), "strategies\\[\\[1\\]\\]")
-  lateStart <- createTreatmentStrategy(1, "Initiate on days 5 to 30", "initiateWithin", graceStart = 5, graceEnd = 30)
-  expect_error(computeTrueRisks(settings, list(lateStart), horizons = 10, nTruth = 10), "Not yet supported in this version: graceStart")
   prohibited <- createTreatmentStrategy(1, "Initiate within 30 days", "initiateWithin", graceEnd = 30, prohibitedTreatments = "comparatorTreatment")
   expect_error(computeTrueRisks(settings, list(prohibited), horizons = 10, nTruth = 10), "Not yet supported in this version: prohibitedTreatments")
   comparator <- createTreatmentStrategy(1, "Initiate within 30 days", "initiateWithin", treatment = "comparatorTreatment", graceEnd = 30)

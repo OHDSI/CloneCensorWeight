@@ -26,7 +26,8 @@ within an analysis the strategies are numbered by their position.}
 \item{treatment}{The role of the treatment the strategy refers to: \code{"treatment"} or
 \code{"comparatorTreatment"}.}
 
-\item{graceStart}{First day (since index) of the grace period.}
+\item{graceStart}{First day (since index) of the grace period of an \code{"initiateWithin"}
+strategy (0 for the other types).}
 
 \item{graceEnd}{Last day (since index) of the grace period. Required for
 \code{"initiateWithin"} and \code{"notInitiateWithin"}; must be \code{NULL} for
@@ -48,12 +49,14 @@ IDs by \code{\link[=createTargetTreatmentOutcomes]{createTargetTreatmentOutcomes
 
 Strategy types:
 \itemize{
-\item \code{"initiateWithin"}: start the treatment on a day in \code{graceStart..graceEnd} (days since index).
+\item \code{"initiateWithin"}: start the treatment on a day in \code{graceStart..graceEnd} (days since index). With
+\code{graceStart > 0}, a start before day \code{graceStart} is a deviation.
 \item \code{"notInitiateWithin"}: do not start the treatment on or before day \code{graceEnd}.
 \item \code{"neverInitiate"}: never start the treatment during follow-up.
 }
 
-This version only supports \code{graceStart = 0} and no \code{prohibitedTreatments} when creating clones.
+\code{graceStart} applies to \code{"initiateWithin"} only and must be 0 for the other types. This version does
+not support \code{prohibitedTreatments} when creating clones.
 }
 \examples{
 initiate <- createTreatmentStrategy(

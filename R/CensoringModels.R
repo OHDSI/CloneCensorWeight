@@ -31,6 +31,20 @@
 #'   through `G` described next, the same model as that of a `"notInitiateWithin(G)"` strategy of the
 #'   same treatment (shared with such a strategy when the analysis has one), whose `1 - S(G | X)`
 #'   gives the weights after `G` (see [createFitCensoringModelsArgs()]).
+#' - `"initiateWithin"` with `graceStart = S > 0`: a start before day `S` is a deviation. The binary
+#'   model at `G` is fit on the persons who have not started before day `S`, with the response
+#'   "started on days `S..G`", and the weights of days up to `S` come from the initiation hazard model
+#'   through day `S - 1` (element `early`; the model of a `"notInitiateWithin(S - 1)"` strategy, shared
+#'   with one in the analysis). With `initiateWithinModel = "hazard"` the hazard model through `G`
+#'   gives both.
+#' - `"initiateWithin"` with `graceRegime = "naturalGrace"`: the binary model at `G` is fit on the
+#'   persons who reach day `G` untreated (no start before day `G`), with the response "started on day
+#'   `G`", the probability of the last-interval weight (with `initiateWithinModel = "hazard"`, the
+#'   hazard model through `G` gives it). Only the clones that start on day `G` represent the persons
+#'   who reach day `G` untreated after `G`, so when none of these persons starts on day `G` the
+#'   regime is not identified: those persons are all censored at `G`, and the risks after `G` stand
+#'   for the persons who started before `G` only. `fitCensoringModels()` then warns. A covariate
+#'   stratum without starts on day `G` shows in [computePositivity()].
 #' - `"notInitiateWithin"` and `"neverInitiate"`: a model of the hazard of initiation. Each person is
 #'   at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 #'   death (that day with `"deviationFirst"`), `riskEnd`, and the strategy's horizon `H` (`G`, or the
@@ -99,8 +113,9 @@
 #' @param .fixedPriorVariances   For internal use (the bootstrap): `NULL`, or a list named by
 #'                               `strategyId` (`"1"`, `"2"`) of prior variances, and by
 #'                               `"<strategyId>.postGrace"` for the binary model of a
-#'                               `"notInitiateWithin"` strategy's weights after the grace period. For a
-#'                               model in the list, its covariate model is fit with that prior variance
+#'                               `"notInitiateWithin"` strategy's weights after the grace period, and
+#'                               `"<strategyId>.early"` for the hazard model of the days before the
+#'                               `graceStart` of an `"initiateWithin"` strategy. For a model in the list, its covariate model is fit with that prior variance
 #'                               and without cross-validation.
 #' @param .sourcePersonSeqIds    For internal use (the bootstrap): `NULL`, or a data frame with the
 #'                               `personSeqId` of each person and the `sourcePersonSeqId` of the person
@@ -137,6 +152,11 @@
 #'   model at `G` whose `1 - propensityScore` gives the weights after `G`, a list with the elements of
 #'   a binary model above (`kind`, `horizon`, `modelType`, `coefficients`, `priorVariance`,
 #'   `predictions`, `numerator`, `diagnostics`).
+#' - `"initiateWithin"` strategies only: `graceStart` and `graceRegime`; `firstDay` (binary models fit
+#'   on the persons who have not started before a day `firstDay > 0`: `graceStart`, or `G` with
+#'   `graceRegime = "naturalGrace"`); and `early` (with `graceStart > 0` and
+#'   `initiateWithinModel = "binary"`), the initiation hazard model through `graceStart - 1`, a list
+#'   with the elements of a hazard model above.
 #'
 #' The `metaData` attribute holds the outcome ID, same-day ordering, competing events, strategies and
 #' the settings.
@@ -166,7 +186,7 @@ fitCensoringModels <- function(clones,
   checkmate::assertR6(fitCensoringModelsArgs, "FitCensoringModelsArgs", add = errorMessages)
   checkmate::assertList(.fixedPriorVariances, types = "numeric", null.ok = TRUE, add = errorMessages)
   if (!is.null(.fixedPriorVariances)) {
-    checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2", "1.postGrace", "2.postGrace"), empty.ok = FALSE, add = errorMessages)
+    checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2", "1.postGrace", "2.postGrace", "1.early", "2.early"), empty.ok = FALSE, add = errorMessages)
   }
   checkmate::assertDataFrame(.sourcePersonSeqIds, null.ok = TRUE, add = errorMessages)
   if (!is.null(.sourcePersonSeqIds)) {
@@ -187,21 +207,24 @@ fitCensoringModels <- function(clones,
 # .censoringFitKey() (from earlier calls, possibly with other design choices, or from
 # .censoringFitsFromModels()), and a model whose key is in it is reused, not refit. Returns a list with
 # the CcwCensoringModels `models` and the `fits`, with the new ones added. Callers that fit several
-# variants of the same analysis warn about day-0 covariate windows once.
+# variants of the same analysis warn about day-0 covariate windows, and about natural-grace regimes
+# without starts on day G, once.
 .fitCensoringModelsWithFits <- function(clones,
                                         cloneCensorWeightData,
                                         fitCensoringModelsArgs,
                                         fixedPriorVariances = NULL,
                                         sourcePersonSeqIds = NULL,
                                         fits = list(),
-                                        warnDay0CovariateWindows = TRUE) {
+                                        warnDay0CovariateWindows = TRUE,
+                                        warnNaturalGrace = TRUE) {
   metaData <- attr(clones, "metaData")
   strategies <- metaData$strategies
   for (strategy in strategies) {
-    if (strategy$graceStart > 0 || length(strategy$prohibitedTreatments) > 0) {
-      stop("Not yet supported in this version: censoring models for strategies with graceStart > 0 or prohibitedTreatments")
+    if (length(strategy$prohibitedTreatments) > 0) {
+      stop("Not yet supported in this version: censoring models for strategies with prohibitedTreatments")
     }
   }
+  .checkInitiateWithinHazardGrid(strategies, fitCensoringModelsArgs)
   if (warnDay0CovariateWindows) {
     .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
   }
@@ -214,6 +237,9 @@ fitCensoringModels <- function(clones,
   if (!is.null(sourcePersonSeqIds)) {
     persons$subjectId <- sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, sourcePersonSeqIds$personSeqId)]
   }
+  if (warnNaturalGrace && fitCensoringModelsArgs$graceRegime == "naturalGrace") {
+    .warnNoNaturalGraceStarts(strategies, persons, sameDayOrdering)
+  }
   maxRiskEnd <- if (nrow(persons) == 0) 0L else max(persons$riskEnd)
   argsList <- fitCensoringModelsArgs$toList()
 
@@ -225,19 +251,19 @@ fitCensoringModels <- function(clones,
   # initiateWithin(G) strategy of the same treatment: their risk sets are the same (both use the
   # analysis' sameDayOrdering). So is the hazard model through G of a notInitiateWithin(G) strategy and
   # of an initiateWithin(G) strategy with initiateWithinModel = "hazard".
-  getFit <- function(component, kind, treatment, horizon, fixedVariance, description, shareMessage) {
+  getFit <- function(component, kind, treatment, horizon, fixedVariance, description, shareMessage, firstDay = 0L) {
     key <- .censoringFitKey(component, treatment, horizon, fixedVariance, argsList)
     if (key %in% used) {
       message(shareMessage)
     } else if (key %in% names(fits)) {
       message("Reusing the fitted ", description)
     } else {
-      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description)
+      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description, firstDay)
     }
     used <<- c(used, key)
     return(fits[[key]])
   }
-  fitModel <- function(kind, treatment, horizon, fixedVariance, description) {
+  fitModel <- function(kind, treatment, horizon, fixedVariance, description, firstDay) {
     treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
     prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
     message("Fitting ", description)
@@ -246,7 +272,7 @@ fitCensoringModels <- function(clones,
     model <- tryCatch(
       {
         if (kind == "binary") {
-          riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+          riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering, firstDay)
           .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
         } else {
           riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
@@ -259,14 +285,20 @@ fitCensoringModels <- function(clones,
       },
       error = function(e) stop(sprintf("Fitting the %s failed: %s", description, conditionMessage(e)), call. = FALSE)
     )
-    return(c(list(kind = kind, horizon = horizon), model))
+    # The binary model of the persons who have not started before day firstDay > 0 (graceStart, or G
+    # with graceRegime = "naturalGrace") records that day:
+    return(c(list(kind = kind, horizon = horizon), if (firstDay > 0) list(firstDay = as.integer(firstDay)), model))
   }
   for (strategyId in seq_along(strategies)) {
     strategy <- strategies[[strategyId]]
     horizon <- if (strategy$type == "neverInitiate") as.integer(maxRiskEnd) else as.integer(strategy$graceEnd)
     kind <- if (strategy$type == "initiateWithin" && fitCensoringModelsArgs$initiateWithinModel == "binary") "binary" else "hazard"
+    firstDay <- if (kind == "binary") .binaryModelFirstDay(strategy, fitCensoringModelsArgs$graceRegime) else 0L
     if (kind == "binary") {
-      description <- sprintf("binary censoring model at day %d for strategy %d (%s)", horizon, strategyId, strategy$label)
+      description <- sprintf(
+        "binary censoring model at day %d%s for strategy %d (%s)",
+        horizon, if (firstDay > 0) sprintf(" of the persons who have not started before day %d", firstDay) else "", strategyId, strategy$label
+      )
     } else {
       description <- sprintf(
         "%s initiation hazard model through day %d for strategy %d (%s)",
@@ -276,15 +308,38 @@ fitCensoringModels <- function(clones,
     models[[strategyId]] <- c(
       list(strategyId = strategyId, type = strategy$type, treatment = strategy$treatment),
       getFit(
-        component = .censoringFitComponent(kind, strategy$type),
+        component = .censoringFitComponent(kind, strategy$type, firstDay),
         kind = kind,
         treatment = strategy$treatment,
         horizon = horizon,
         fixedVariance = fixedPriorVariances[[as.character(strategyId)]],
         description = description,
-        shareMessage = sprintf("Strategy %d shares the censoring model of an earlier strategy", strategyId)
+        shareMessage = sprintf("Strategy %d shares the censoring model of an earlier strategy", strategyId),
+        firstDay = firstDay
       )
     )
+    if (strategy$type == "initiateWithin") {
+      models[[strategyId]]$graceStart <- as.integer(strategy$graceStart)
+      models[[strategyId]]$graceRegime <- fitCensoringModelsArgs$graceRegime
+      # With graceStart > 0 and the binary model at G, the weights of the days before graceStart come from
+      # the initiation hazard model through graceStart - 1 (that of a notInitiateWithin(graceStart - 1)
+      # strategy). With initiateWithinModel = "hazard", the hazard model through G gives them.
+      if (strategy$graceStart > 0 && kind == "binary") {
+        earlyHorizon <- as.integer(strategy$graceStart - 1L)
+        models[[strategyId]]$early <- getFit(
+          component = "hazard",
+          kind = "hazard",
+          treatment = strategy$treatment,
+          horizon = earlyHorizon,
+          fixedVariance = fixedPriorVariances[[paste0(strategyId, ".early")]],
+          description = sprintf(
+            "%s initiation hazard model through day %d for the days before the grace period of strategy %d (%s)",
+            fitCensoringModelsArgs$hazardModelType, earlyHorizon, strategyId, strategy$label
+          ),
+          shareMessage = sprintf("Strategy %d shares the initiation hazard model through day %d of an earlier strategy for the days before its grace period", strategyId, earlyHorizon)
+        )
+      }
+    }
     if (strategy$type == "notInitiateWithin" && fitCensoringModelsArgs$postGraceModel == "binary") {
       models[[strategyId]]$postGrace <- getFit(
         component = "binary",
@@ -317,9 +372,10 @@ fitCensoringModels <- function(clones,
 # hazard model through G of notInitiateWithin(G) and of initiateWithin(G) with initiateWithinModel =
 # "hazard" ("hazard"), or the initiation hazard model of neverInitiate ("neverInitiate"), which never
 # shares a fit with the others (Phase1Contracts section 5.3).
-.censoringFitComponent <- function(kind, type) {
+.censoringFitComponent <- function(kind, type, firstDay = 0L) {
   if (kind == "binary") {
-    return("binary")
+    # The binary model of the persons who have not started before day firstDay > 0 has another risk set:
+    return(if (firstDay > 0) sprintf("binaryFrom%d", as.integer(firstDay)) else "binary")
   }
   return(if (type == "neverInitiate") "neverInitiate" else "hazard")
 }
@@ -331,10 +387,11 @@ fitCensoringModels <- function(clones,
 .censoringFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
   argsList$postGraceModel <- NULL
   argsList$initiateWithinModel <- NULL
+  argsList$graceRegime <- NULL
   # The number of threads (set by runCcwAnalyses() from its multi-threading settings) does not change
   # the fit:
   argsList$control$threads <- NULL
-  if (component == "binary") {
+  if (startsWith(component, "binary")) {
     argsList$hazardModelType <- NULL
     argsList$timeBasis <- NULL
     argsList$covariateTimeInteraction <- NULL
@@ -372,10 +429,14 @@ fitCensoringModels <- function(clones,
   argsList <- attr(censoringModels, "metaData")$fitCensoringModelsArgs
   fits <- list()
   for (model in censoringModels) {
-    fit <- model[setdiff(names(model), c("strategyId", "type", "treatment", "postGrace"))]
-    fits[[.censoringFitKey(.censoringFitComponent(model$kind, model$type), model$treatment, model$horizon, NULL, argsList)]] <- fit
+    fit <- model[setdiff(names(model), c("strategyId", "type", "treatment", "postGrace", "graceStart", "graceRegime", "early"))]
+    firstDay <- if (is.null(model$firstDay)) 0L else model$firstDay
+    fits[[.censoringFitKey(.censoringFitComponent(model$kind, model$type, firstDay), model$treatment, model$horizon, NULL, argsList)]] <- fit
     if (!is.null(model$postGrace)) {
       fits[[.censoringFitKey("binary", model$treatment, model$postGrace$horizon, NULL, argsList)]] <- model$postGrace
+    }
+    if (!is.null(model$early)) {
+      fits[[.censoringFitKey("hazard", model$treatment, model$early$horizon, NULL, argsList)]] <- model$early
     }
   }
   return(fits)
@@ -383,16 +444,17 @@ fitCensoringModels <- function(clones,
 
 # Risk sets ----------------------------------------------------------------------------------------
 
-# Persons under follow-up at day G, with their subject (the unit of cross-validation folds, when
-# `persons` has one) and y = started on or before day G.
-.getBinaryRiskSet <- function(persons, treatmentDay, graceEnd, sameDayOrdering) {
+# Persons under follow-up at day G who have not started before day `firstDay` (graceStart, or G with
+# graceRegime = "naturalGrace"), with their subject (the unit of cross-validation folds, when `persons`
+# has one) and y = started on or before day G.
+.getBinaryRiskSet <- function(persons, treatmentDay, graceEnd, sameDayOrdering, firstDay = 0L) {
   eventDay <- pmin(persons$outcomeDay, persons$deathDay, na.rm = TRUE)
   if (sameDayOrdering == "eventsFirst") {
     noEvent <- is.na(eventDay) | eventDay > graceEnd
   } else {
     noEvent <- is.na(eventDay) | eventDay >= graceEnd
   }
-  inRiskSet <- noEvent & persons$riskEnd >= graceEnd
+  inRiskSet <- noEvent & persons$riskEnd >= graceEnd & (is.na(treatmentDay) | treatmentDay >= firstDay)
   return(tibble(
     rowId = persons$rowId[inRiskSet],
     personSeqId = persons$personSeqId[inRiskSet],
@@ -418,6 +480,70 @@ fitCensoringModels <- function(clones,
     lastDay = as.integer(lastDay[inRiskSet]),
     y = as.integer(initiated[inRiskSet])
   ))
+}
+
+# The first day of the binary model at G of an initiateWithin strategy: its risk set holds the persons
+# who have not started before it. That is graceStart (graceRegime = "binaryAtG"), or G
+# ("naturalGrace": the persons who reach day G untreated, whose probability of starting on day G gives the
+# last-interval weight).
+.binaryModelFirstDay <- function(strategy, graceRegime) {
+  if (identical(graceRegime, "naturalGrace")) {
+    return(as.integer(strategy$graceEnd))
+  }
+  return(as.integer(strategy$graceStart))
+}
+
+# Warns when, with graceRegime = "naturalGrace", persons reach day G of an initiateWithin strategy
+# untreated and under follow-up but none of them starts on day G. Only the clones that start on day G
+# represent these persons after G, so the regime is not identified: they are all censored at G, the fit
+# of the day-G model succeeds without events, no weight is infinite, and the risks after G stand for the
+# persons who started before G only.
+.warnNoNaturalGraceStarts <- function(strategies, persons, sameDayOrdering) {
+  for (strategyId in seq_along(strategies)) {
+    strategy <- strategies[[strategyId]]
+    if (strategy$type != "initiateWithin") {
+      next
+    }
+    treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
+    graceEnd <- as.integer(strategy$graceEnd)
+    riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, sameDayOrdering, graceEnd)
+    if (nrow(riskSet) > 0 && sum(riskSet$y) == 0) {
+      warning(sprintf(
+        "With graceRegime = \"naturalGrace\", none of the %d persons who reach day %d (graceEnd) of strategy %d (%s) untreated and under follow-up starts on day %d, so no clone represents them after day %d: the regime is not identified, and the risks after day %d stand for the persons who started before day %d only. See computePositivity(), or use graceRegime = \"binaryAtG\"",
+        nrow(riskSet), graceEnd, strategyId, strategy$label, graceEnd, graceEnd, graceEnd, graceEnd
+      ), call. = FALSE)
+    }
+  }
+  invisible(NULL)
+}
+
+# With initiateWithinModel = "hazard", the weights of an initiateWithin strategy use S(graceStart - 1 | X)
+# and, with graceRegime = "naturalGrace", S(G - 1 | X) of the pooled logistic hazard model, which it
+# evaluates at the ends of its intervals (counted from day 0). So graceStart, and G for "naturalGrace",
+# must start an interval: otherwise the weights would use the survival through an earlier interval end.
+.checkInitiateWithinHazardGrid <- function(strategies, fitCensoringModelsArgs) {
+  if (fitCensoringModelsArgs$initiateWithinModel != "hazard" || fitCensoringModelsArgs$hazardModelType != "logistic") {
+    return(invisible(NULL))
+  }
+  intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
+  for (strategy in strategies) {
+    if (strategy$type != "initiateWithin") {
+      next
+    }
+    if (strategy$graceStart %% intervalLength != 0) {
+      stop(sprintf(
+        "With initiateWithinModel = \"hazard\", the graceStart of strategy '%s' (%d) must be a multiple of the hazard model's intervalLength (%d), so that the days before it are whole intervals. Use daily intervals or initiateWithinModel = \"binary\"",
+        strategy$label, as.integer(strategy$graceStart), as.integer(intervalLength)
+      ))
+    }
+    if (identical(fitCensoringModelsArgs$graceRegime, "naturalGrace") && strategy$graceEnd %% intervalLength != 0) {
+      stop(sprintf(
+        "With initiateWithinModel = \"hazard\" and graceRegime = \"naturalGrace\", the graceEnd of strategy '%s' (%d) must be a multiple of the hazard model's intervalLength (%d), so that the last interval is day %d alone. Use daily intervals or initiateWithinModel = \"binary\"",
+        strategy$label, as.integer(strategy$graceEnd), as.integer(intervalLength), as.integer(strategy$graceEnd)
+      ))
+    }
+  }
+  invisible(NULL)
 }
 
 # Priors -------------------------------------------------------------------------------------------
@@ -452,12 +578,17 @@ fitCensoringModels <- function(clones,
 # Warns, once, when a strategy's censoring model predicts initiation on day 0 while the censoring models
 # use covariates whose window ends on day 0 or later (`endDay >= 0` in analysisRef, as with
 # FeatureExtraction's default endDays = 0): records of day 0 may follow the treatment decision of that
-# day (Phase1Contracts section 11.6). The binary model of an "initiateWithin" strategy with
-# graceStart = 0 predicts initiation on days 0..G, and the hazard models of "notInitiateWithin" and
-# "neverInitiate" strategies have a risk set that starts on day 0, so all of them are affected. Analyses
-# without a window (endDay NA, such as demographics) are not a concern.
+# day (Phase1Contracts section 11.6). The hazard models of "notInitiateWithin" and "neverInitiate"
+# strategies have a risk set that starts on day 0, and so have those of "initiateWithin" strategies
+# (with initiateWithinModel = "hazard", or for the days before graceStart > 0). The binary model at G of
+# an "initiateWithin" strategy predicts initiation on days firstDay..G, so it predicts day 0 unless it
+# is fit from a later day (graceRegime = "naturalGrace" with G > 0). Analyses without a window (endDay
+# NA, such as demographics) are not a concern.
 .warnDay0CovariateWindows <- function(strategies, cloneCensorWeightData, fitCensoringModelsArgs) {
-  day0 <- vapply(strategies, function(strategy) strategy$type != "initiateWithin" || strategy$graceStart == 0, logical(1))
+  day0 <- vapply(strategies, function(strategy) {
+    strategy$type != "initiateWithin" || fitCensoringModelsArgs$initiateWithinModel == "hazard" ||
+      strategy$graceStart > 0 || .binaryModelFirstDay(strategy, fitCensoringModelsArgs$graceRegime) == 0
+  }, logical(1))
   if (!fitCensoringModelsArgs$useCovariates || !any(day0)) {
     return(invisible(NULL))
   }
@@ -1107,6 +1238,18 @@ fitCensoringModels <- function(clones,
   return(exp(-sum(ifelse(eta > 30, eta, log1p(exp(eta))))))
 }
 
+# The probability of starting on days firstDay..G among the persons who have not started before day
+# firstDay, from an initiation hazard model through G: 1 - S(G | X) / S(firstDay - 1 | X), with S(-1) = 1
+# (1 - S(G | X) for firstDay = 0), for the persons `rowIds` of its risk set; and the same from its
+# numerator model.
+.hazardStartProbability <- function(model, rowIds, firstDay, graceEnd) {
+  return(1 - .computeHazardSurvival(model, rowIds, graceEnd) / .computeHazardSurvival(model, rowIds, firstDay - 1L))
+}
+
+.hazardNumeratorStartProbability <- function(model, firstDay, graceEnd) {
+  return(1 - .computeNumeratorSurvival(model, graceEnd) / .computeNumeratorSurvival(model, firstDay - 1L))
+}
+
 # The initiation hazard model of an initiateWithin(G) strategy with initiateWithinModel = "hazard" as the
 # binary model at G whose weights after G it gives: pi(X) = 1 - S(G | X) for the persons of its risk
 # set, and pi-bar = 1 - S-bar(G).
@@ -1124,6 +1267,79 @@ fitCensoringModels <- function(clones,
     ),
     numerator = list(propensityScore = 1 - .computeNumeratorSurvival(model, model$horizon))
   ))
+}
+
+# The model that gives the weights of an initiateWithin strategy, for .writeModelTables(). With
+# graceStart = 0 and graceRegime = "binaryAtG": the binary model at G, or the hazard model as one
+# (.hazardAsBinaryModel()). Otherwise the probability that a clone still followed after G followed the
+# strategy through G is computed per person (the clones that started on days graceStart..G and are under
+# follow-up at G): P = E(X) * p, where E(X) = S(graceStart - 1 | X) is the probability of not starting
+# before graceStart (1 with graceStart = 0), from the hazard model of the days before graceStart (the
+# `early` model with the binary model at G, else the hazard model through G), and p the probability of
+# then following the strategy at G:
+# - "binaryAtG": p = pi(X), the probability of starting by G of the persons under follow-up at G who
+#   have not started before graceStart (binary model, or 1 - S(G | X) / S(graceStart - 1 | X));
+# - "naturalGrace": p = 1 for a clone that started before G, and for a clone that started on day G the
+#   probability of starting on day G of the persons who reach day G untreated (the last-interval weight:
+#   binary model fit on them, or 1 - S(G | X) / S(G - 1 | X)).
+# The numerator is the same product from the numerator models: S-bar(graceStart - 1) times the marginal
+# probability of starting by G of the persons under follow-up at G who have not started before graceStart
+# (binary model: their observed share; hazard model: 1 - S-bar(G) / S-bar(graceStart - 1)), under both
+# regimes, so that it is the same for every clone of the strategy after G and the weighted Kaplan-Meier
+# risks do not depend on stabilization. With graceStart = 0 the result is a binary model whose
+# propensityScore is P; with graceStart > 0 it is the hazard model of the days before graceStart with
+# windowEnd = graceStart - 1, switchDay = G, and the survival after the switch `postSurvival` (rowId,
+# survival = P) with its numerator `postNumerator`.
+.initiateWithinWeightModel <- function(model, persons, sameDayOrdering) {
+  graceStart <- if (is.null(model$graceStart)) 0L else as.integer(model$graceStart)
+  graceRegime <- if (is.null(model$graceRegime)) "binaryAtG" else model$graceRegime
+  if (graceStart == 0 && graceRegime == "binaryAtG") {
+    return(if (model$kind == "hazard") .hazardAsBinaryModel(model) else model)
+  }
+  graceEnd <- as.integer(model$horizon)
+  treatmentDay <- if (model$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
+  riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, sameDayOrdering, graceStart)
+  followers <- riskSet[riskSet$y == 1, ]
+  startDay <- treatmentDay[match(followers$rowId, persons$rowId)]
+  earlyModel <- if (model$kind == "hazard") model else model$early
+  early <- rep(1, nrow(followers))
+  earlyNumerator <- 1
+  if (graceStart > 0) {
+    early <- .computeHazardSurvival(earlyModel, followers$rowId, graceStart - 1L)
+    earlyNumerator <- .computeNumeratorSurvival(earlyModel, graceStart - 1L)
+  }
+  firstDay <- .binaryModelFirstDay(list(graceStart = graceStart, graceEnd = graceEnd), graceRegime)
+  # The clones at risk of deviating at G (all of them with "binaryAtG"; those that start on day G with
+  # "naturalGrace"):
+  atRisk <- startDay >= firstDay
+  following <- rep(1, nrow(followers))
+  if (model$kind == "binary") {
+    following[atRisk] <- model$predictions$propensityScore[match(followers$rowId[atRisk], model$predictions$rowId)]
+    numeratorFollowing <- if (graceRegime == "naturalGrace") mean(riskSet$y) else model$numerator$propensityScore
+  } else {
+    following[atRisk] <- .hazardStartProbability(model, followers$rowId[atRisk], firstDay, graceEnd)
+    numeratorFollowing <- .hazardNumeratorStartProbability(model, graceStart, graceEnd)
+  }
+  if (graceStart == 0) {
+    return(list(
+      strategyId = model$strategyId,
+      type = model$type,
+      treatment = model$treatment,
+      kind = "binary",
+      modelType = "binary",
+      horizon = graceEnd,
+      predictions = tibble(rowId = followers$rowId, propensityScore = following),
+      numerator = list(propensityScore = numeratorFollowing)
+    ))
+  }
+  earlyModel$strategyId <- model$strategyId
+  earlyModel$type <- model$type
+  earlyModel$treatment <- model$treatment
+  earlyModel$windowEnd <- graceStart - 1L
+  earlyModel$switchDay <- graceEnd
+  earlyModel$postSurvival <- tibble(rowId = followers$rowId, survival = early * following)
+  earlyModel$postNumerator <- earlyNumerator * numeratorFollowing
+  return(earlyModel)
 }
 
 # The intercept plus time-basis part of the linear predictor for each interval (-Inf or Inf, a hazard

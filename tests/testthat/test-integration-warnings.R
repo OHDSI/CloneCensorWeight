@@ -186,6 +186,22 @@ test_that("fitCensoringModels warns once when initiation on day 0 meets covariat
   expect_length(warnings, 1)
   expect_match(warnings, "The censoring models of strategies 1 (First) and 2 (Second) model initiation on day 0", fixed = TRUE)
   expect_length(windowWarnings(noInitiation, windowData()), 0)
+
+  # The hazard models of the days before graceStart > 0 of initiateWithin strategies start on day 0
+  # too, also with initiateWithinModel = "binary":
+  population <- suppressMessages(createStudyPopulation(
+    cloneCensorWeightData = day0,
+    outcomeId = 3,
+    createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowEnd = 20, endAnchor = "cohort start")
+  ))
+  lateStarts <- suppressMessages(createClones(population, day0, createCreateClonesArgs(strategies = list(
+    createTreatmentStrategy(1, "First", "initiateWithin", graceStart = 2, graceEnd = 5),
+    createTreatmentStrategy(2, "Second", "initiateWithin", graceStart = 3, graceEnd = 5)
+  ))))
+  on.exit(close(lateStarts), add = TRUE)
+  warnings <- windowWarnings(lateStarts, day0)
+  expect_length(warnings, 1)
+  expect_match(warnings, "The censoring models of strategies 1 (First) and 2 (Second) model initiation on day 0", fixed = TRUE)
 })
 
 test_that("bootstrapCcwAnalysis warns about day-0 covariate windows once, for the full data", {

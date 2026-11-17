@@ -63,12 +63,13 @@ createM2FixturePopulation <- function(data, riskStart) {
   )))
 }
 
-m2Strategy <- function(strategyId, type, graceEnd = NULL, treatment = "treatment") {
+m2Strategy <- function(strategyId, type, graceEnd = NULL, treatment = "treatment", graceStart = 0) {
   return(createTreatmentStrategy(
     strategyId = strategyId,
     label = paste(type, graceEnd, treatment),
     type = type,
     treatment = treatment,
+    graceStart = graceStart,
     graceEnd = graceEnd
   ))
 }
@@ -262,7 +263,8 @@ referenceM2Clones <- function(tables, population, createStudyPopulationArgs, cre
       a <- starts[[strategy$treatment]]
       violatedOn <- function(day) {
         switch(strategy$type,
-          initiateWithin = day == strategy$graceEnd && (is.na(a) || a > strategy$graceEnd),
+          initiateWithin = (!is.na(a) && a == day && a < strategy$graceStart) ||
+            (day == strategy$graceEnd && (is.na(a) || a > strategy$graceEnd)),
           notInitiateWithin = !is.na(a) && a == day && day <= strategy$graceEnd,
           neverInitiate = !is.na(a) && a == day
         )

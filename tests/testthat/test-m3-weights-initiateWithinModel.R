@@ -233,7 +233,9 @@ test_that("The initiateWithin hazard model is shared with notInitiateWithin(G) o
     messages <- capture_messages(models <- fitCensoringModels(clones, data, iwArgs()))
     expect_equal(sum(grepl("^Fitting", messages)), 1)
     expect_true(any(grepl("Strategy 2 shares the censoring model of an earlier strategy", messages)))
-    expect_equal(models[[1]][-(1:2)], models[[2]][-(1:2)])
+    # The same fit (the initiateWithin strategy also records its graceStart and graceRegime):
+    fit <- function(model) model[setdiff(names(model), c("strategyId", "type", "graceStart", "graceRegime"))]
+    expect_equal(fit(models[[1]]), fit(models[[2]]))
     expect_equal(c(models[[1]]$type, models[[2]]$type), order)
     expect_equal(c(models[[1]]$kind, models[[2]]$kind), c("hazard", "hazard"))
     # With postGraceModel = "binary", the binary model at G is fit for the notInitiateWithin strategy:

@@ -53,7 +53,8 @@ settings and for every other choice that uses them, instead of
 refitted. When \code{fitCensoringModelsArgs} is not given, the
 specified settings are those the models were fit with. When they
 were fit with settings other than \code{fitCensoringModelsArgs} (besides
-the design choices compared), the models that depend on those
+the design choices compared, including \code{graceRegime}), the models
+that depend on those
 settings are fit again. For example, the binary model at G is
 reused when only the hazard model's settings (\code{timeBasis} or
 \code{hazardModelType}) differ, and the hazard models when only
@@ -61,13 +62,15 @@ reused when only the hazard model's settings (\code{timeBasis} or
 }
 \value{
 An object of class \code{CcwDiagnostics}: a list with \code{variants} (a tibble with \code{variant},
-\code{postGraceModel}, \code{covariateTimeInteraction}, \code{initiateWithinModel} and \code{specified}), \code{calibration},
+\code{postGraceModel}, \code{covariateTimeInteraction}, \code{initiateWithinModel}, \code{graceRegime} and
+\code{specified}; the \code{variant} label names \code{graceRegime} only when a strategy is \code{"initiateWithin"}),
+\code{calibration},
 \code{gracePeriodSelection}, \code{weightSummary}, \code{balance}, \code{positivity}, \code{sensitivity} (\code{NULL} unless
 requested) and \code{thresholds}.
 }
 \description{
 Computes, for the specified settings and for the alternative choices of \code{postGraceModel},
-\code{initiateWithinModel} and \code{covariateTimeInteraction}, the diagnostics that help choose between them for the data at hand:
+\code{initiateWithinModel}, \code{graceRegime} and \code{covariateTimeInteraction}, the diagnostics that help choose between them for the data at hand:
 calibration of the censoring models, the grace-period selection check, the weights on both scales,
 covariate balance after the grace period, positivity and, optionally, the estimates under each
 choice.
@@ -76,8 +79,11 @@ choice.
 The choices compared are \code{postGraceModel} \code{"hazard"} and \code{"binary"} (when a strategy is
 \code{"notInitiateWithin"}), crossed with \code{covariateTimeInteraction} \code{"none"}, \code{"day0"} and the
 specified one (with the pooled logistic hazard model, when a strategy uses it; the Cox model has
-none), crossed with \code{initiateWithinModel} \code{"binary"} and \code{"hazard"} (when a strategy is
-\code{"initiateWithin"}). Choices that give the same censoring models (for example the interaction
+none), crossed with \code{initiateWithinModel} \code{"binary"} and \code{"hazard"} and with \code{graceRegime}
+\code{"binaryAtG"} and \code{"naturalGrace"} (when a strategy is \code{"initiateWithin"}; combinations that the
+hazard model's interval grid does not allow are left out). \code{graceRegime} chooses the regime (the
+estimand) rather than a model, so its diagnostics describe the weights of each regime and do not
+rank them. Choices that give the same censoring models (for example the interaction
 settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
 and shared by the choices that use it (for example the hazard model through \code{G} serves both
 \code{postGraceModel} choices, and both strategies with \code{initiateWithinModel = "hazard"}), and the models
