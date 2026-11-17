@@ -216,6 +216,7 @@ Documentation:
   their half is skipped), `ccwr` on its lung cancer data (outcome stage gated, full pipeline reported),
   and Synthea AMI against `ccwr` (reported). Comparisons whose package or data were missing are listed
   as skipped. The scripts that make the results are kept with the developers' validation materials.
-* The cross-check `test-crossChecks-whatif.R` repeats the What If G = 0 reduction in the nightly
-  cross-checks (`CCW_RUN_CROSSCHECKS=true`) when the environment variable `CCW_NHEFS_PATH` names a local
-  copy of the NHEFS data, which is not distributed with the package; it skips otherwise.
+* The cross-check `test-crossChecks-whatif.R` repeats the What If G = 0 reduction in the cross-checks,
+  which run on demand (`CCW_RUN_CROSSCHECKS=true`, as the developers' `extras/nightly/runNightly.sh`
+  sets; nothing schedules them), when the environment variable `CCW_NHEFS_PATH` names a local copy of
+  the NHEFS data, which is not distributed with the package; it skips otherwise.
