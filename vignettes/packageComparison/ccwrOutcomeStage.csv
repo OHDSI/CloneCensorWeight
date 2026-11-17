@@ -1,0 +1,5 @@
+"quantity","ccwr","ccw","tolerance","difference","gate"
+"1-year risk, surgery",0.1840343258,0.1840343258,1e-10,-3.885780586e-16,"pass"
+"1-year risk, control",0.304712451,0.304712451,1e-10,5.440092821e-15,"pass"
+"log HR (Breslow)",-0.4984358277,-0.4984358277,1e-06,-2.661648679e-12,"pass"
+"robust SE of log HR",0.2441868558,0.2441868558,1e-06,5.476175069e-14,"pass"

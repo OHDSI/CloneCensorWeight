@@ -30,6 +30,7 @@ articles:
       - MultipleAnalyses
       - ResultsSchema
       - Simulation
+      - PackageComparison
   - title: "Developer documentation"
     navbar: ~
     contents:
