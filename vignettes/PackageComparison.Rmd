@@ -26,9 +26,9 @@ criterion. A *reported* comparison is shown without one, because the two impleme
 different, documented choices, so exact agreement is not expected.
 
 The component-level references (`survival`, `sandwich`, `boot`, `glmnet`) are tested on every check,
-and the cross-checks against `ccwr`, `ipw`, `TTE`, `trtswitch`, `geepack` and `simcausal` run in the
-nightly test suite (`tests/testthat/test-crossChecks-*.R`). This vignette shows the end-to-end
-comparisons. Comparisons whose reference package or data were not available are listed as skipped,
+and the cross-checks against `ccwr`, `ipw`, `TTE`, `trtswitch`, `geepack` and `simcausal`
+(`tests/testthat/test-crossChecks-*.R`) run when `CCW_RUN_CROSSCHECKS=true`, from the developers'
+cross-check runner. This vignette shows the end-to-end comparisons. Comparisons whose reference package or data were not available are listed as skipped,
 with the reason.
 
 ## Overview
@@ -37,7 +37,7 @@ with the reason.
 show(tab("overview"), col.names = c("Comparison", "Criterion", "Result"))
 ```
 
-The packages the comparisons use, and whether they were installed where the results were made:
+The packages the comparisons use, and whether they were installed when the results were made:
 
 ```{r packages}
 show(tab("packages"), col.names = c("Tier", "Package", "Version", "Status"))
@@ -90,39 +90,42 @@ The parametric g-formula (`gfoRmula`, `gfoRmulaICE`) and TMLE (`lmtp`) estimate 
 clone-censor-weight analysis under a different set of modelling assumptions. The plan compares them on
 data from `simulateCloneCensorWeightData()`, whose true risks `computeTrueRisks()` computes by
 simulating each regime directly: data-generating process (a), in which treatment acts only after the
-grace period, so that the binary-at-G regime and the natural grace period have the same risks; a grace
-period of 7 days, a daily horizon of 56 days, one binary confounder and `r format(gformula$n, big.mark = ",", scientific = FALSE)`
+grace period; a grace period of 7 days, a daily horizon of 56 days, one binary confounder and `r format(gformula$n, big.mark = ",", scientific = FALSE)`
 persons per replicate.
 
-**The g-formula packages were not installed** (`r gformula$gformulaPackages`), so only the
-CloneCensorWeight half of this comparison ran: `r gformula$replicates` replicates
+**The g-formula packages were not installed** (`r gformula$missingGformulaPackages`), so only the
+CloneCensorWeight half of this comparison ran: `r format(gformula$replicates, big.mark = ",")` replicates
 (`r gformula$failedReplicates` failed), censoring models with the package defaults but no prior
 (correctly specified), weighted Kaplan-Meier/Aalen-Johansen risks with death as a competing event.
-The pre-specified gate is |z| < 3 for every risk, risk difference and log risk ratio at days 7, 14,
-28 and 56, where z is the mean bias over its Monte Carlo standard error (combined with that of the
+The plan asks for agreement within the Monte Carlo SE of the truth. The gate, set before the first
+run, makes this concrete for every risk, risk difference and log risk ratio at days 7, 14, 28 and 56:
+|z| < 3, where z is the mean bias over its Monte Carlo standard error (combined with that of the
 truth), a Bonferroni bound for 16 cells at a family-wise 5%. Bias over the empirical SE and the
 coverage of the 95% confidence intervals are reported. The same analyses with the default
-99th-percentile weight truncation are reported, not gated.
+99th-percentile weight truncation are reported, not gated. Under process (a), when the analysis
+uses the grace period of the process, the true risks of the binary-at-G regime and of the natural grace period are
+identical by construction (`computeTrueRisks()` uses the same random numbers for both, and the effect
+starts at the end of the grace period), so one truth serves both.
 
 ```{r gformula}
 x <- tab("gformulaCells")
 sameUnderTruncation <- isTRUE(all.equal(x$mean[x$gate == "reported"], x$mean[x$gate != "reported"]))
-show(if (sameUnderTruncation) x[x$gate != "reported", ] else x, digits = 4, col.names = c("Weights", "Estimand", "Replicates", "Truth", "Mean", "Bias", "Empirical SE",
+y <- if (sameUnderTruncation) x[x$gate != "reported", ] else x
+y$bias <- formatC(y$bias, format = "e", digits = 1)
+for (column in c("empSe", "modelSe")) y[[column]] <- formatC(y[[column]], format = "fg", digits = 2, flag = "#")
+show(y, digits = 4, col.names = c("Weights", "Estimand", "Replicates", "Truth", "Mean", "Bias", "Empirical SE",
                                   "Mean model SE", "z", "Bias / empirical SE", "Coverage", "Gate"))
 ```
 
-Of the gated cells, `r sum(abs(x$biasOverEmpSe[x$gate != "reported"]) >= 0.1)` have a bias of at
-least 0.1 empirical SE, the bias criterion of the package's main simulation study (with 500
-replicates, 0.1 empirical SE is about 2.2 Monte Carlo SEs). The largest |z| is
+The bias criterion of the package's main simulation study, |bias| < 0.1 empirical SE, has a Monte
+Carlo SE of about 1/sqrt(`r gformula$replicates`) = `r sprintf("%.3f", 1 / sqrt(gformula$replicates))`
+here, so 0.1 is about `r sprintf("%.1f", 0.1 * sqrt(gformula$replicates))` Monte Carlo SEs. The largest
+|bias| / empirical SE of the gated cells is
+`r sprintf("%.3f", max(abs(x$biasOverEmpSe[x$gate != "reported"])))`
+(`r sum(abs(x$biasOverEmpSe[x$gate != "reported"]) >= 0.1)` cells at or above 0.1), and the largest |z| is
 `r sprintf("%.2f", max(abs(x$z[x$gate != "reported"])))`. With one binary confounder the weights take
 few distinct values, and the 99th-percentile cap (taken over those values)
 `r if (sameUnderTruncation) "leaves every estimate unchanged, so its rows are not shown" else "changes some estimates"`.
-
-Under process (a) the truths of the two grace-period definitions agree:
-
-```{r gformulaTruth}
-show(tab("gformulaTruthByRegime"), digits = 6, col.names = c("Estimand", "Binary at G", "Natural grace"))
-```
 
 ## ccwr on the lung cancer data
 
@@ -162,8 +165,9 @@ death within one year as the outcome. Synthea assigns treatment timing by rule, 
 artificial: this is a test of plumbing, not clinical evidence. Both packages analyse the same random
 subsample of 5,000 persons. `ccwr` uses a fixed list of covariates (5-year age groups, sex, the
 Charlson index, and antithrombotic, lipid-modifying and ACE-inhibitor use in the prior year) in Cox
-censoring models for both arms. CloneCensorWeight is shown with the same covariates and no prior, and with its defaults
-(all baseline covariates, L1 prior with cross-validation). The plan expects the same direction and
+censoring models for both arms, and does not truncate weights. CloneCensorWeight is shown with the same
+covariates, no prior and no truncation, and with its defaults (all baseline covariates, L1 prior with
+cross-validation, 99th-percentile truncation). The plan expects the same direction and
 overlapping confidence intervals. Counts below 11 are shown as "<11".
 
 ```{r syntheaCounts}
@@ -194,22 +198,26 @@ package was not installed.
 - **Webster-Clark et al. (2025) tutorial.** The plan gates the clone counts, end reasons and person-time
   of the 0–30 and 0–90 day regimes against the tutorial's `01_cloning_and_censoring.R` on its
   SynPUF-derived `baseccwcohort.sas7bdat`, with `"deviationFirst"`. The tutorial's data and code were
-  not available locally and `haven` was not installed.
+  not available when these results were made, and `haven` was not installed.
 - **The Maringe 2020 gist translation**, whose sanity targets are a 1-year survival difference of about
-  0.12 and a hazard ratio of about 0.607: the gist was not available locally.
+  0.12 and a hazard ratio of about 0.607: the gist was not available when these results were made.
 - **`ccwbalance`** (the natural-grace truth) and **`TrialEmulation`**: not installed.
 
 ```{r crossChecks, eval = has("crossChecks"), results = "asis"}
-cat("## The nightly cross-checks\n\nThe Tier 2 cross-check suite, as last run for these results:\n\n")
+cat("## The cross-checks\n\nThe Tier 2 cross-check suite, as last run for these results:\n\n")
 print(show(tab("crossChecks"), col.names = c("Test file", "Tests", "Expectations", "Failed", "Errors", "Skipped", "Commit", "Date")))
 ```
 
 ## How the results were made
 
-The scripts are in the developers' `extras/comparison/` folder, which is part of neither the git
-repository nor the installed package: `whatif/` (with a reviewed transcription of Program 17.3), `gformula/`, `ccwr/`,
-`synthea/`, and `PackageComparisonVignetteDataFetch.R`, which writes the tables shown here.
-`extras/nightly/runNightly.sh` runs the cross-check suite and writes a dated log.
+The scripts that make these results (one per comparison, with a reviewed transcription of Program
+17.3) are kept with the developers' validation materials, not in the package; so is the runner of
+the cross-check suite. The source commits of the CloneCensorWeight and Cyclops builds that made each
+result:
+
+```{r provenance}
+show(tab("provenance"), col.names = c("Comparison", "Date", "CloneCensorWeight commit", "Cyclops commit"))
+```
 
 ## References
 

@@ -1,2 +1,2 @@
-"n","replicates","failedReplicates","gatedCells","passed","gformulaPackages"
-50000,500,0,16,16,"gfoRmula (not installed), gfoRmulaICE (not installed), lmtp (not installed)"
+"n","replicates","failedReplicates","gatedCells","passed","missingGformulaPackages"
+50000,1000,0,16,16,"gfoRmula, gfoRmulaICE, lmtp"

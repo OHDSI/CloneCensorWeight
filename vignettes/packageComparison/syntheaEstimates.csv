@@ -1,4 +1,4 @@
 "fit","riskTarget","riskComparator","rd","rdLb","rdUb","hr","hrLb","hrUb","maxWeight","sameDirectionAsCcwr","hrCiOverlapsCcwr"
 "ccwr: fixed covariates, Cox censoring models, no truncation",0.06107,0.08802,-0.02695,,,0.6908,0.4409,1.082,294,TRUE,TRUE
-"CloneCensorWeight: fixed covariates, no prior (defaults otherwise)",0.06058,0.08801,-0.02743,-0.05486,3.615e-06,0.6858,0.4894,0.961,7.69,TRUE,TRUE
-"CloneCensorWeight: package defaults (all covariates, L1 + CV)",0.06275,0.04695,0.0158,-0.007363,0.03896,1.349,0.8264,2.204,26.26,FALSE,TRUE
+"CloneCensorWeight: fixed covariates, no prior, no truncation (defaults otherwise)",0.06047,0.08565,-0.02518,-0.05213,0.001775,0.7041,0.5015,0.9886,12.92,TRUE,TRUE
+"CloneCensorWeight: package defaults (all covariates, L1 + CV, 99th-percentile truncation)",0.06275,0.04695,0.0158,-0.007363,0.03896,1.349,0.8264,2.204,26.26,FALSE,TRUE
