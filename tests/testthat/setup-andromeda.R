@@ -2,7 +2,9 @@
 # `if (isAndromeda(andromeda()))`, which calls the function Andromeda::andromeda() instead of using
 # its argument, so every flush creates (and leaks) a new temporary duckdb database. Andromeda flushes
 # on every `x$name <- <tbl>`, so the tests spent about half their time opening databases. The patch
-# below uses the argument, as intended; it changes no results. It is applied only while the
+# below uses the argument, as intended; it changes no results. (So a flush in the tests checkpoints the
+# Andromeda database itself, and with evictCache briefly lowers its memory limit, which the unpatched
+# Andromeda that users run does to the throwaway database instead.) It is applied only while the
 # installed Andromeda still has the bug, so it switches itself off once Andromeda is fixed.
 local({
   flush <- Andromeda::flushAndromeda

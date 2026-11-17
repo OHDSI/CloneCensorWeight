@@ -158,8 +158,9 @@ test_that("Binary and Cox weights match glm and survfit references, with segment
     list(riskStart = 0L, sameDayOrdering = "deviationFirst", type = "neverInitiate"),
     list(riskStart = 1L, sameDayOrdering = "eventsFirst", type = "neverInitiate")
   )
-  # The default tier runs two configurations that cover every riskStart, ordering and strategy type:
-  for (configuration in testConfigurations(configurations, configurations[c(2, 6)])) {
+  # The default tier runs two configurations that cover every riskStart, ordering and strategy type,
+  # with the binary model (notInitiateWithin) under the default eventsFirst:
+  for (configuration in testConfigurations(configurations, configurations[c(3, 5)])) {
     sameDayOrdering <- configuration$sameDayOrdering
     fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 21)
     data <- createM3Data(fixture)

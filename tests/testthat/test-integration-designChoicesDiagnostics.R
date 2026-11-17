@@ -106,7 +106,8 @@ test_that("computeCcwDiagnostics compares postGraceModel, covariateTimeInteracti
 
 test_that("computeCcwDiagnostics with the Cox hazard model compares fewer choices, and adds the sensitivity analysis", {
   # Full tier: another computeCcwDiagnostics() call, with the sensitivity analysis. The default tier
-  # runs sensitivity = TRUE on the smaller design of the next test.
+  # runs sensitivity = TRUE on the smaller design of the last test, and the Cox grid with the Cox models
+  # given below.
   skipUnlessFullTests()
   shared <- sharedDiagnostics()
   data <- shared$data
@@ -156,8 +157,34 @@ test_that("computeCcwDiagnostics reuses given censoring models and fits only the
   expect_error(computeCcwDiagnostics(clones, data, args, censoringModels = list()), "CcwCensoringModels")
 })
 
+test_that("computeCcwDiagnostics takes the specified settings from Cox models given, and compares fewer choices with them", {
+  # The light form of the next test (and of the Cox grid of the test with the sensitivity analysis):
+  # Cox hazard models give 8 variants rather than 16.
+  shared <- sharedDiagnostics()
+  data <- shared$data
+  clones <- shared$clones
+  cox <- suppressMessages(fitCensoringModels(clones, data, designArgs(hazardModelType = "cox", initiateWithinModel = "hazard")))
+  # Without fitCensoringModelsArgs, the specified settings are those of the models:
+  messages <- capture_messages(fromModels <- computeCcwDiagnostics(clones, data, numberOfGroups = 5, censoringModels = cox))
+  variants <- fromModels$variants
+  specified <- variants[variants$specified, ]
+  expect_equal(nrow(specified), 1)
+  expect_equal(c(specified$postGraceModel, specified$covariateTimeInteraction, specified$initiateWithinModel, specified$graceRegime), c("hazard", "none", "hazard", "binaryAtG"))
+  expect_equal(variants$variant[1], specified$variant)
+  # The Cox model has no interactions, so only postGraceModel, initiateWithinModel and graceRegime vary:
+  expect_equal(variants$covariateTimeInteraction, rep("none", 8))
+  expect_equal(nrow(unique(variants[, c("postGraceModel", "initiateWithinModel", "graceRegime")])), 8)
+  # The hazard models are reused; only the binary models at G of strategy 1 (of both regimes) are fit:
+  fitting <- grep("^Fitting", messages, value = TRUE)
+  expect_length(fitting, 2)
+  expect_match(fitting[1], "binary censoring model at day 7 for strategy 1")
+  expect_match(fitting[2], "binary censoring model at day 7 of the persons who have not started before day 7 for strategy 1")
+  expect_true(any(grepl("^Reusing the fitted cox initiation hazard model through day 7 for strategy 1", messages)))
+})
+
 test_that("computeCcwDiagnostics takes the specified settings from the models given, and refits only the models whose settings differ", {
-  # Full tier: three more computeCcwDiagnostics() calls of 16 variants each.
+  # Full tier: three more computeCcwDiagnostics() calls of 16 variants each (the test above is the
+  # light form of the first).
   skipUnlessFullTests()
   shared <- sharedDiagnostics()
   data <- shared$data

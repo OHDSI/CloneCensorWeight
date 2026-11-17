@@ -728,8 +728,6 @@ test_that("runCcwAnalyses runs with an open connection, cross-validated censorin
 })
 
 test_that("A multi-threaded run gives the results of a single-threaded one", {
-  # Full tier: a third run of the small design, in worker processes that each load the package.
-  skipUnlessFullTests()
   # Worker processes load the installed package, which must hold this version.
   installed <- find.package("CloneCensorWeight", lib.loc = .libPaths(), quiet = TRUE)
   skip_if(

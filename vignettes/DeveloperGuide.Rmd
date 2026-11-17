@@ -595,12 +595,16 @@ few minutes:
   `TESTTHAT_CPUS` processes; `tests/testthat.R` sets 4 when `NOT_CRAN=true` (as `devtools::check()`
   sets it) and `TESTTHAT_CPUS` is unset, and otherwise (on CRAN) testthat's default of 2 applies. Set
   `TESTTHAT_CPUS` to use another number, or `TESTTHAT_PARALLEL=false` to run the files one after the
-  other. Each process has its own temporary folder, so tests that write files or build a Eunomia
+  other. `devtools::test()` does not run `tests/testthat.R`, so it starts 2 processes unless you first
+  run `Sys.setenv(TESTTHAT_CPUS = 4)`. Each process has its own temporary folder, so tests that write files or build a Eunomia
   database do not collide.
 - `tests/testthat/setup-andromeda.R` works around a bug in Andromeda 1.2.1, whose `flushAndromeda()`
   creates (and leaks) a new temporary duckdb database on every flush, which happens on every
-  `andromeda$table <- <dplyr table>`. That doubled the run time of most tests. The workaround is
-  applied only while the installed Andromeda has the bug.
+  `andromeda$table <- <dplyr table>`. That doubled the run time of most tests. With the workaround a
+  flush checkpoints the Andromeda database itself, as Andromeda intends (and with `evictCache` briefly
+  lowers its memory limit), whereas Andromeda 1.2.1 outside the tests checkpoints a throwaway database.
+  The workaround is applied only while the installed Andromeda has the bug; once a fixed Andromeda is
+  released, the package should require it.
 - `tests/testthat/setup-dbplyr.R` makes dbplyr 2.5.2 format the error message of a `summarise()`
   variable only when the error is raised, as the development version of dbplyr does. Formatting it
   up front for every `count()` took about 15% of the test time. It too switches itself off once
@@ -611,13 +615,16 @@ few minutes:
 
 The **full tier** also runs the heavy versions: every configuration of the loops that compare with
 reference implementations, the statistical checks at large sample sizes, the bootstrap shift warning
-with 20 replicates, the Cox MSM on a million segments and the multi-threaded `runCcwAnalyses()`. Run it
-with
+with 20 replicates and the Cox MSM on a million segments. Run it with
 
 ```r
-Sys.setenv(CCW_FULL_TESTS = "true")
+Sys.setenv(CCW_FULL_TESTS = "true", TESTTHAT_CPUS = 4)
 devtools::test()
 ```
+
+The multi-threaded `runCcwAnalyses()` test (in both tiers) runs its work in worker processes that load
+the installed CloneCensorWeight, so under `devtools::test()` install the current version first. `R CMD
+check` does this itself.
 
 In a test, `skipUnlessFullTests()` skips a block outside the full tier, and
 `testConfigurations(all, light)` gives the configurations a loop runs: `all` in the full tier, and

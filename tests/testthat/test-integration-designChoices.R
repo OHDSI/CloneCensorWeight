@@ -482,6 +482,8 @@ test_that("The default sensitivity variants include initiateWithinModel, and its
     c("initiateWithinModel = binary", "graceRegime = naturalGrace", "covariateTimeInteraction = none", "covariateTimeInteraction = interval", "basis = allClones")
   )
   expect_equal(variants(initiateBoth, graceRegime = "naturalGrace"), c("initiateWithinModel = hazard", "graceRegime = binaryAtG", "basis = allClones"))
+  # The Cox hazard model has no interactions to vary:
+  expect_equal(variants(initiateBoth, initiateWithinModel = "hazard", hazardModelType = "cox"), c("initiateWithinModel = binary", "graceRegime = naturalGrace", "basis = allClones"))
   # With graceStart > 0 the days before graceStart use the hazard model, so its interactions vary:
   lateStart <- list(createTreatmentStrategy(1, "Initiate on days 3 to 7", "initiateWithin", graceStart = 3, graceEnd = 7), initiateBoth[[2]])
   expect_true("covariateTimeInteraction = none" %in% variants(lateStart))

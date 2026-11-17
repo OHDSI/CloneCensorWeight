@@ -187,8 +187,9 @@ test_that("initiateWithin hazard weights match glm and coxph references, stabili
     list(riskStart = 0L, sameDayOrdering = "deviationFirst", hazardModelType = "cox"),
     list(riskStart = 1L, sameDayOrdering = "eventsFirst", hazardModelType = "cox")
   )
-  # The default tier runs three configurations that cover every riskStart, ordering and model type:
-  for (configuration in testConfigurations(configurations, configurations[2:4])) {
+  # The default tier runs three configurations that cover every riskStart, ordering and model type,
+  # among them the logistic model with eventsFirst (the first):
+  for (configuration in testConfigurations(configurations, configurations[c(1, 3, 4)])) {
     info <- paste(unlist(configuration), collapse = ", ")
     sameDayOrdering <- configuration$sameDayOrdering
     fixture <- createM3Fixture(150, riskStart = configuration$riskStart, seed = 41)
