@@ -1,537 +1,510 @@
 ---
-title: "Single Clone-Censor-Weight Study"
-author: "William J. O'Brien"
+title: "Single studies using the CloneCensorWeight package"
+author: "Marc A. Suchard, William J. O'Brien and Patrick Ryan"
 date: "`r Sys.Date()`"
 output:
   html_document:
-    toc: true
-    toc_float: true
-    number_sections: true
+    number_sections: yes
+    toc: yes
 vignette: >
-  %\VignetteIndexEntry{Single Clone-Censor-Weight Study}
-  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteIndexEntry{Single studies using CloneCensorWeight}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, eval = FALSE, comment = "#>")
-```
-
-```{r load-packages, echo=FALSE, message=FALSE, warning=FALSE, eval=TRUE}
-#library(CloneCensorWeight)
-devtools::load_all()
-library(Capr)
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(CloneCensorWeight)
+knitr::opts_chunk$set(comment = "#>")
+# Outputs of a run on the Synthea database, precomputed by extras/vignetteRuns/SingleStudyVignetteDataFetch.R.
+# Counts below 11 are shown as "<11".
+dataFolder <- file.path("data", "SingleStudy")
+load <- function(name) readRDS(file.path(dataFolder, paste0(name, ".rds")))
+showCounts <- function(x) ifelse(is.na(x), "<11", format(x, big.mark = ","))
+runInfo <- load("runInfo")
 ```
 
 # Introduction
 
-This vignette demonstrates how to run a single clone-censor-weight (CCW)
-target trial emulation using the `CloneCensorWeight` package. We use the OHDSI
-[Capr](https://ohdsi.github.io/Capr/) package to define cohorts in R and
-[CohortGenerator](https://ohdsi.github.io/CohortGenerator/) to instantiate
-them on a database before running the analysis.
+This vignette describes how you can use the `CloneCensorWeight` package to emulate a single target trial with the clone-censor-weight (CCW) method. We walk through all the steps of an example study: the effect on all-cause mortality of starting metoprolol within 7 days of a first acute myocardial infarction (AMI), compared with not starting it within 7 days.
 
-## Clinical question
+A naive comparison of persons who started the drug within 7 days with those who did not is biased in two ways. *Immortal time*: a person who starts on day 5 had to survive to day 5 to be classified as a starter, and a naive analysis credits those days to the drug. *Selection on the decision*: who starts, and when, depends on the person's characteristics. The clone-censor-weight method addresses both. At the AMI (time zero), every person is cloned once per treatment strategy, so both arms start with the same persons. A clone is censored when its person's treatment no longer agrees with its strategy (artificial censoring), and the clones that remain are weighted by the inverse probability of remaining uncensored, so that they stand for all clones of their strategy.
 
-**Among adults with rheumatoid arthritis (RA), psoriatic arthritis (PsA), or
-ulcerative colitis (UC) who newly initiate a JAK inhibitor, does receiving the
-recombinant zoster vaccine (RZV, Shingrix) within 90 days of JAK inhibitor
-initiation reduce incident herpes zoster over two years, compared with no
-vaccination during that window?**
+The example runs on a synthetic database: a Synthea simulation of one million persons in the OMOP Common Data Model, version 5.4. Synthea assigns treatments by rule, so the confounding in these data is artificial: the example demonstrates the software, and its results are not clinical evidence. The outputs shown were computed on `r runInfo$runDate` with `CloneCensorWeight` `r runInfo$packageVersion` (commit `r runInfo$commit`); the code that produced them is shown, but not evaluated when this vignette is built. Counts below 11 are shown as "<11".
 
-## Why CCW is needed
-
-JAK inhibitors substantially increase herpes zoster risk. A naive comparison
-of vaccinated vs. unvaccinated JAK inhibitor users is biased for two reasons.
-
-**Immortal time bias.** A patient vaccinated on day 60 has survived 60 days
-without herpes zoster before entering the "vaccinated" group; a naive analysis
-credits the vaccine with those event-free days.
-
-**Informative censoring.** Within the CCW framework, a clone assigned to the
-"vaccinate within 90 days" arm is artificially censored when the patient has
-not yet vaccinated. Because healthier, more care-engaged patients are more
-likely to vaccinate promptly, the subjects who *survive* in the vaccinated arm
-are a positively selected subset. Inverse probability of censoring weighting
-(IPCW) corrects for this selection.
-
-CCW addresses both problems. Every patient is cloned into both arms at cohort
-entry, so baseline balance is guaranteed. Each clone is censored only when its
-observed behavior deviates from its assigned protocol. IPCW restores the
-target population.
-
-## Target trial specification
+# The target trial
 
 | Element | Specification |
 |---|---|
-| Eligibility | Adults with RA, PsA, or UC; new JAK inhibitor user (no use in prior 365 days); no prior RZV in past 5 years; ≥ 365 days prior observation |
-| Treatment arm | Receive first dose of RZV within 90 days of JAK inhibitor start |
-| Comparator arm | No RZV within the first 90 days |
-| Assignment | Cloning at JAK inhibitor start date |
-| Follow-up | Until herpes zoster, death, disenrollment, or 730 days |
-| Primary outcome | Incident herpes zoster |
-| Causal contrast | Per-protocol effect of early vaccination vs. deferred/no vaccination |
+| Eligibility | First AMI, at least 365 days of observation before it, no metoprolol at any time before it, and no other beta-blocker started on or before the AMI day |
+| Treatment strategies | (1) Start metoprolol within 7 days of the AMI (days 0 to 7); (2) do not start metoprolol within 7 days |
+| Assignment | Both strategies at the AMI (day 0), by cloning |
+| Follow-up | From day 0 until death, end of observation, or day 1,825 (5 years) |
+| Outcome | All-cause death |
+| Causal contrasts | Risks at 1 and 5 years, their difference and ratio, and the hazard ratio, of the per-protocol effect of the strategies |
+| Analysis | Clones censored at deviation from their strategy; inverse probability of censoring weights from the censoring models; weighted Kaplan-Meier risks and a weighted Cox model; robust standard errors clustered on person |
 
----
+Both strategies have a grace period of 7 days. Under strategy 1, a clone is censored on day 8 if its person has not started metoprolol by day 7. Under strategy 2, a clone is censored on the day its person starts metoprolol, if that day is on or before day 7. A person who starts after day 7 follows strategy 2.
 
-# Connecting to the database
+# Data extraction
 
-`CloneCensorWeight` uses `DatabaseConnector` to communicate with the CDM.
-Adjust the connection details for your platform.
+The first step is extracting all necessary data from the database server holding the data in the OMOP Common Data Model (CDM) format.
 
-```{r connect}
+## Configuring the connection to the server
+
+We need to tell R how to connect to the server where the data are. `CloneCensorWeight` uses the `DatabaseConnector` package, which provides the `createConnectionDetails` function. Type `?createConnectionDetails` for the specific settings required for the various database management systems (DBMS). For example, one might connect to a PostgreSQL database using this code:
+
+```{r eval=FALSE}
 library(CloneCensorWeight)
-library(Capr)
-library(CohortGenerator)
-
 connectionDetails <- DatabaseConnector::createConnectionDetails(
-  dbms    = "postgresql",
-  server  = "localhost/ohdsi",
-  user    = "joe",
+  dbms = "postgresql",
+  server = "localhost/ohdsi",
+  user = "joe",
   password = "supersecret"
 )
-
-cdmDatabaseSchema    <- "cdm_v54"
-cohortDatabaseSchema <- "scratch"
-cohortTable          <- "ccw_jak_rzv"
-
-options(sqlRenderTempEmulationSchema = NULL)
+cdmDatabaseSchema <- "my_cdm_data"
+cohortDatabaseSchema <- "my_results"
+cohortTable <- "my_cohorts"
 ```
 
----
+The last lines define the `cdmDatabaseSchema`, `cohortDatabaseSchema`, and `cohortTable` variables. We'll use these later to tell R where the data in CDM format live, and where we want to write the cohorts.
 
-# Defining cohorts with Capr
+In this example the Synthea database is a DuckDB file, which we attach read-only to an in-memory DuckDB database, so that the cohorts can be written to the in-memory database. An attached database does not survive a new connection, so we open one connection and pass it to every function, instead of connection details:
 
-We define four cohort types:
-
-1. **Index cohort** — new JAK inhibitor users with an autoimmune indication
-2. **Exposure cohort** — first dose of RZV (used for both arms)
-3. **Primary outcome cohort** — incident herpes zoster
-4. **Negative control outcome cohorts** — for empirical calibration
-
-Concept IDs can be browsed and verified at
-[Athena](https://athena.ohdsi.org/).
-
-## Concept sets
-
-```{r concept-sets}
-# JAK inhibitors (tofacitinib, baricitinib, upadacitinib, filgotinib,
-# abrocitinib — include all descendants to capture branded formulations)
-jakInhibitors <- cs(
-  descendants(42873017L,  # tofacitinib
-              1510448L,   # baricitinib
-              2213473L,   # upadacitinib
-              2109604L,   # filgotinib
-              2215702L),  # abrocitinib
-  name = "JAK inhibitors"
-)
-
-# Autoimmune indications
-rheumatoidArthritis <- cs(descendants(80809L),  name = "Rheumatoid arthritis")
-psoriaticArthritis  <- cs(descendants(73553L),  name = "Psoriatic arthritis")
-ulcerativeColitis   <- cs(descendants(81893L),  name = "Ulcerative colitis")
-
-# Recombinant zoster vaccine (Shingrix only — excludes live zoster vaccine)
-rzv <- cs(
-  descendants(1160056L,   # recombinant zoster vaccine antigen
-              1160057L),  # zoster vaccine recombinant
-  name = "Recombinant zoster vaccine (Shingrix)"
-)
-
-# Herpes zoster
-herpesZoster <- cs(descendants(4067760L), name = "Herpes zoster")
+```{r eval=FALSE}
+connection <- DatabaseConnector::connect(dbms = "duckdb", server = ":memory:")
+DatabaseConnector::executeSql(connection, "ATTACH 'synthetic.duckdb' AS syn (READ_ONLY);")
+cdmDatabaseSchema <- "syn.main"
+cohortDatabaseSchema <- "main"
+cohortTable <- "ccw_cohorts"
 ```
 
-## Index cohort: new JAK inhibitor users
+## Preparing the cohorts
 
-Eligible patients must have an autoimmune indication (RA, PsA, or UC) on or
-before their JAK inhibitor start date, at least 365 days of prior observation,
-no JAK inhibitor use in the prior 365 days, and no prior RZV in the past
-5 years.
+A clone-censor-weight study needs three kinds of cohorts:
 
-```{r index-cohort}
-jakNewUsers <- cohort(
+- the **eligible (target) cohort**, whose entry date is time zero;
+- the **treatment cohort**, whose entries are the treatment starts; and
+- one or more **outcome cohorts**.
+
+Here we define them using the OHDSI `Capr` package. The eligible cohort is the first AMI ever, excluding persons who started another beta-blocker on or before the AMI day: in these data, persons who start carvedilol on the AMI day almost never start metoprolol, which would leave no comparable persons in the strategy of starting metoprolol. The treatment cohort holds every metoprolol era, and the outcome cohort is death.
+
+```{r eval=FALSE}
+library(Capr)
+
+myocardialInfarction <- cs(
+  descendants(4329847),
+  exclude(descendants(314666)), # Old myocardial infarction
+  name = "Myocardial infarction"
+)
+metoprolol <- cs(descendants(1307046), name = "Metoprolol")
+otherBetaBlockers <- cs(
+  descendants(1346823, 1314002, 1338005, 1314577, 1313200, 1353766, 1386957, 19063575, 1319998, 1345858, 1370109),
+  name = "Other beta-blockers"
+)
+
+amiCohort <- cohort(
   entry = entry(
-    drugExposure(jakInhibitors, firstOccurrence()),
-    observationWindow = continuousObservation(priorDays = 365L)
+    conditionOccurrence(myocardialInfarction, firstOccurrence()),
+    primaryCriteriaLimit = "First"
   ),
   attrition = attrition(
-    "Autoimmune indication" = withAny(
-      atLeast(1, conditionOccurrence(rheumatoidArthritis),
-              duringInterval(eventStarts(-Inf, 0))),
-      atLeast(1, conditionOccurrence(psoriaticArthritis),
-              duringInterval(eventStarts(-Inf, 0))),
-      atLeast(1, conditionOccurrence(ulcerativeColitis),
-              duringInterval(eventStarts(-Inf, 0)))
-    ),
-    "No prior JAK inhibitor" = withAll(
-      exactly(0, drugExposure(jakInhibitors),
-              duringInterval(eventStarts(-365L, -1L)))
-    ),
-    "No prior RZV" = withAll(
-      exactly(0, drugExposure(rzv),
-              duringInterval(eventStarts(-1825L, -1L)))  # 5 years
+    "No other beta-blocker before or on the AMI day" = withAll(
+      exactly(0, drugEra(otherBetaBlockers), duringInterval(eventStarts(-Inf, 0)))
     )
   ),
   exit = exit(endStrategy = observationExit())
 )
-```
-
-## Exposure cohort: RZV vaccination
-
-This cohort captures any RZV dose. It is used by both arms: the `initiateWithin`
-strategy will look for events in this cohort that fall within the grace period,
-and the `deferBeyond` strategy will look for events that fall after it.
-
-```{r exposure-cohort}
-rzvCohort <- cohort(
-  entry = entry(
-    drugExposure(rzv, firstOccurrence()),
-    observationWindow = continuousObservation(priorDays = 0L)
-  ),
-  exit = exit(endStrategy = fixedExit(index = "startDate", offsetDays = 0L))
+metoprololCohort <- cohort(
+  entry = entry(drugEra(metoprolol), primaryCriteriaLimit = "All", qualifiedLimit = "All"),
+  attrition = attrition(expressionLimit = "All"),
+  exit = exit(endStrategy = fixedExit(index = "endDate", offsetDays = 0))
 )
-```
-
-## Outcome cohort: incident herpes zoster
-
-We restrict to first-ever herpes zoster diagnoses, excluding patients with any
-prior herpes zoster to ensure incident cases only.
-
-```{r outcome-cohort}
-herpesZosterCohort <- cohort(
-  entry = entry(
-    conditionOccurrence(herpesZoster, firstOccurrence()),
-    observationWindow = continuousObservation(priorDays = 0L)
-  ),
-  attrition = attrition(
-    "No prior herpes zoster" = withAll(
-      exactly(0, conditionOccurrence(herpesZoster),
-              duringInterval(eventStarts(-Inf, -1L)))
-    )
-  ),
-  exit = exit(endStrategy = fixedExit(index = "startDate", offsetDays = 0L))
+deathCohort <- cohort(
+  entry = entry(death(), primaryCriteriaLimit = "First"),
+  exit = exit(endStrategy = fixedExit(index = "startDate", offsetDays = 0))
 )
+# Note: this will automatically assign cohort IDs 1, 2, and 3, respectively:
+cohortDefinitionSet <- makeCohortSet(amiCohort, metoprololCohort, deathCohort)
 ```
 
-## Assembling the cohort set
+We use `CohortGenerator` to generate the cohorts:
 
-`makeCohortSet()` assigns sequential cohort definition IDs and returns a
-data frame compatible with `CohortGenerator`.
-
-```{r cohort-set}
-# Cohort IDs: 1 = JAK new users, 2 = RZV, 3 = herpes zoster
-# makeCohortSet() derives cohort names from the R variable names
-allCohorts <- makeCohortSet(jakNewUsers, rzvCohort, herpesZosterCohort)
-```
-
-For a real study, include 20–50 negative control outcome cohorts alongside
-the primary outcome cohort to support empirical calibration. These can be
-pulled from the OHDSI `PhenotypeLibrary`:
-
-```{r negative-controls, eval=FALSE}
-library(PhenotypeLibrary)
-
-# Example: fetch a set of negative control outcomes known to be unaffected
-# by JAK inhibitor use
-negativeControlIds <- c(372924L, 73560L, 201606L)  # illustrative IDs only
-ncCohorts <- getPlCohortDefinitionSet(negativeControlIds)
-
-allCohorts <- dplyr::bind_rows(allCohorts, ncCohorts)
-```
-
----
-
-# Generating cohorts
-
-With cohort definitions in hand, we use `CohortGenerator` to create the
-cohort tables and instantiate all cohorts on the CDM.
-
-```{r generate}
-cohortTableNames <- CohortGenerator::getCohortTableNames(cohortTable)
-
-CohortGenerator::createCohortTables(
-  connectionDetails    = connectionDetails,
+```{r eval=FALSE}
+library(CohortGenerator)
+cohortTableNames <- getCohortTableNames(cohortTable = cohortTable)
+createCohortTables(
+  connection = connection,
   cohortDatabaseSchema = cohortDatabaseSchema,
-  cohortTableNames     = cohortTableNames
+  cohortTableNames = cohortTableNames
 )
-
-CohortGenerator::generateCohortSet(
-  connectionDetails    = connectionDetails,
-  cdmDatabaseSchema    = cdmDatabaseSchema,
+generateCohortSet(
+  connection = connection,
+  cdmDatabaseSchema = cdmDatabaseSchema,
   cohortDatabaseSchema = cohortDatabaseSchema,
-  cohortTableNames     = cohortTableNames,
-  cohortDefinitionSet  = allCohorts
+  cohortTableNames = cohortTableNames,
+  cohortDefinitionSet = cohortDefinitionSet
 )
-```
-
-Check cohort counts before proceeding. Very low counts in either the index
-or outcome cohort are an early warning that concept sets may need refinement.
-
-```{r counts}
-CohortGenerator::getCohortCounts(
-  connectionDetails    = connectionDetails,
+getCohortCounts(
+  connection = connection,
   cohortDatabaseSchema = cohortDatabaseSchema,
-  cohortTable          = cohortTableNames$cohortTable
+  cohortTable = cohortTable
 )
 ```
-
----
-
-# Defining the CCW analysis
-
-Every analytical choice is captured in a hierarchy of settings objects that
-can be validated, serialized to JSON, and reproduced across sites.
-
-## Treatment strategy arms
-
-`createArmDefinition()` specifies the protocol each clone is assigned to follow.
-
-```{r arms}
-# RZV concept IDs to exclude from IPCW covariates so the vaccine does not
-# predict its own censoring
-rzvConceptIds <- c(1160056L, 1160057L)
-
-armVaccinate <- createArmDefinition(
-  armId        = "rzv_within_90",
-  strategyType = "initiateWithin",
-  gracePeriod  = 90L,
-  label        = "RZV within 90 days of JAK inhibitor start"
-)
-
-armDeferred <- createArmDefinition(
-  armId        = "no_rzv_within_90",
-  strategyType = "deferBeyond",
-  gracePeriod  = 90L,
-  label        = "No RZV within 90 days"
-)
+```{r echo=FALSE}
+cohortCounts <- load("cohortCounts")
+cohortCounts$cohortEntries <- showCounts(cohortCounts$cohortEntries)
+cohortCounts$cohortSubjects <- showCounts(cohortCounts$cohortSubjects)
+knitr::kable(cohortCounts, align = "llrr")
 ```
 
-## Data extraction
+## Extracting the data from the server
 
-```{r db-args}
-dbArgs <- createGetDbCloneCensorWeightDataArgs(
-  washoutPeriod     = 365L,
-  covariateSettings = FeatureExtraction::createDefaultCovariateSettings(
-    excludedCovariateConceptIds = rzvConceptIds,
-    addDescendantsToExclude     = TRUE
-  )
+Now we can tell `CloneCensorWeight` to extract the eligible persons, their treatment starts, their outcomes and their baseline covariates. The covariates are constructed with the `FeatureExtraction` package. We use its default set (demographics, and conditions, drugs, procedures and measurements in long-term and short-term windows), with two changes:
+
+- we exclude metoprolol, the treatment of interest, and its descendants; and
+- the windows end on the day before the AMI (`endDays = -1`). On the AMI day itself, the records can follow the decision to treat: in Synthea, drugs that are prescribed together with metoprolol on the AMI day would otherwise predict its start almost perfectly. `fitCensoringModels()` warns when the covariate windows end on day 0 and a strategy allows a start on day 0.
+
+```{r eval=FALSE}
+covariateSettings <- FeatureExtraction::createDefaultCovariateSettings(
+  excludedCovariateConceptIds = 1307046,
+  addDescendantsToExclude = TRUE
 )
+covariateSettings$endDays <- -1
+
+getDbArgs <- createGetDbCloneCensorWeightDataArgs(
+  washoutPeriod = 365,
+  firstOnly = TRUE,
+  priorUseLookback = 99999,
+  removeSubjectsWithPriorTreatment = TRUE,
+  covariateSettings = covariateSettings
+)
+cloneCensorWeightData <- getDbCloneCensorWeightData(
+  connection = connection,
+  cdmDatabaseSchema = cdmDatabaseSchema,
+  targetId = 1,
+  treatmentId = 2,
+  outcomeIds = 3,
+  exposureDatabaseSchema = cohortDatabaseSchema,
+  exposureTable = cohortTable,
+  outcomeDatabaseSchema = cohortDatabaseSchema,
+  outcomeTable = cohortTable,
+  getDbCloneCensorWeightDataArgs = getDbArgs
+)
+cloneCensorWeightData
 ```
 
-## Study population
+`priorUseLookback = 99999` with `removeSubjectsWithPriorTreatment = TRUE` removes persons with a metoprolol era at any time before the AMI. The data are held in an `Andromeda` object, which can be saved and loaded:
 
-```{r pop-args}
-studyPopArgs <- createCreateStudyPopulationArgs(
+```{r eval=FALSE}
+saveCloneCensorWeightData(cloneCensorWeightData, "amiMetoprolol.zip")
+cloneCensorWeightData <- loadCloneCensorWeightData("amiMetoprolol.zip")
+```
+
+We can get a summary of the extracted data:
+
+```{r eval=FALSE}
+summary(cloneCensorWeightData)
+```
+```{r echo=FALSE}
+load("dataSummary")
+```
+
+# Defining the study population
+
+The study population is created with CohortMethod's arguments for the risk window. Here persons with a prior outcome (death) are removed (none, since death ends observation), and every person is followed for up to 1,825 days from the AMI:
+
+```{r eval=FALSE}
+createStudyPopulationArgs <- CohortMethod::createCreateStudyPopulationArgs(
   removeSubjectsWithPriorOutcome = TRUE,
-  priorOutcomeLookback           = 365L,
-  minDaysAtRisk                  = 1L,
-  riskWindowEnd                  = 730L,
-  endAnchor                      = "cohort start"
+  minDaysAtRisk = 1,
+  riskWindowStart = 0,
+  startAnchor = "cohort start",
+  riskWindowEnd = 1825,
+  endAnchor = "cohort start"
+)
+studyPop <- createStudyPopulation(
+  cloneCensorWeightData = cloneCensorWeightData,
+  outcomeId = 3,
+  createStudyPopulationArgs = createStudyPopulationArgs
 )
 ```
 
-## Cloning and censoring
+# Treatment strategies and clones
 
-```{r clone-args}
-cloneArgs <- createCreateClonesAndCensorArgs(
-  arms           = list(armVaccinate, armDeferred),
-  intervalLength = 30L
+The two strategies of the target trial are defined with `createTreatmentStrategy()`. `"initiateWithin"` is the strategy of starting the treatment within a grace period (from `graceStart`, default 0, to `graceEnd`), and `"notInitiateWithin"` that of not starting it within the grace period. A third type, `"neverInitiate"`, never starts it during follow-up. The first strategy is the target and the second the comparator. Death is the outcome, so it is not a competing event (`competingEvents = "none"`):
+
+```{r eval=FALSE}
+createClonesArgs <- createCreateClonesArgs(
+  strategies = list(
+    createTreatmentStrategy(1, "Metoprolol within 7 days", "initiateWithin", graceEnd = 7),
+    createTreatmentStrategy(2, "No metoprolol within 7 days", "notInitiateWithin", graceEnd = 7)
+  ),
+  competingEvents = "none"
+)
+clones <- createClones(studyPop, cloneCensorWeightData, createClonesArgs)
+```
+
+Each person is cloned once per strategy. The days on which persons started metoprolol show why a grace period is needed: most start on day 0, 1 or 2, and almost nobody after day 4:
+
+```{r echo=FALSE}
+initiationByDay <- load("initiationByDay")
+initiationByDay$persons <- showCounts(initiationByDay$persons)
+knitr::kable(initiationByDay, col.names = c("Day of start", "Persons"), align = "rr")
+```
+
+Each clone ends at the first of its outcome, a deviation from its strategy, the end of observation, or the end of the risk window:
+
+```{r echo=FALSE}
+endReasons <- load("cloneEndReasons")
+endReasons$clones <- showCounts(endReasons$clones)
+knitr::kable(endReasons, col.names = c("Strategy", "End of follow-up", "Clones"), align = "rlr")
+```
+
+The attrition, with the clones in the target and comparator columns, can be shown with `getAttritionTable()` and `drawAttritionDiagram()`:
+
+```{r eval=FALSE}
+getAttritionTable(clones)
+```
+```{r echo=FALSE}
+attrition <- load("attritionTable")
+knitr::kable(attrition[, c("description", "targetPersons", "comparatorPersons")],
+             col.names = c("Step", "Strategy 1 (persons or clones)", "Strategy 2 (persons or clones)"),
+             format.args = list(big.mark = ","))
+```
+
+# Censoring models
+
+The weights come from models of the treatment decision, one or more per strategy, which `fitCensoringModels()` fits with the defaults of `createFitCensoringModelsArgs()`:
+
+- For `"initiateWithin"`, a clone is censored at the end of the grace period if its person has not started. Its weight after the grace period is $1/\hat\pi(X)$, where $\hat\pi(X)$ is the probability of starting by day 7 from a logistic regression on the baseline covariates of the persons under follow-up on day 7 (the *binary* model at the end of the grace period).
+- For `"notInitiateWithin"`, a clone is censored on the day its person starts. Its weight on day $d$ is $1/\hat S(d - 1 \mid X)$, where $\hat S$ is the probability of not having started, from a pooled logistic model of the daily hazard of starting (the *initiation-hazard* model), with an interaction of the covariates with day 0 (`covariateTimeInteraction = "day0"`), because who starts on the AMI day can differ from who starts later. After the grace period, the weight stays at $1/\hat S(7 \mid X)$ (`postGraceModel = "hazard"`).
+
+Both models use a Laplace prior whose variance is chosen by cross-validation, as `CohortMethod`'s propensity models do.
+
+```{r eval=FALSE}
+fitCensoringModelsArgs <- createFitCensoringModelsArgs()
+censoringModels <- fitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs)
+```
+```{r echo=FALSE}
+knitr::kable(load("censoringModelSummary"), digits = 3, format.args = list(big.mark = ","))
+```
+
+The covariates with the largest coefficients:
+
+```{r echo=FALSE}
+topCoefficients <- load("topCoefficients")
+knitr::kable(topCoefficients[, c("strategyId", "modelType", "covariateName", "term", "coefficient")], digits = 3)
+```
+
+## Calibration of the censoring models
+
+`computeCensoringModelCalibration()` compares, by decile of the prediction, the predicted probability of starting by the end of the grace period with the observed share, for the binary model and for $1 - \hat S(7 \mid X)$ from the initiation-hazard model:
+
+```{r eval=FALSE}
+calibration <- computeCensoringModelCalibration(clones, censoringModels)
+plotCensoringModelCalibration(calibration)
+```
+```{r echo=FALSE, out.width="90%"}
+knitr::include_graphics(file.path(dataFolder, "calibration.png"))
+```
+
+## Positivity
+
+A strategy can only be emulated for persons who have a chance to follow it. `computePositivity()` shows the distribution of the predicted probability of starting by the end of the grace period, and the share of persons whose probability of following a strategy is below 0.01:
+
+```{r eval=FALSE}
+positivity <- computePositivity(clones, censoringModels)
+positivity
+plotPositivity(positivity)
+```
+```{r echo=FALSE}
+positivity <- load("positivity")
+knitr::kable(positivity[, c("strategyId", "model", "day", "persons", "min", "p01", "median", "p99", "max", "shareExtreme")], digits = 3)
+```
+```{r echo=FALSE, out.width="90%"}
+knitr::include_graphics(file.path(dataFolder, "positivity.png"))
+```
+
+In these data the predicted probabilities stay well away from 0 and 1, so every person can follow either strategy.
+
+# Weights
+
+`computeCensoringWeights()` turns the censoring models into a weight for every day of every clone's follow-up. By default, the weights are stabilized and truncated at their 99th percentile, among the clones whose weights vary (those under follow-up at the end of the grace period); the weights of the outcome models are truncated on their own scale by the same rule (see `createComputeWeightsArgs()` and `createWeightTruncation()`):
+
+```{r eval=FALSE}
+computeWeightsArgs <- createComputeWeightsArgs()
+weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs)
+```
+
+The caps, and the share of clones whose weights were truncated, per strategy (`otherScale`: the unstabilized weights of the outcome models):
+
+```{r echo=FALSE}
+knitr::kable(load("caps"), digits = 3)
+```
+
+`computeWeightSummary()` gives the distribution of the weights, on both scales, before and after truncation, by band of days, with the effective sample size:
+
+```{r eval=FALSE}
+weightSummary <- computeWeightSummary(weightedClones)
+plotWeightSummary(weightSummary)
+```
+```{r echo=FALSE, out.width="90%"}
+knitr::include_graphics(file.path(dataFolder, "weightSummary.png"))
+```
+
+# Covariate balance
+
+The weights should make the clones that follow each strategy at the end of the grace period comparable. `computeCovariateBalance()` compares the persons who started by day 7 with those who did not, before weighting, and the weighted clones of both strategies under follow-up on day 8, after weighting. The plotting functions of `CohortMethod` apply:
+
+```{r eval=FALSE}
+balance <- computeCovariateBalance(weightedClones, cloneCensorWeightData)
+CohortMethod::plotCovariateBalanceScatterPlot(
+  balance,
+  showCovariateCountLabel = TRUE,
+  showMaxLabel = TRUE,
+  beforeLabel = "Before weighting",
+  afterLabel = "After weighting"
 )
 ```
+```{r echo=FALSE, out.width="60%"}
+knitr::include_graphics(file.path(dataFolder, "balanceScatter.png"))
+```
 
-## IPCW weights
+```{r echo=FALSE}
+balanceSummary <- load("balanceSummary")
+knitr::kable(balanceSummary, digits = 3,
+             col.names = c("Covariates", "Max |SDM| before", "Max |SDM| after", "Above 0.1 before", "Above 0.1 after"))
+```
 
-```{r weight-args}
-weightArgs <- createCreateCensoringWeightsArgs(
-  trim      = c(0.01, 0.99),
-  maxWeight = 10
+The covariates that differed most before weighting:
+
+```{r echo=FALSE}
+balanceTop <- load("balanceTop")
+knitr::kable(balanceTop[, c("covariateName", "beforeMatchingStdDiff", "afterMatchingStdDiff")], digits = 3,
+             col.names = c("Covariate", "SDM before", "SDM after"))
+```
+
+# Diagnostics of the design choices
+
+Several choices of the censoring models are arguments, whose defaults may not suit every database: `postGraceModel` (`"hazard"` or `"binary"`), `covariateTimeInteraction` (`"day0"`, `"none"` or `"interval"`) and `initiateWithinModel` (`"binary"` or `"hazard"`). `computeCcwDiagnostics()` fits the alternatives (reusing the models already fitted) and compares them side by side: covariate balance, a check of selection during the grace period (are the outcome rates of starters and non-starters different during the grace period?), calibration, weights and positivity:
+
+```{r eval=FALSE}
+diagnostics <- computeCcwDiagnostics(
+  clones,
+  cloneCensorWeightData,
+  fitCensoringModelsArgs,
+  computeWeightsArgs,
+  censoringModels = censoringModels
 )
+diagnostics
 ```
 
-## Outcome model
+The printed diagnostics are long; here they are as tables. Covariate balance at the end of the grace period, for each combination of the choices (`specified` marks the one fitted above):
 
-```{r model-args}
-modelArgs <- createFitOutcomeModelArgs(
-  modelType         = "cox",
-  varianceEstimator = "robust"
+```{r echo=FALSE}
+diagnosticsTables <- load("diagnosticsTables")
+knitr::kable(diagnosticsTables$balance, digits = 3,
+             col.names = c("postGraceModel", "covariateTimeInteraction", "initiateWithinModel", "graceRegime", "Specified", "Max |SDM| after", "Above 0.1 after"))
+```
+
+The grace-period selection check, a Mantel-Haenszel rate ratio of the outcome (or death) in initiated vs not-initiated person-time during the grace period, stratified by group of the prediction and by day:
+
+```{r echo=FALSE}
+knitr::kable(diagnosticsTables$selection, digits = 3,
+             col.names = c("Strategy", "Rate ratio", "Lower 95%", "Upper 95%", "p", "Flag"))
+```
+
+The largest weights after truncation and the smallest effective sample share, per strategy:
+
+```{r echo=FALSE}
+knitr::kable(diagnosticsTables$weights, digits = 3,
+             col.names = c("postGraceModel", "covariateTimeInteraction", "initiateWithinModel", "graceRegime", "Specified", "Strategy", "Max stabilized weight", "Max unstabilized weight", "Min effective sample share"))
+```
+
+And positivity, per model:
+
+```{r echo=FALSE}
+knitr::kable(diagnosticsTables$positivity, digits = 3)
+```
+
+Here the alternatives agree: every variant balances the covariates (largest standardized difference below 0.1), the selection check does not flag (very few persons die during the grace period, so it has little power), and the weights stay small. The natural-grace variants (`graceRegime = "naturalGrace"`) are not identified in these data, because nobody starts metoprolol on day 7 itself, which is why their positivity is 0 (`fitCensoringModels()` warns about this). `computeCcwSensitivity()` (or `sensitivity = TRUE`) also refits the outcome model under each alternative.
+
+# Outcome models
+
+## Hazard ratio and risks
+
+`fitOutcomeModel()` fits the outcome model on the weighted clones. The default, `modelType = "cox"`, reports the hazard ratio of a weighted Cox model, together with the weighted Kaplan-Meier risks, risk differences and risk ratios at the horizons, and the restricted mean survival and lost times. Standard errors are robust (sandwich) estimates clustered on person, because each person contributes a clone to each strategy:
+
+```{r eval=FALSE}
+outcomeModel <- fitOutcomeModel(
+  weightedClones,
+  createFitOutcomeModelArgs(horizons = c(365, 1825))
 )
+outcomeModel
+```
+```{r echo=FALSE, message=TRUE}
+load("coxModel")
 ```
 
-## Full analysis specification
+The risks of the Cox model itself are not reported: a grace period makes the hazards non-proportional by design, because the clones of both strategies follow the same course during it. The hazard ratio is kept because meta-analysis and empirical calibration use it. Other outcome models are `modelType = "km"` (the weighted Kaplan-Meier risks only) and `modelType = "logistic"` (a weighted pooled logistic model, see the `MultipleAnalyses` vignette). A person-level bootstrap that refits the censoring models in every replicate is available through `bootstrapCcwAnalysis()`.
 
-```{r analysis}
-analysis <- createCcwAnalysis(
-  analysisId                     = "main_90day",
-  description                    = "Primary: RZV within 90 days vs. deferred",
-  getDbCloneCensorWeightDataArgs = dbArgs,
-  createStudyPopulationArgs      = studyPopArgs,
-  createClonesAndCensorArgs      = cloneArgs,
-  createCensoringWeightsArgs     = weightArgs,
-  fitOutcomeModelArgs            = modelArgs
-)
+The counts of the outcome model, per strategy:
+
+```{r echo=FALSE}
+counts <- load("outcomeCounts")
+knitr::kable(counts, digits = 1, format.args = list(big.mark = ","))
 ```
 
-## Target–arm–outcome linkage
+## Cumulative incidence
 
-`createTargetComparatorOutcome()` links cohort IDs to the analysis. The
-`indexCohortId` is the JAK inhibitor new-user cohort. Both arms use the same
-`targetCohortId` and `comparatorCohortId` (the RZV cohort) — the arm
-strategy determines how each clone interprets initiation events from that
-cohort.
-
-```{r tao}
-tao <- createTargetComparatorOutcome(
-  indexCohortId               = 1L,   # JAK inhibitor new users
-  targetCohortId           = 2L,   # RZV (treatment arm)
-  comparatorCohortId          = 2L,   # RZV (comparator arm, deferBeyond)
-  outcomeIds                  = c(3L, negativeControlIds),
-  excludedCovariateConceptIds = rzvConceptIds
-)
+```{r eval=FALSE}
+curves <- computeCumulativeIncidence(weightedClones)
+plotCumulativeIncidence(curves)
+```
+```{r echo=FALSE, out.width="90%"}
+knitr::include_graphics(file.path(dataFolder, "cumulativeIncidence.png"))
 ```
 
-## Top-level specification
+## Power
 
-```{r specs}
-specs <- createCcwAnalysesSpecifications(
-  ccwAnalysisList      = list(analysis),
-  targetArmOutcomeList = list(tao)
-)
+The minimum detectable relative risk (MDRR):
+
+```{r eval=FALSE}
+computeMdrr(clones)
+```
+```{r echo=FALSE}
+knitr::kable(load("mdrr"), digits = 3, format.args = list(big.mark = ","))
 ```
 
----
+# Comparison with naive and landmark analyses
 
-# Running the analysis
+To see what the clone-censor-weight analysis changes, we compare it with three simpler analyses of the same persons:
 
-`runCcwAnalyses()` iterates over every target–arm–outcome × analysis
-combination, runs the full CCW pipeline, and writes results to CSV files in
-`outputFolder`. If the run is interrupted, re-running the same call will skip
-any combinations already written.
+- **Unweighted clone-censor-weight**: the same clones, with all weights 1. It removes immortal time, but not the selection on who starts.
+- **Naive**: persons who started metoprolol by day 7 against those who did not, all followed from day 0. Starters are credited with the days before their start, during which they could not die (immortal time).
+- **Landmark at day 7**: persons alive and under observation at the end of day 7, classified by whether they started by day 7, and followed from day 8. It has no immortal time, but it estimates risks conditional on surviving to day 7.
 
-```{r run}
-outputFolder <- "jak_rzv_results"
-
-runCcwAnalyses(
-  connectionDetails       = connectionDetails,
-  cdmDatabaseSchema       = cdmDatabaseSchema,
-  targetDatabaseSchema    = cohortDatabaseSchema,
-  targetTable             = cohortTableNames$cohortTable,
-  outcomeDatabaseSchema   = cohortDatabaseSchema,
-  outcomeTable            = cohortTableNames$cohortTable,
-  exposureDatabaseSchema  = cohortDatabaseSchema,
-  exposureTable           = cohortTableNames$cohortTable,
-  ccwAnalysesSpecifications = specs,
-  outputFolder            = outputFolder,
-  databaseId              = "synpuf",
-  negativeControlOutcomeIds = negativeControlIds
-)
+```{r echo=FALSE}
+comparison <- load("comparison")
+comparison$risks <- sprintf("%.4f vs %.4f", comparison$riskTarget, comparison$riskComparator)
+comparison$riskDifference <- sprintf("%.4f (%.4f to %.4f)", comparison$rd, comparison$rdLb95, comparison$rdUb95)
+comparison$hazardRatio <- sprintf("%.2f (%.2f to %.2f)", comparison$hr, comparison$hrLb95, comparison$hrUb95)
+knitr::kable(comparison[, c("analysis", "horizon", "risks", "riskDifference", "hazardRatio")],
+             col.names = c("Analysis", "Day", "Risks (start vs no start)", "Risk difference (95% CI)", "Hazard ratio (95% CI)"))
 ```
 
----
+In these synthetic data the four analyses agree closely, for two reasons that are particular to Synthea. First, fewer than 11 persons die during the grace period (days 0 to 7), so there is almost no immortal time to misattribute, and the naive and landmark analyses are not visibly biased. Second, the covariates measured before the AMI carry little information on who starts metoprolol (the censoring models have an area under the curve of `r sprintf("%.2f", load("censoringModelSummary")$auc[1])`), so the weights are close to 1 and change the estimates little. In real data, where deaths during the grace period and the reasons for starting a treatment depend on the patient's condition, the analyses can differ substantially; the diagnostics above show how much the weights do in a given database.
 
-# Diagnostics
+# Acknowledgments
 
-## Attrition
+Considerable work has been dedicated to provide the `CloneCensorWeight` package.
 
-```{r attrition}
-ccwData <- loadCloneCensorWeightData(file.path(outputFolder, "ccwData_main_90day_t1"))
-getAttritionTable(ccwData)
+```{r eval=TRUE}
+citation("CloneCensorWeight")
 ```
 
-## Covariate balance
+Further, `CloneCensorWeight` makes extensive use of the `Cyclops` and `CohortMethod` packages.
 
-IPCW should reduce covariate imbalance between the arms. The Love plot
-displays standardized mean differences (SMD) for all baseline covariates
-before and after weighting. Well-balanced covariates have |SMD| < 0.1.
-
-```{r balance, fig.width=7, fig.height=4.5}
-results <- importFromCsv(outputFolder)
-smd     <- results$ccw_standardized_difference
-
-smd_before <- smd[smd$weighted == 0, ]
-smd_after  <- smd[smd$weighted == 1, ]
-
-plotLovePlot(smd_before, smd_after)
+```{r eval=TRUE}
+citation("Cyclops")
 ```
-
-## Kaplan–Meier curves
-
-```{r km, fig.width=7, fig.height=4.5}
-plotKaplanMeier(results$ccw_kaplan_meier)
-```
-
-## Minimum detectable relative risk
-
-```{r mdrr}
-plotMdrr(results$ccw_power_mdrr)
-```
-
----
-
-# Empirical calibration
-
-When negative control outcomes are supplied via `negativeControlOutcomeIds`,
-`runCcwAnalyses()` automatically fits a systematic error model and returns
-calibrated p-values and confidence intervals alongside the uncalibrated
-estimates. To inspect the calibration:
-
-```{r calibration, fig.width=6, fig.height=5}
-plotCalibration(
-  logRr   = log(results$ccw_outcome_model$estimate),
-  seLogRr = (log(results$ccw_outcome_model$upper_95) -
-             log(results$ccw_outcome_model$lower_95)) / (2 * qnorm(0.975)),
-  trueLogRr = 0  # negative controls have true HR = 1
-)
-```
-
----
-
-# Results
-
-```{r results}
-om <- results$ccw_outcome_model
-om[om$analysis_id == "main_90day_t1_o3",
-   c("analysis_id", "model_type", "estimate", "lower_95", "upper_95",
-     "p_value", "calibrated_p_value")]
-```
-
----
-
-# Saving and sharing the specification
-
-The full analysis specification can be serialized to JSON for sharing across
-sites or checking into version control.
-
-```{r save}
-analysisFile <- "jak_rzv_analysis_list.json"
-taoFile      <- "jak_rzv_tao_list.json"
-
-saveCcwAnalysisList(list(analysis), analysisFile)
-saveTargetComparatorOutcomeList(list(tao), taoFile)
-```
-
-To reconstruct the specification in a new session:
-
-```{r load}
-reloadedAnalyses <- loadCcwAnalysisList(analysisFile)
-reloadedTao      <- loadTargetComparatorOutcomeList(taoFile)
-```
-
----
-
-# References
-
-Hernán MA, Robins JM. Using Big Data to Emulate a Target Trial When a
-Randomized Trial Is Not Available. *Am J Epidemiol.* 2016;183(8):758–764.
-
-Hernán MA, Sauer BC, Hernández-Díaz S, Platt R, Shrier I. Specifying a
-target trial prevents immortal time bias and other self-inflicted injuries
-in observational analyses. *J Clin Epidemiol.* 2016;79:70–75.
-
-Maringe C, Benitez Majano S, Exarchakou A, et al. Reflection on modern
-methods: trial emulation in the presence of immortal-time bias. *Int J
-Epidemiol.* 2024.
-
-Dagnew AF, et al. Immunogenicity and safety of the recombinant zoster
-vaccine in immunocompromised adults: ZOSTER-056 randomized trial. *Ann
-Intern Med.* 2022.

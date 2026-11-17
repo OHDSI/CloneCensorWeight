@@ -28,6 +28,7 @@ articles:
     contents:
       - SingleStudy
       - MultipleAnalyses
+      - ResultsSchema
       - Simulation
   - title: "Developer documentation"
     navbar: ~

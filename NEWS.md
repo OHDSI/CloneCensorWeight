@@ -175,3 +175,15 @@ New features:
   the hazard model's `intervalLength` does not allow). `fitCensoringModels()` warns when, under
   `"naturalGrace"`, persons reach day `G` untreated but nobody starts on day `G`, so that the regime is
   not identified.
+
+Documentation:
+
+* New vignettes `SingleStudy` (one target trial on Synthea: first AMI, metoprolol within 7 days vs not;
+  every step of the pipeline with its diagnostics, and a comparison with naive and landmark analyses),
+  `MultipleAnalyses` (two grace periods x three outcome models x the outcome and 20 negative controls
+  through `runCcwAnalyses()`, empirical calibration, `exportToCsv()`, and `createResultsDataModel()` and
+  `uploadResults()` into SQLite) and `ResultsSchema` (the results data model, generated from
+  `inst/csv/resultsDataModelSpecification.csv`). The database-dependent code is not evaluated when the
+  vignettes are built; the outputs shown are precomputed from runs on Synthea and stored in
+  `vignettes/data/`, with counts below 11 suppressed. They replace the earlier `SingleStudy` and
+  `MultipleAnalyses` vignettes, which no longer matched the package.
