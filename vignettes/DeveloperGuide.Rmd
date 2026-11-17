@@ -601,6 +601,10 @@ few minutes:
   creates (and leaks) a new temporary duckdb database on every flush, which happens on every
   `andromeda$table <- <dplyr table>`. That doubled the run time of most tests. The workaround is
   applied only while the installed Andromeda has the bug.
+- `tests/testthat/setup-dbplyr.R` makes dbplyr 2.5.2 format the error message of a `summarise()`
+  variable only when the error is raised, as the development version of dbplyr does. Formatting it
+  up front for every `count()` took about 15% of the test time. It too switches itself off once
+  dbplyr is updated.
 - Tests that share an expensive fixture (the analyses of `test-integration-msmWeights.R`, the
   diagnostics of `test-integration-designChoicesDiagnostics.R`) build it once per file and do not
   change it.
