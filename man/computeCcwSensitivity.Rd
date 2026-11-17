@@ -89,17 +89,20 @@ clones <- createClones(
   )
 )
 # With the Cox hazard model, which has no covariate-by-time interactions, there are fewer variants
-# than with the default pooled logistic model, which keeps the example fast:
-sensitivity <- computeCcwSensitivity(
-  clones = clones,
-  cloneCensorWeightData = data,
-  fitCensoringModelsArgs = createFitCensoringModelsArgs(
-    hazardModelType = "cox",
-    prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
-  ),
-  fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 30)
-)
-sensitivity
+# than with the default pooled logistic model. Refitting under each variant still takes about 10
+# seconds, so this runs only in an interactive session:
+if (interactive()) {
+  sensitivity <- computeCcwSensitivity(
+    clones = clones,
+    cloneCensorWeightData = data,
+    fitCensoringModelsArgs = createFitCensoringModelsArgs(
+      hazardModelType = "cox",
+      prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1)
+    ),
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 30)
+  )
+  sensitivity
+}
 close(clones)
 close(data)
 
