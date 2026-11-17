@@ -22,6 +22,11 @@
 # variance of an estimate is the sum over persons of its squared influence. This is the robust variance
 # of survival::coxph(cluster = personSeqId) and of survival::survfit(id = cloneRowId, cluster =
 # personSeqId, influence = TRUE). The weights are treated as fixed.
+#
+# By default (createFitOutcomeModelArgs(robustVarianceEngine = "cyclops")) the robust variances of the Cox
+# and pooled logistic coefficients come from Cyclops' vcov(type = "robust"); the sandwiches here are used
+# with robustVarianceEngine = "ccw", for the Kaplan-Meier and Aalen-Johansen estimates, and as references
+# in the tests.
 
 # Grouped sums ------------------------------------------------------------------------------------
 
@@ -174,6 +179,88 @@
     meat <- meat + crossprod(do.call(cbind, scores))
   }
   return(bread %*% meat %*% bread)
+}
+
+# The same joint sandwich from Cyclops' vcov(type = "robust"), for the pooled models `models` (as in
+# .jointSandwich()) with identified coefficients `theta` (those of every model, in order), fitted to the
+# clone x interval `rows` given by `modelRows` (per model, a list of its logical `subset` of the rows and
+# the name of its `response` column). The models are stacked into one lr model
+# with a block of columns (each model's identified design columns, intercept included) per model and the
+# persons as subjects, on the rows of each model's fitted cells (not those with a fixed hazard of 0 or
+# 1) summed by person, cell and response. Its log likelihood is the sum of the models' log likelihoods,
+# so its estimates are theirs (it is refitted from `theta`) and its robust variance is the sandwich with
+# a block diagonal bread and each person's scores of all models: the joint covariance clustered on
+# person. Returns a matrix of NA (with a warning) when the stacked model cannot be fitted.
+.cyclopsJointSandwich <- function(models, rows, modelRows, theta, control) {
+  outcomes <- list()
+  covariates <- list()
+  columnOffset <- 0
+  rowOffset <- 0
+  for (m in seq_along(models)) {
+    model <- models[[m]]
+    modelRow <- modelRows[[m]]$subset & is.na(model$fixedHazard[rows$cell])
+    y <- rows[[modelRows[[m]]$response]][modelRow]
+    nCells <- nrow(model$design)
+    sums <- lapply(c(1, 0), function(response) {
+      sums <- .sumByPersonAndCell(rows$weight[modelRow] * (y == response), rows$personIndex[modelRow], rows$cell[modelRow], nCells)
+      sums$y <- response
+      return(sums[sums$value > 0, ])
+    })
+    sums <- do.call(rbind, sums)
+    rowIds <- rowOffset + seq_len(nrow(sums))
+    outcomes[[m]] <- data.frame(rowId = rowIds, y = sums$y, weights = sums$value, subjectId = sums$person)
+    # The nonzero design entries, one column at a time (no dense rows x columns matrix), sorted by
+    # column and row as Cyclops needs them:
+    columns <- lapply(seq_len(ncol(model$design)), function(j) {
+      value <- model$design[sums$cell, j]
+      nonZero <- which(value != 0)
+      return(list(rowId = rowIds[nonZero], value = value[nonZero]))
+    })
+    covariates[[m]] <- data.frame(
+      rowId = unlist(lapply(columns, function(column) column$rowId)),
+      covariateId = columnOffset + rep(seq_along(columns), vapply(columns, function(column) length(column$rowId), integer(1))),
+      covariateValue = unlist(lapply(columns, function(column) column$value))
+    )
+    rm(columns)
+    columnOffset <- columnOffset + ncol(model$design)
+    rowOffset <- rowOffset + nrow(sums)
+  }
+  outcomes <- do.call(rbind, outcomes)
+  covariates <- do.call(rbind, covariates)
+  cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "lr", addIntercept = FALSE, quiet = TRUE)
+  ids <- as.numeric(Cyclops::getCovariateIds(cyclopsData))
+  fit <- .fitOutcomeCyclopsModel(
+    cyclopsData, Cyclops::createPrior("none"), control,
+    unpenalizedIds = ids, description = "stacked pooled logistic model of the robust variance",
+    startingCoefficients = theta[ids]
+  )
+  if (is.null(fit)) {
+    return(matrix(NA_real_, length(theta), length(theta)))
+  }
+  vcov <- matrix(NA_real_, length(theta), length(theta))
+  robust <- stats::vcov(fit, type = "robust")
+  vcov[ids, ids] <- robust[as.character(ids), as.character(ids)]
+  return(vcov)
+}
+
+# Stops unless the loaded Cyclops has vcov(fit, type = "robust") (Cyclops C2, plan section 5), that is,
+# unless its `vcovMethod` has a `type` argument. An older vcov.cyclopsFit() would silently ignore `type`
+# (it takes `...`) and return the model-based variance. Its version cannot tell: the development
+# versions with and without it are both 4.0.1.
+.checkCyclopsRobustVcov <- function(vcovMethod = utils::getS3method("vcov", "cyclopsFit")) {
+  if (!"type" %in% names(formals(vcovMethod))) {
+    stop(sprintf(
+      "The robust variance with robustVarianceEngine = \"cyclops\" (the default of createFitOutcomeModelArgs()) needs a Cyclops whose vcov() has type = \"robust\" (not yet in a released Cyclops), which the loaded Cyclops %s (%s) does not have. Install a Cyclops that has it, or use createFitOutcomeModelArgs(robustVarianceEngine = \"ccw\"), this package's own sandwich, which gives the same variance",
+      utils::packageVersion("Cyclops"), find.package("Cyclops")
+    ), call. = FALSE)
+  }
+  invisible(NULL)
+}
+
+# Does fitOutcomeModel() with these FitOutcomeModelArgs use Cyclops' vcov(type = "robust")?
+.needsCyclopsRobustVcov <- function(fitOutcomeModelArgs) {
+  return(fitOutcomeModelArgs$varianceEstimator == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops" &&
+    fitOutcomeModelArgs$modelType != "km")
 }
 
 .blockDiagonal <- function(matrices) {

@@ -292,6 +292,10 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     stop("Provide either connectionDetails or connection, but not both")
   }
   specifications <- ccwAnalysesSpecifications
+  # Before any work, rather than at the outcome models:
+  if (any(vapply(specifications$ccwAnalysisList, function(analysis) .needsCyclopsRobustVcov(analysis$fitOutcomeModelArgs), logical(1)))) {
+    .checkCyclopsRobustVcov()
+  }
   on.exit(.clearCache())
 
   outputFolder <- normalizePath(outputFolder, mustWork = FALSE)

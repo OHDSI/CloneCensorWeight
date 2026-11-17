@@ -14,6 +14,23 @@ new defaults):
   `truncateMsmWeights = FALSE` forms them from the truncated weights, as before. The segments gain
   `otherScaleWeight`, and `fitOutcomeModel()` reports the cap, largest weight and share truncated of
   the weights its MSM used (`metaData$msmWeightSummary`).
+* The robust variance of the Cox and pooled logistic outcome models comes from Cyclops'
+  `vcov(fit, type = "robust")` by default (`createFitOutcomeModelArgs(robustVarianceEngine =
+  "cyclops")`): the Cox model is fitted with the persons as Cyclops subjects, and the pooled logistic
+  models are refitted, stacked, to rows per person. `robustVarianceEngine = "ccw"` gives this
+  package's own sandwich, as before. Both are the HC0 sandwich clustered on person and agree to
+  rounding when the outcome model is converged, as with the default `control` (about 1e-12 in the
+  tests), and with `survival::coxph(cluster = )` and `sandwich::vcovCL(type = "HC0", cadjust =
+  FALSE)` to 1e-6. With a loose convergence criterion the refit moves the estimates, and the two
+  differ accordingly. For the pooled logistic models `"cyclops"` takes more time and memory than
+  `"ccw"`, because of the refit. The standard errors of the Kaplan-Meier and Aalen-Johansen estimates
+  stay this package's own.
+* The default robust variance needs a Cyclops whose `vcov()` has `type = "robust"`. No released
+  Cyclops has it, and its development versions with and without it are both 4.0.1, so the DESCRIPTION
+  keeps `Cyclops (>= 4.0.1)` and `Remotes: ohdsi/Cyclops@develop`, where it is to be merged (plan
+  decision 9 item 2). `fitOutcomeModel()` stops with an error naming `robustVarianceEngine = "ccw"`
+  when the loaded Cyclops lacks it (an older `vcov()` would silently return the model-based variance),
+  and so does `runCcwAnalyses()`, before any work, when one of its analyses needs it.
 * The initiation hazard model has covariate-by-day-0 interactions by default
   (`createFitCensoringModelsArgs(covariateTimeInteraction = "day0")`; `"none"` with
   `hazardModelType = "cox"`), also with longer intervals, where they multiply the first interval.
@@ -23,9 +40,9 @@ new defaults):
   binary model at the end of the grace period, which is biased when starting the treatment changes the
   risk during the grace period.
 * Settings saved without a field that has since been added (for example `truncateMsmWeights`,
-  `postGraceModel`, `covariateTimeInteraction` or `msmWeights`) load with its current default, as listed
-  above, and loading them prints a message naming the fields filled in this way. To reproduce an
-  earlier analysis, set those fields to the earlier behaviour.
+  `postGraceModel`, `covariateTimeInteraction`, `msmWeights` or `robustVarianceEngine`) load with its
+  current default, as listed above, and loading them prints a message naming the fields filled in this
+  way. To reproduce an earlier analysis, set those fields to the earlier behaviour.
 * The grace-period selection check (`computeGracePeriodSelection()`) compares initiated and
   not-initiated person-time on the same day of the grace period by default (`stratifyByDay = TRUE`), so
   a baseline risk that changes over the grace period does not raise the flag. `stratifyByDay = FALSE`
@@ -49,9 +66,9 @@ new defaults):
   counts persons, not rows, so small replicates can fail where they did not. This needs Cyclops 4.0.1,
   which keeps the rows of a subject together for every model type.
 * New arguments were inserted before existing ones: `covariateTimeInteraction`, `postGraceModel`,
-  `initiateWithinModel` and `graceRegime` after `timeBasis` in `createFitCensoringModelsArgs()`, and `msmWeights` after
-  `armByTimeInteraction` in `createFitOutcomeModelArgs()`. Calls that pass the later arguments by
-  position must name them.
+  `initiateWithinModel` and `graceRegime` after `timeBasis` in `createFitCensoringModelsArgs()`, and
+  `msmWeights` after `armByTimeInteraction` and `robustVarianceEngine` after `varianceEstimator` in
+  `createFitOutcomeModelArgs()`. Calls that pass the later arguments by position must name them.
 * With the indicator time basis (the default), the numerator of the pooled logistic initiation hazard
   model is computed in closed form, as the observed hazard of each interval, instead of fitted by
   Cyclops. It is the same model, so its coefficients and the stabilized weights change only within

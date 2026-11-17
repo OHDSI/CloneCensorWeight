@@ -1160,6 +1160,20 @@ BootstrapArgs <- R6Class(
 #' for example for a `"neverInitiate"` strategy at long horizons; see [createComputeWeightsArgs()].
 #' [fitOutcomeModel()] reports the cap, largest weight and share truncated of the weights it used.
 #'
+#' Robust variance: with `robustVarianceEngine = "cyclops"` (the default), the Cox model is fitted with
+#' each clone's person as its Cyclops subject, and the pooled logistic models (the outcome model and,
+#' with competing death, the death model, stacked into one model so that their joint covariance is
+#' clustered on person too) are refitted, from their estimates, to one row per person,
+#' strategy-by-interval cell and response, per model (cells with a fixed hazard left out); the variance
+#' is Cyclops' `vcov(fit, type = "robust")`, at the estimates of that refit. `"ccw"` computes the same
+#' sandwich in R from the score residuals summed by person, at the reported estimates, without the
+#' refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
+#' when the outcome model is converged, as with the default `control`; with a loose convergence
+#' criterion the refit moves the estimates, and the two differ accordingly. `"cyclops"` needs a
+#' Cyclops whose `vcov()` has `type = "robust"`, which is not yet in a released Cyclops;
+#' [fitOutcomeModel()] and [runCcwAnalyses()] stop with an error naming `"ccw"` when the loaded Cyclops
+#' lacks it.
+#'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
@@ -1180,6 +1194,15 @@ BootstrapArgs <- R6Class(
 #'                             `"cox"`) do not depend on it.
 #' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
 #'                             `"bootstrap"` (computed by [bootstrapCcwAnalysis()]), or `"modelBased"`.
+#' @param robustVarianceEngine What computes the robust variance of the Cox and pooled logistic models
+#'                             (with `varianceEstimator = "robust"`): `"cyclops"` (Cyclops'
+#'                             `vcov(fit, type = "robust")`, fitted with the persons as subjects) or
+#'                             `"ccw"` (this package's own sandwich in R, the earlier behaviour). Both
+#'                             are the HC0 sandwich clustered on person and agree to rounding when the
+#'                             outcome model is converged (see Details). The standard errors of the
+#'                             Kaplan-Meier and Aalen-Johansen estimates (of `"km"`, and the rows at
+#'                             the horizons of `"cox"`) are this package's own either way. `"cyclops"`
+#'                             needs a Cyclops with `vcov(type = "robust")` (see Details).
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
 #'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?
@@ -1208,6 +1231,7 @@ createFitOutcomeModelArgs <- function(modelType = "cox",
                                       armByTimeInteraction = FALSE,
                                       msmWeights = "unstabilized",
                                       varianceEstimator = "robust",
+                                      robustVarianceEngine = "cyclops",
                                       bootstrapArgs = createBootstrapArgs(),
                                       useCovariates = FALSE,
                                       stratified = FALSE,
@@ -1234,6 +1258,8 @@ FitOutcomeModelArgs <- R6Class(
     # Default, so settings saved before this field existed load:
     msmWeights = "unstabilized",
     varianceEstimator = NULL,
+    # Default, so settings saved before this field existed load:
+    robustVarianceEngine = "cyclops",
     bootstrapArgs = NULL,
     useCovariates = NULL,
     stratified = NULL,
@@ -1247,6 +1273,7 @@ FitOutcomeModelArgs <- R6Class(
       checkmate::assertFlag(self$armByTimeInteraction, add = errorMessages)
       checkmate::assertChoice(self$msmWeights, c("unstabilized", "stabilized"), add = errorMessages)
       checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased"), add = errorMessages)
+      checkmate::assertChoice(self$robustVarianceEngine, c("cyclops", "ccw"), add = errorMessages)
       checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
       checkmate::assertFlag(self$useCovariates, add = errorMessages)
       checkmate::assertFlag(self$stratified, add = errorMessages)
