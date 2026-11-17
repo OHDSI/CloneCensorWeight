@@ -17,7 +17,9 @@ computeCensoringWeights(
 \item{censoringModels}{An object of class \code{CcwCensoringModels} as created by
 \code{\link[=fitCensoringModels]{fitCensoringModels()}} on the same clones (same outcome, same-day
 ordering and competing events). \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} also passes models
-fit on clones without an outcome, which it shares across outcomes.}
+fit on clones without an outcome, which it shares across outcomes.
+Stops when the clones are followed past the horizon of a
+\code{"neverInitiate"} model (models fit on a shorter risk window).}
 
 \item{computeWeightsArgs}{An object of type \code{ComputeWeightsArgs} as created using
 \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.}

@@ -420,6 +420,37 @@ test_that("Censoring models fit on other clones are rejected", {
   close(data)
 })
 
+test_that("A neverInitiate model fit on a shorter risk window than the clones' is rejected", {
+  fixture <- createM3Fixture(100, riskStart = 0L, seed = 29, nominalRiskEnd = 40L)
+  personsLong <- fixture$persons
+  # The same persons with a risk window ending on day 20: the neverInitiate model's horizon is then 20,
+  # and its weights would stay at W(20) for the clones followed to day 40.
+  personsShort <- personsLong
+  personsShort$riskEnd <- pmin(personsShort$riskEnd, 20L)
+  personsShort$nominalRiskEnd <- 20L
+  personsShort$outcomeDay[!is.na(personsShort$outcomeDay) & personsShort$outcomeDay > 20L] <- NA
+  personsShort$deathDay[!is.na(personsShort$deathDay) & personsShort$deathDay > 20L] <- NA
+  data <- createM3Data(list(persons = personsLong, covariates = fixture$covariates))
+  strategies <- m3Strategies("initiateWithin", "neverInitiate", graceEnd = 7)
+  clonesShort <- buildM3Clones(personsShort, strategies, "eventsFirst")
+  clonesLong <- buildM3Clones(personsLong, strategies, "eventsFirst")
+  modelsShort <- suppressMessages(fitCensoringModels(clonesShort, data, m3Args("logistic")))
+  expect_equal(modelsShort[[2]]$horizon, 20L)
+  expect_error(
+    suppressMessages(computeCensoringWeights(clonesLong, modelsShort)),
+    "strategy 2 was fit through day 20, but the clones are followed to day 40"
+  )
+  # Models fit on the longer window cover the shorter one, as when runCcwAnalyses() shares models fit on
+  # the study population without an outcome:
+  modelsLong <- suppressMessages(fitCensoringModels(clonesLong, data, m3Args("logistic")))
+  weighted <- suppressMessages(computeCensoringWeights(clonesShort, modelsLong))
+  expect_s4_class(weighted, "CcwClones")
+  close(weighted)
+  close(clonesShort)
+  close(clonesLong)
+  close(data)
+})
+
 test_that("Edge cases: nobody starts by G, everyone starts on day 0, an interval where everyone initiates", {
   fixture <- createM3Fixture(150, riskStart = 0L, seed = 27)
   # Fits the models, and returns them with the segments (unstabilized and stabilized weights).

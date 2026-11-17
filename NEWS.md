@@ -115,7 +115,7 @@ New features:
   same cohorts have different covariate concept IDs or repeat an outcome, and `runCcwAnalyses()` when
   `analysesToExclude` leaves nothing to run.
 * `getResultsSummary()` (one row per analysis, target-treatment-outcome and estimand, with the ratio
-  estimands empirically calibrated with the negative controls, and the confidence intervals of the
+  estimands (`hr`, the first-interval `or`, and `rr_<h>`) empirically calibrated with the negative controls, and the confidence intervals of the
   hazard ratio also with at least 5 positive controls, whose true effect sizes are on the hazard
   scale), `getDiagnosticsSummary()` (MDRR, covariate balance, EASE, effective sample size and maximum
   weight (for every outcome, so they also decide which negative controls calibrate) and positivity against
@@ -125,6 +125,9 @@ New features:
   outcome (`metaData$outcomeId` `NA`), as `runCcwAnalyses()` shares them across outcomes.
   `bootstrapCcwAnalysis()` given such models refits them without an outcome in every replicate, so
   the replicates repeat the estimator of the full-data estimate.
+* `computeCensoringWeights()` stops when the clones are followed past the horizon of a
+  `"neverInitiate"` censoring model (models fit on a shorter risk window), whose weights would
+  otherwise stay at their value on the horizon while clones are still censored at initiation.
 * The results data model, modelled on CohortMethod's: `exportToCsv()` writes the results of
   `runCcwAnalyses()` to CSV files and `Results_<databaseId>.zip`, with counts below `minCellCount`
   written as `-minCellCount`; `getResultsDataModelSpecifications()` describes the tables, all
