@@ -209,13 +209,19 @@
     sums <- do.call(rbind, sums)
     rowIds <- rowOffset + seq_len(nrow(sums))
     outcomes[[m]] <- data.frame(rowId = rowIds, y = sums$y, weights = sums$value, subjectId = sums$person)
-    cellDesign <- model$design[sums$cell, , drop = FALSE]
-    nonZero <- which(cellDesign != 0, arr.ind = TRUE)
+    # The nonzero design entries, one column at a time (no dense rows x columns matrix), sorted by
+    # column and row as Cyclops needs them:
+    columns <- lapply(seq_len(ncol(model$design)), function(j) {
+      value <- model$design[sums$cell, j]
+      nonZero <- which(value != 0)
+      return(list(rowId = rowIds[nonZero], value = value[nonZero]))
+    })
     covariates[[m]] <- data.frame(
-      rowId = rowIds[nonZero[, 1]],
-      covariateId = columnOffset + nonZero[, 2],
-      covariateValue = cellDesign[nonZero]
+      rowId = unlist(lapply(columns, function(column) column$rowId)),
+      covariateId = columnOffset + rep(seq_along(columns), vapply(columns, function(column) length(column$rowId), integer(1))),
+      covariateValue = unlist(lapply(columns, function(column) column$value))
     )
+    rm(columns)
     columnOffset <- columnOffset + ncol(model$design)
     rowOffset <- rowOffset + nrow(sums)
   }
@@ -249,6 +255,12 @@
     ), call. = FALSE)
   }
   invisible(NULL)
+}
+
+# Does fitOutcomeModel() with these FitOutcomeModelArgs use Cyclops' vcov(type = "robust")?
+.needsCyclopsRobustVcov <- function(fitOutcomeModelArgs) {
+  return(fitOutcomeModelArgs$varianceEstimator == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops" &&
+    fitOutcomeModelArgs$modelType != "km")
 }
 
 .blockDiagonal <- function(matrices) {

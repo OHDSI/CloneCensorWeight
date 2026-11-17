@@ -335,6 +335,40 @@ test_that("Specifications with conflicting target-treatment-outcomes, or with no
   )
 })
 
+test_that("runCcwAnalyses stops before any work when an analysis needs a Cyclops vcov(type = \"robust\") the loaded Cyclops lacks", {
+  expect_true(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "cox")))
+  expect_true(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "logistic")))
+  expect_false(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "km")))
+  expect_false(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "cox", robustVarianceEngine = "ccw")))
+  expect_false(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "cox", varianceEstimator = "modelBased")))
+  expect_false(.needsCyclopsRobustVcov(createFitOutcomeModelArgs(modelType = "cox", varianceEstimator = "bootstrap")))
+
+  # vcov.cyclopsFit() of Cyclops releases up to 4.0.1, which ignores `type`:
+  oldVcov <- function(object, control, overrideNoRegularization = FALSE, ...) NULL
+  realCheck <- .checkCyclopsRobustVcov
+  local_mocked_bindings(.checkCyclopsRobustVcov = function() realCheck(oldVcov))
+  specifications <- createCcwAnalysesSpecifications(
+    list(
+      orchestrationAnalysis(1, list(initiate30, notInitiate30), fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 365)),
+      orchestrationAnalysis(2, list(initiate30, notInitiate30))
+    ),
+    list(createTargetTreatmentOutcomes(4, 1, 2, outcomes = list(CohortMethod::createOutcome(3))))
+  )
+  outputFolder <- tempfile()
+  on.exit(unlink(outputFolder, recursive = TRUE))
+  expect_error(
+    runCcwAnalyses(
+      connectionDetails = DatabaseConnector::createConnectionDetails(dbms = "sqlite", server = tempfile()),
+      cdmDatabaseSchema = "main",
+      outputFolder = outputFolder,
+      ccwAnalysesSpecifications = specifications
+    ),
+    "robustVarianceEngine = \"ccw\""
+  )
+  # Nothing was written:
+  expect_false(dir.exists(outputFolder))
+})
+
 # Eunomia ----------------------------------------------------------------------------------------
 
 skip_on_cran()

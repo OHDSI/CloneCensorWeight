@@ -96,14 +96,13 @@
 #' clones of a person share a cluster, treating the weights as fixed. For the hazard ratio and the
 #' pooled logistic coefficients it is Cyclops' `vcov(fit, type = "robust")` by default, or this
 #' package's own sandwich with `robustVarianceEngine = "ccw"` (see [createFitOutcomeModelArgs()]). For
-#' `"cox"` and `"km"` the
-#' standard errors of the risks, their differences and ratios, and the restricted means are the
-#' infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
-#' for `"logistic"` they use the delta method with a numerical Jacobian. With `varianceEstimator =
-#' "modelBased"` the hazard ratio or odds ratio uses the inverse of the weighted information; the
-#' `"cox"` rows at the horizons then have no standard errors or limits (the Kaplan-Meier has no
-#' model-based variance), and `"km"` is not supported. `varianceEstimator = "bootstrap"` is computed by
-#' [bootstrapCcwAnalysis()], not by this function.
+#' `"cox"` and `"km"` the standard errors of the risks, their differences and ratios, and the restricted
+#' means are the infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen
+#' estimates; for `"logistic"` they use the delta method with a numerical Jacobian. With
+#' `varianceEstimator = "modelBased"` the hazard ratio or odds ratio uses the inverse of the weighted
+#' information; the `"cox"` rows at the horizons then have no standard errors or limits (the
+#' Kaplan-Meier has no model-based variance), and `"km"` is not supported. `varianceEstimator =
+#' "bootstrap"` is computed by [bootstrapCcwAnalysis()], not by this function.
 #'
 #' @param weightedClones      A `CcwClones` object with weighted segments, as created by
 #'                            `computeCensoringWeights()`.
@@ -183,8 +182,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (fitOutcomeModelArgs$varianceEstimator == "modelBased" && fitOutcomeModelArgs$modelType == "km") {
     stop("varianceEstimator = \"modelBased\" is not available for modelType = \"km\"")
   }
-  if (fitOutcomeModelArgs$varianceEstimator == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops" &&
-      fitOutcomeModelArgs$modelType != "km") {
+  if (.needsCyclopsRobustVcov(fitOutcomeModelArgs)) {
     .checkCyclopsRobustVcov()
   }
   start <- Sys.time()

@@ -127,13 +127,12 @@ The robust variance (\code{varianceEstimator = "robust"}) is the HC0 sandwich cl
 clones of a person share a cluster, treating the weights as fixed. For the hazard ratio and the
 pooled logistic coefficients it is Cyclops' \code{vcov(fit, type = "robust")} by default, or this
 package's own sandwich with \code{robustVarianceEngine = "ccw"} (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}). For
-\code{"cox"} and \code{"km"} the
-standard errors of the risks, their differences and ratios, and the restricted means are the
-infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen estimates;
-for \code{"logistic"} they use the delta method with a numerical Jacobian. With \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the inverse of the weighted information; the
-\code{"cox"} rows at the horizons then have no standard errors or limits (the Kaplan-Meier has no
-model-based variance), and \code{"km"} is not supported. \code{varianceEstimator = "bootstrap"} is computed by
-\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by this function.
+\code{"cox"} and \code{"km"} the standard errors of the risks, their differences and ratios, and the restricted
+means are the infinitesimal-jackknife standard errors of the weighted Kaplan-Meier or Aalen-Johansen
+estimates; for \code{"logistic"} they use the delta method with a numerical Jacobian. With
+\code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the inverse of the weighted
+information; the \code{"cox"} rows at the horizons then have no standard errors or limits (the
+Kaplan-Meier has no model-based variance), and \code{"km"} is not supported. \code{varianceEstimator = "bootstrap"} is computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by this function.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

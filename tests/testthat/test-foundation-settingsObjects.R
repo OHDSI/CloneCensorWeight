@@ -351,6 +351,7 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   untypedList <- jsonlite::fromJSON(createFitOutcomeModelArgs(robustVarianceEngine = "ccw")$toJson(), simplifyDataFrame = FALSE)
   untypedList$robustVarianceEngine <- NULL
   expect_message(expect_equal(FitOutcomeModelArgs$new(untypedList = untypedList)$robustVarianceEngine, "cyclops"), "saved without robustVarianceEngine: filled with the current default robustVarianceEngine = cyclops")
+  expect_message(expect_equal(FitOutcomeModelArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA))$robustVarianceEngine, "cyclops"), "robustVarianceEngine")
   expect_error(createFitOutcomeModelArgs(robustVarianceEngine = "sandwich"), "robustVarianceEngine")
   expect_error(createFitOutcomeModelArgs(msmWeights = TRUE), "msmWeights")
   expect_error(createFitOutcomeModelArgs(useCovariates = TRUE), "Not yet supported")

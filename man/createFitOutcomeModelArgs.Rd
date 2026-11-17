@@ -51,11 +51,11 @@ Aalen-Johansen estimates (of \code{"km"}, and the rows at the horizons of
 (with \code{varianceEstimator = "robust"}): \code{"cyclops"} (Cyclops'
 \code{vcov(fit, type = "robust")}, fitted with the persons as subjects) or
 \code{"ccw"} (this package's own sandwich in R, the earlier behaviour). Both
-are the HC0 sandwich clustered on person and agree to rounding. The
-standard errors of the Kaplan-Meier and Aalen-Johansen estimates (of
-\code{"km"}, and the rows at the horizons of \code{"cox"}) are this package's own
-either way. \code{"cyclops"} needs a Cyclops with \code{vcov(type = "robust")}
-(see Details).}
+are the HC0 sandwich clustered on person and agree to rounding when the
+outcome model is converged (see Details). The standard errors of the
+Kaplan-Meier and Aalen-Johansen estimates (of \code{"km"}, and the rows at
+the horizons of \code{"cox"}) are this package's own either way. \code{"cyclops"}
+needs a Cyclops with \code{vcov(type = "robust")} (see Details).}
 
 \item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
 \code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}.}
@@ -153,11 +153,16 @@ for example for a \code{"neverInitiate"} strategy at long horizons; see \code{\l
 Robust variance: with \code{robustVarianceEngine = "cyclops"} (the default), the Cox model is fitted with
 each clone's person as its Cyclops subject, and the pooled logistic models (the outcome model and,
 with competing death, the death model, stacked into one model so that their joint covariance is
-clustered on person too) are refitted, from their estimates, to one row per person, interval and
-outcome; the variance is Cyclops' \code{vcov(fit, type = "robust")}. \code{"ccw"} computes the same sandwich
-in R from the score residuals summed by person, without the refit. \code{"cyclops"} needs a Cyclops
-whose \code{vcov()} has \code{type = "robust"}, which is not yet in a released Cyclops; \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}
-stops with an error naming \code{"ccw"} when the loaded Cyclops lacks it.
+clustered on person too) are refitted, from their estimates, to one row per person,
+strategy-by-interval cell and response, per model (cells with a fixed hazard left out); the variance
+is Cyclops' \code{vcov(fit, type = "robust")}, at the estimates of that refit. \code{"ccw"} computes the same
+sandwich in R from the score residuals summed by person, at the reported estimates, without the
+refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
+when the outcome model is converged, as with the default \code{control}; with a loose convergence
+criterion the refit moves the estimates, and the two differ accordingly. \code{"cyclops"} needs a
+Cyclops whose \code{vcov()} has \code{type = "robust"}, which is not yet in a released Cyclops;
+\code{\link[=fitOutcomeModel]{fitOutcomeModel()}} and \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} stop with an error naming \code{"ccw"} when the loaded Cyclops
+lacks it.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

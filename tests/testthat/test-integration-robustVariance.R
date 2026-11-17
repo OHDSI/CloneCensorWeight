@@ -210,3 +210,26 @@ test_that("The default robust variance stops with a clear error when the loaded 
   expect_false(is.na(getM4Estimate(fitM4(fixture, modelType = "cox", horizons = 10, varianceEstimator = "modelBased"), "hr", "seLogEstimate")))
   expect_false(is.na(getM4Estimate(fitM4(fixture, modelType = "km", horizons = 10), "risk_target_10", "se")))
 })
+
+test_that("When the stacked pooled logistic model cannot be refitted, its robust covariance is NA, with a warning", {
+  fixture <- createM4Fixture(n = 200, riskStart = 1, competingEvents = "death", seed = 3)
+  timeBasis <- createTimeBasis("linear", intervalLength = 1)
+  # Only the refit of the stacked model passes starting coefficients:
+  realTry <- .tryFitCyclopsModel
+  local_mocked_bindings(.tryFitCyclopsModel = function(cyclopsData, prior, control, startingCoefficients = NULL) {
+    if (is.null(startingCoefficients)) {
+      return(realTry(cyclopsData, prior, control, startingCoefficients))
+    }
+    return(list(fit = NULL, failure = "mocked failure", warnings = character(0)))
+  })
+  model <- NULL
+  expect_warning(
+    model <- fitM4(fixture, modelType = "logistic", horizons = c(6, 12), timeBasis = timeBasis),
+    "Fitting the stacked pooled logistic model of the robust variance failed: mocked failure"
+  )
+  expect_true(all(is.na(model$vcov)))
+  expect_false(anyNA(model$coefficients))
+  # The point estimates are kept, without standard errors or limits:
+  expect_false(anyNA(model$estimates$estimate))
+  expect_true(all(is.na(model$estimates$seLogEstimate)) && all(is.na(model$estimates$se)) && all(is.na(model$estimates$lb95)))
+})
