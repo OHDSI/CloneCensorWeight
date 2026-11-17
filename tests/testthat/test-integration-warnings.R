@@ -79,8 +79,7 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
   expect_match(warnings, "intervals of 3 days counted from riskStart = 0", fixed = TRUE)
   expect_match(warnings, "strategy 1 (Initiate within 7 days) at the end of day 7 (t = 8); strategy 2 (Do not initiate within 7 days) at the end of day 7 (t = 8)", fixed = TRUE)
   expect_match(warnings, "Use an intervalLength that divides t. With intervalLength = 1, an indicator time basis with armByTimeInteraction = TRUE reproduces the weighted Kaplan-Meier risks", fixed = TRUE)
-  # (Grids of 2 and 8 days in the default tier; 1, 2, 4 and 8 in the full tier.)
-  for (intervalLength in testConfigurations(c(1, 2, 4, 8), c(2, 8))) {
+  for (intervalLength in c(1, 2, 4, 8)) {
     expect_length(withoutInside(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength))), 0)
   }
 
