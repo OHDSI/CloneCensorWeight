@@ -67,6 +67,44 @@ test_that("The saturated pooled logistic model reports the null first-interval o
   expect_gt(estimates["rd_30", "se"], 0)
 })
 
+test_that("The first-interval odds ratio is NA when the first interval has no outcomes", {
+  # With seed 6 no clone has the outcome on day 0. Both first-interval cells then have a fixed hazard of
+  # 0 and are left out of the fit, and the target coefficient was the log odds ratio of a later interval
+  # chosen by the column pivoting (0.80, SE 1.23), reported as the first-interval odds ratio.
+  data <- simulateCloneCensorWeightData(n = 1000, nCovariates = 1, graceEnd = 7, maxDays = 30, initiationHazard = 0.05, outcomeHazard = 0.002, seed = 6)
+  population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowEnd = 30, endAnchor = "cohort start")))
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = list(
+    createTreatmentStrategy(1, "Initiate within 7", "initiateWithin", graceEnd = 7),
+    createTreatmentStrategy(2, "Not within 7", "notInitiateWithin", graceEnd = 7)
+  ))))
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  expect_equal(clones$clones |> dplyr::filter(outcomeCount > 0, survivalTime <= 1) |> dplyr::count() |> dplyr::pull(), 0)
+  models <- suppressMessages(fitCensoringModels(clones, data, createFitCensoringModelsArgs(useCovariates = FALSE)))
+  basis <- createTimeBasis(type = "indicator", intervalLength = 1)
+  weighted <- suppressMessages(computeCensoringWeights(clones, models, outcomeTimeBasis = basis))
+  on.exit(close(weighted), add = TRUE)
+  logistic <- suppressMessages(fitOutcomeModel(weighted, createFitOutcomeModelArgs(modelType = "logistic", horizons = 30, timeBasis = basis, armByTimeInteraction = TRUE)))
+  km <- suppressMessages(fitOutcomeModel(weighted, createFitOutcomeModelArgs(modelType = "km", horizons = 30)))
+  estimates <- as.data.frame(logistic$estimates)
+  rownames(estimates) <- estimates$estimand
+  expect_true(all(is.na(unlist(estimates["or", c("estimate", "logEstimate", "seLogEstimate", "lb95", "ub95", "p")]))))
+  # The risks are not affected, and equal the weighted Kaplan-Meier risks:
+  kmEstimates <- as.data.frame(km$estimates)
+  rownames(kmEstimates) <- kmEstimates$estimand
+  for (estimand in c("risk_target_30", "risk_comparator_30")) {
+    expect_equal(estimates[estimand, "estimate"], kmEstimates[estimand, "estimate"], tolerance = 1e-6, info = estimand)
+    expect_gt(estimates[estimand, "se"], 0)
+  }
+  # Without the interaction, the odds ratio is the common odds ratio of all intervals, which the other
+  # intervals identify:
+  common <- suppressMessages(fitOutcomeModel(weighted, createFitOutcomeModelArgs(modelType = "logistic", horizons = 30, timeBasis = basis, armByTimeInteraction = FALSE)))
+  expect_true(is.finite(common$estimates$logEstimate[common$estimates$estimand == "or"]))
+  expect_gt(common$estimates$seLogEstimate[common$estimates$estimand == "or"], 0)
+})
+
 test_that("A censoring model that cannot be fitted is named in the error", {
   fixture <- createM3Fixture(150, riskStart = 0L, seed = 12)
   # A covariate that is the indicator of starting by day 7:

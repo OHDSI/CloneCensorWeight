@@ -122,7 +122,9 @@
 #'   and differences). A contrast that is null by design has a standard error of 0 and `p = NA`: for
 #'   example the `"or"` row with `armByTimeInteraction = TRUE` (the odds ratio of the first interval)
 #'   when both strategies have the same rows in that interval, as an `"initiateWithin"` strategy and a
-#'   strategy of not initiating do on day 0 with `"eventsFirst"`;
+#'   strategy of not initiating do on day 0 with `"eventsFirst"`. With `armByTimeInteraction`, the
+#'   `"or"` row is `NA` when either strategy has no outcomes, or only outcomes, in the first interval
+#'   (its odds ratio is then 0, infinite or undefined);
 #' - `coefficients` and `vcov`: the model coefficients and their (robust or model-based) covariance
 #'   (`NULL` for `"km"`): for `"cox"` the target coefficient (log hazard ratio) of the outcome model;
 #'   for `"logistic"` those of the outcome model and, with competing death, of the death model,
@@ -818,7 +820,46 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # A row counts its clone as at risk for the whole interval, so on a grid with no interval ending there
 # the censored clones dilute the hazard of the rest of that interval; and a smooth time basis cannot
 # follow the change. Grace periods that end before riskStart are left out.
+#
+# The same dilution happens wherever a strategy censors clones on the day of a start, which can be any
+# day of a range: days 0 to G for "notInitiateWithin(G)", every day for "neverInitiate", and days 0 to
+# S - 1 for "initiateWithin" with graceStart S > 0. A clone censored inside an interval counts as at
+# risk for the whole interval, while the clones that remain carry, on the interval's last day, the
+# weights that make up for it, so the weighted risk set of the interval is too large. It is warned
+# about when that range of last days of follow-up (t from riskStart) has a day that ends no interval.
 .warnPooledGracePeriod <- function(data, timeBasis) {
+  intervalLength <- timeBasis$intervalLength
+  shift <- if (identical(data$sameDayOrdering, "deviationFirst")) 1 else 0
+  inside <- character(0)
+  for (strategyId in seq_along(data$strategies)) {
+    strategy <- data$strategies[[strategyId]]
+    graceStart <- if (is.null(strategy$graceStart)) 0 else strategy$graceStart
+    lastStartDay <- switch(strategy$type,
+      notInitiateWithin = strategy$graceEnd,
+      neverInitiate = Inf,
+      initiateWithin = graceStart - 1,
+      -1
+    )
+    if (is.null(lastStartDay) || lastStartDay < 0) {
+      next
+    }
+    first <- max(1, 0 - shift - data$riskStart + 1)
+    last <- lastStartDay - shift - data$riskStart + 1
+    if (last >= first && intervalLength > 1 && (last > first || first %% intervalLength != 0)) {
+      inside <- c(inside, sprintf(
+        "strategy %d (%s) at a start on day(s) %d to %s (t = %d to %s)",
+        strategyId, strategy$label, first + data$riskStart - 1 + shift,
+        if (is.finite(lastStartDay)) lastStartDay else "the end of follow-up",
+        first, if (is.finite(last)) last else "the end of follow-up"
+      ))
+    }
+  }
+  if (length(inside) > 0) {
+    warning(sprintf(
+      "Clones are censored inside the intervals of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d): %s. A clone censored inside an interval counts as at risk for the whole interval, while the clones that remain carry the weights that make up for it, so the weighted risk set of that interval is too large and its hazard too small. This biases the risks, and the odds ratio of the first interval (\"or\") with armByTimeInteraction = TRUE. Use intervalLength = 1: an indicator time basis on daily intervals, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      intervalLength, data$riskStart, paste(inside, collapse = "; ")
+    ), call. = FALSE)
+  }
   ends <- list()
   for (strategyId in seq_along(data$strategies)) {
     strategy <- data$strategies[[strategyId]]
@@ -831,17 +872,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       ends[[length(ends) + 1]] <- list(description = sprintf("strategy %d (%s) at the end of day %d (t = %d)", strategyId, strategy$label, endDay, t), t = t)
     }
   }
-  intervalLength <- timeBasis$intervalLength
   offGrid <- Filter(function(end) end$t %% intervalLength != 0, ends)
   if (length(offGrid) > 0) {
     warning(sprintf(
-      "No interval of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d) ends where the grace period ends (where clones are censored or their weights change): %s. A clone counts as at risk for the whole interval it is censored in, which dilutes that interval's hazard and biases the risks. Use an intervalLength that divides t (for example 1): an indicator time basis on such a grid, with armByTimeInteraction = TRUE, reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      "No interval of the pooled logistic outcome model's grid (intervals of %d days counted from riskStart = %d) ends where the grace period ends (where clones are censored or their weights change): %s. A clone counts as at risk for the whole interval it is censored in, which dilutes that interval's hazard and biases the risks. Use an intervalLength that divides t. With intervalLength = 1, an indicator time basis with armByTimeInteraction = TRUE reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
       intervalLength, data$riskStart, paste(vapply(offGrid, function(end) end$description, character(1)), collapse = "; ")
     ), call. = FALSE)
   }
   if (length(ends) > 0 && timeBasis$type != "indicator") {
     warning(sprintf(
-      "The pooled logistic outcome model's smooth time basis (%s) cannot follow the change in the hazards at the end of the grace period: %s, so its risks can be biased. Use an indicator time basis (createTimeBasis(type = \"indicator\")) on a grid with an interval ending there, with armByTimeInteraction = TRUE, which reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
+      "The pooled logistic outcome model's smooth time basis (%s) cannot follow the change in the hazards at the end of the grace period: %s, so its risks can be biased. Use an indicator time basis (createTimeBasis(type = \"indicator\")) on a grid with an interval ending there, with armByTimeInteraction = TRUE; on daily intervals (intervalLength = 1) it reproduces the weighted Kaplan-Meier risks (modelType = \"km\")",
       timeBasis$type, paste(vapply(ends, function(end) end$description, character(1)), collapse = "; ")
     ), call. = FALSE)
   }
@@ -928,7 +968,19 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     vcov[names(theta), names(theta)] <- thetaVcov
   }
 
-  estimates <- list(.ratioRow("or", coefficients[["target"]], if (is.null(vcov)) NA_real_ else .standardError(vcov["target", "target"], thetaVcov)))
+  # With the arm-by-time interaction, the target coefficient is the log odds ratio of the first interval
+  # only when the first-interval cells of both strategies are in the fit. When one of them has a fixed
+  # hazard (no events, or only events) or is not identified, that odds ratio is 0, infinite or undefined,
+  # and the target coefficient is the log odds ratio of whichever interval the column pivoting of
+  # .identifiedColumns() made the reference, so the odds ratio is NA:
+  logOr <- coefficients[["target"]]
+  seLogOr <- if (is.null(vcov)) NA_real_ else .standardError(vcov["target", "target"], thetaVcov)
+  reference <- c(1, nIntervals + 1)
+  if (fitOutcomeModelArgs$armByTimeInteraction && !all(is.na(models[[1]]$fixedHazard[reference]) & models[[1]]$estimable[reference])) {
+    logOr <- NA_real_
+    seLogOr <- NA_real_
+  }
+  estimates <- list(.ratioRow("or", logOr, seLogOr))
   if (deathFailed) {
     return(.withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design))))
   }

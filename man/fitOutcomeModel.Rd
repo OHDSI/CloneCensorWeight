@@ -30,7 +30,9 @@ differences, with the per-strategy values in \code{"rmst_target_<h>"}, \code{"rm
 and differences). A contrast that is null by design has a standard error of 0 and \code{p = NA}: for
 example the \code{"or"} row with \code{armByTimeInteraction = TRUE} (the odds ratio of the first interval)
 when both strategies have the same rows in that interval, as an \code{"initiateWithin"} strategy and a
-strategy of not initiating do on day 0 with \code{"eventsFirst"};
+strategy of not initiating do on day 0 with \code{"eventsFirst"}. With \code{armByTimeInteraction}, the
+\code{"or"} row is \code{NA} when either strategy has no outcomes, or only outcomes, in the first interval
+(its odds ratio is then 0, infinite or undefined);
 \item \code{coefficients} and \code{vcov}: the model coefficients and their (robust or model-based) covariance
 (\code{NULL} for \code{"km"}): for \code{"cox"} the target coefficient (log hazard ratio) of the outcome model;
 for \code{"logistic"} those of the outcome model and, with competing death, of the death model,
