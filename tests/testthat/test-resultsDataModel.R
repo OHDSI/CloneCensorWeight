@@ -112,6 +112,7 @@ test_that("createResultsDataModel creates the specified tables, and migrations r
   migrator <- quietly(getDataMigrator(connectionDetails, databaseSchema = "main"))
   expect_s3_class(migrator, "DataMigrationManager")
   expect_equal(nrow(migrator$getStatus()), 0)
+  expect_true(migrator$check())
   migrator$closeConnection()
   expect_silent(quietly(migrateDataModel(connectionDetails, databaseSchema = "main")))
   expect_equal(countRows(connection, "ccw_migration"), 0)
