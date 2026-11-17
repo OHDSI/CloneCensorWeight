@@ -334,7 +334,8 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
     modelType = "km",
     useCovariates = TRUE,
     prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
-    replicates = 2,
+    # (Two replicates in the full tier, one in the default tier.)
+    replicates = testConfigurations(2, 1),
     postGraceModel = "binary"
   )
   # The full-data censoring models, with variances chosen by cross-validation:
@@ -359,7 +360,7 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
   result <- runBootstrap(data, settings, censoringModels = fullModels)
   expect_equal(result$metaData$bootstrap$fixedPriorVariances, variances)
   # Only the replicates fit censoring models (the full-data models were given):
-  expect_length(calls, 2)
+  expect_length(calls, settings$fitOutcomeModelArgs$bootstrapArgs$replicates)
   for (call in calls) {
     expect_equal(call$fixed, variances)
     expect_equal(unname(unlist(call$fitted)), unname(unlist(variances[c("1", "2")])))
@@ -406,7 +407,8 @@ test_that("With graceStart > 0, replicates fix the prior variance of the early h
     modelType = "km",
     useCovariates = TRUE,
     prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
-    replicates = 2
+    # (Two replicates in the full tier, one in the default tier.)
+    replicates = testConfigurations(2, 1)
   )
   settings$createClonesArgs$strategies[[1]] <- createTreatmentStrategy(1, "Initiate on days 1 to 3", "initiateWithin", graceStart = 1, graceEnd = 3)
   # The binary models at G are fit on fewer persons than Cyclops' default minimum for cross-validation:
@@ -540,7 +542,9 @@ test_that("Estimates missing in replicates that did not fail are counted, with a
 test_that("Replicates fit the censoring models without the high-correlation check", {
   data <- bootstrapData(seed = 7)
   on.exit(close(data))
-  settings <- bootstrapSettings(useCovariates = TRUE, replicates = 2)
+  # (Two replicates in the full tier, one in the default tier.)
+  replicates <- testConfigurations(2, 1)
+  settings <- bootstrapSettings(useCovariates = TRUE, replicates = replicates)
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
   realFitCensoringModels <- fitCensoringModels
   checks <- logical(0)
@@ -550,6 +554,6 @@ test_that("Replicates fit the censoring models without the high-correlation chec
   })
   result <- runBootstrap(data, settings)
   # The full data first, with the check; then the replicates, without it:
-  expect_equal(checks, c(TRUE, FALSE, FALSE))
+  expect_equal(checks, c(TRUE, rep(FALSE, replicates)))
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
 })

@@ -69,9 +69,18 @@ test_that("The sensitivity analysis refits every default variant and custom ones
   ))
   expect_equal(unique(custom$variant), c("specified", "binary, none, unstabilized"))
   expect_equal(unique(custom$changes), c("", "postGraceModel = binary; covariateTimeInteraction = none; stabilized = FALSE"))
-  expect_error(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(fitCensoringModelsArgs = list(nonsense = 1)))), "no setting 'nonsense'")
-  expect_error(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(other = list()))), "unknown settings")
-  expect_error(suppressMessages(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(fitCensoringModelsArgs = list(postGraceModel = "x"))))), "postGraceModel")
+  # Invalid variants stop. computeCcwSensitivity() runs the specified analysis before it applies the
+  # variant, so the default tier checks the function that applies it, and the full tier the whole call:
+  if (isFullTestRun()) {
+    expect_error(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(fitCensoringModelsArgs = list(nonsense = 1)))), "no setting 'nonsense'")
+    expect_error(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(other = list()))), "unknown settings")
+    expect_error(suppressMessages(computeCcwSensitivity(clones, data, fitCensoringModelsArgs, variants = list(a = list(fitCensoringModelsArgs = list(postGraceModel = "x"))))), "postGraceModel")
+  } else {
+    base <- list(fitCensoringModelsArgs = fitCensoringModelsArgs, computeWeightsArgs = createComputeWeightsArgs(), fitOutcomeModelArgs = createFitOutcomeModelArgs())
+    expect_error(.applyVariant(base, list(fitCensoringModelsArgs = list(nonsense = 1)), "a"), "no setting 'nonsense'")
+    expect_error(.applyVariant(base, list(other = list()), "a"), "unknown settings")
+    expect_error(.applyVariant(base, list(fitCensoringModelsArgs = list(postGraceModel = "x")), "a"), "postGraceModel")
+  }
   skip_if_not_installed("ggplot2")
   expect_s3_class(plotCcwSensitivity(sensitivity), "ggplot")
   expect_s3_class(plotCcwSensitivity(sensitivity, estimands = "hr"), "ggplot")

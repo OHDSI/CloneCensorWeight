@@ -102,7 +102,15 @@ test_that("computeCcwDiagnostics compares postGraceModel, covariateTimeInteracti
   close(weighted)
   expect_equal(diagnostics$balance$maxAbsStdDiffAfter[1], max(abs(balance$afterMatchingStdDiff), na.rm = TRUE))
   expect_equal(diagnostics$balance$aboveThresholdAfter[1], sum(abs(balance$afterMatchingStdDiff) > 0.1, na.rm = TRUE))
+})
 
+test_that("computeCcwDiagnostics with the Cox hazard model compares fewer choices, and adds the sensitivity analysis", {
+  # Full tier: another computeCcwDiagnostics() call, with the sensitivity analysis. The default tier
+  # runs sensitivity = TRUE on the smaller design of the next test.
+  skipUnlessFullTests()
+  shared <- sharedDiagnostics()
+  data <- shared$data
+  clones <- shared$clones
   withSensitivity <- suppressMessages(computeCcwDiagnostics(
     clones, data, designArgs(hazardModelType = "cox"),
     numberOfGroups = 5, sensitivity = TRUE,
@@ -198,7 +206,13 @@ test_that("computeCcwDiagnostics compares choices that give the same models once
     close(clones)
     close(data)
   })
-  diagnostics <- suppressMessages(computeCcwDiagnostics(clones, data, designArgs(), numberOfGroups = 5))
+  diagnostics <- suppressMessages(computeCcwDiagnostics(
+    clones, data, designArgs(),
+    numberOfGroups = 5, sensitivity = TRUE,
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 30)
+  ))
+  expect_s3_class(diagnostics$sensitivity, "CcwSensitivity")
+  expect_output(print(diagnostics), "Estimates under the specified settings")
   # With initiateWithinModel = "binary" no hazard model is used, so the interaction settings give the
   # same models:
   expect_equal(diagnostics$variants$initiateWithinModel, rep(c("binary", "hazard", "hazard"), 2))

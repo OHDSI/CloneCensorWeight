@@ -851,8 +851,9 @@ test_that("createClones on an empty population", {
   expect_equal(colnames(result$clones), names(.clonesColumns))
 })
 
-test_that("createClones equals the slow reference on 1,000 random persons", {
-  tables <- simulateM2Tables(n = 1000, seed = 123)
+test_that("createClones equals the slow reference on 1,000 random persons (500 outside the full tier)", {
+  # (500 persons still exercise every case counted at the end.)
+  tables <- simulateM2Tables(n = testConfigurations(1000, 500), seed = 123)
   data <- do.call(createCloneCensorWeightData, tables)
   on.exit(close(data))
   settings <- list(
