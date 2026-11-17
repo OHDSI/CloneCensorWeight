@@ -1,0 +1,7 @@
+"file","tests","expectations","failed","errors","skipped","commit","date"
+"test-crossChecks-ccwr-lungcancer.R",2,19,0,0,0,"97475fe","2026-11-17"
+"test-crossChecks-m2-clones.R",2,32,0,0,0,"97475fe","2026-11-17"
+"test-crossChecks-m3-weights.R",2,8,0,0,0,"97475fe","2026-11-17"
+"test-crossChecks-m4-outcomes.R",4,30,0,0,0,"97475fe","2026-11-17"
+"test-crossChecks-m5-simulation.R",3,42,0,0,0,"97475fe","2026-11-17"
+"test-crossChecks-whatif.R",1,7,0,0,0,"97475fe","2026-11-17"

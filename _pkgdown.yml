@@ -29,6 +29,7 @@ articles:
       - SingleStudy
       - MultipleAnalyses
       - Simulation
+      - PackageComparison
   - title: "Developer documentation"
     navbar: ~
     contents:

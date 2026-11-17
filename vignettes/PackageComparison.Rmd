@@ -1,0 +1,220 @@
+---
+title: "Comparing CloneCensorWeight with Other Packages"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Comparing CloneCensorWeight with Other Packages}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", echo = FALSE)
+options(knitr.kable.NA = "")
+# The results are precomputed (see "How the results were made" at the end) and read from small CSV
+# files next to this vignette, so the vignette builds without running any comparison.
+tab <- function(name) utils::read.csv(file.path("packageComparison", paste0(name, ".csv")), stringsAsFactors = FALSE)
+has <- function(name) file.exists(file.path("packageComparison", paste0(name, ".csv")))
+show <- function(x, ...) knitr::kable(x, row.names = FALSE, ...)
+whatif <- tab("whatifSummary")
+gformula <- tab("gformulaSummary")
+```
+
+This vignette compares CloneCensorWeight with independent implementations of the same quantities:
+the book code of *Causal Inference: What If*, the `ccwr` package, and the truth of the package's own
+simulator. Each comparison states in advance what it requires. A *gated* comparison has a pass/fail
+criterion. A *reported* comparison is shown without one, because the two implementations make
+different, documented choices, so exact agreement is not expected.
+
+The component-level references (`survival`, `sandwich`, `boot`, `glmnet`) are tested on every check,
+and the cross-checks against `ccwr`, `ipw`, `TTE`, `trtswitch`, `geepack` and `simcausal` run in the
+nightly test suite (`tests/testthat/test-crossChecks-*.R`). This vignette shows the end-to-end
+comparisons. Comparisons whose reference package or data were not available are listed as skipped,
+with the reason.
+
+## Overview
+
+```{r overview}
+show(tab("overview"), col.names = c("Comparison", "Criterion", "Result"))
+```
+
+The packages the comparisons use, and whether they were installed where the results were made:
+
+```{r packages}
+show(tab("packages"), col.names = c("Tier", "Package", "Version", "Status"))
+```
+
+## What If: the G = 0 reduction
+
+With a grace period of zero days, `initiateWithin(0)` versus `notInitiateWithin(0)` is a point
+treatment at time zero: each person follows exactly one strategy from the start, and both censoring
+models reduce to one logistic model for the treatment on day 0, the propensity score. The
+clone-censor-weight analysis must then reproduce an ordinary inverse-probability-weighted survival
+analysis. Program 17.3 of Hernán and Robins's *Causal Inference: What If* is such an analysis: the
+effect of quitting smoking on death over 120 months in the NHEFS data, with stabilized weights from a
+logistic propensity model and a weighted pooled logistic hazards model with a quadratic in time and
+its interaction with treatment.
+
+The CloneCensorWeight analysis uses the 17.3 covariates as fixed covariates with no prior, stabilized
+weights without truncation, and a pooled logistic outcome model with a raw quadratic time basis and
+arm-by-time interaction. Months are coded as days with the risk window starting on day 1, so the
+day-0 treatment precedes the first interval. The gate is 1e-6 on the outcome-model coefficients and
+on the risks at every month, against a fresh run of the book code. The book models `event == 0`, so
+its coefficients have the opposite sign.
+
+```{r whatifSummary}
+x <- whatif
+for (column in 2:4) x[[column]] <- formatC(x[[column]], format = "e", digits = 1)
+show(x, col.names = c("Reference", "Largest coefficient difference",
+                                       "Largest risk difference", "Largest relative weight difference", "Gate"))
+```
+
+```{r whatifCoefficients}
+x <- tab("whatifCoefficients")
+x$difference <- formatC(x$difference, format = "e", digits = 1)
+show(x, digits = 10, col.names = c("Term", "Book (event == 0)", "CloneCensorWeight", "Sum"))
+```
+
+```{r whatifRisks}
+x <- tab("whatifRisks")
+show(x, digits = 6, col.names = c("Month", "Book, quit", "CCW, quit", "Book, did not quit", "CCW, did not quit"))
+```
+
+The book shows the 120-month curves only in a plot; the table gives their values. The NHEFS data are
+not distributed with this package. The test `test-crossChecks-whatif.R` repeats this comparison when
+the environment variable `CCW_NHEFS_PATH` names a local copy of `nhefs.csv`, from the book's web page,
+and skips otherwise.
+
+## G-methods on simulated data
+
+The parametric g-formula (`gfoRmula`, `gfoRmulaICE`) and TMLE (`lmtp`) estimate the same risks as a
+clone-censor-weight analysis under a different set of modelling assumptions. The plan compares them on
+data from `simulateCloneCensorWeightData()`, whose true risks `computeTrueRisks()` computes by
+simulating each regime directly: data-generating process (a), in which treatment acts only after the
+grace period, so that the binary-at-G regime and the natural grace period have the same risks; a grace
+period of 7 days, a daily horizon of 56 days, one binary confounder and `r format(gformula$n, big.mark = ",", scientific = FALSE)`
+persons per replicate.
+
+**The g-formula packages were not installed** (`r gformula$gformulaPackages`), so only the
+CloneCensorWeight half of this comparison ran: `r gformula$replicates` replicates
+(`r gformula$failedReplicates` failed), censoring models with the package defaults but no prior
+(correctly specified), weighted Kaplan-Meier/Aalen-Johansen risks with death as a competing event.
+The pre-specified gate is |z| < 3 for every risk, risk difference and log risk ratio at days 7, 14,
+28 and 56, where z is the mean bias over its Monte Carlo standard error (combined with that of the
+truth), a Bonferroni bound for 16 cells at a family-wise 5%. Bias over the empirical SE and the
+coverage of the 95% confidence intervals are reported. The same analyses with the default
+99th-percentile weight truncation are reported, not gated.
+
+```{r gformula}
+x <- tab("gformulaCells")
+sameUnderTruncation <- isTRUE(all.equal(x$mean[x$gate == "reported"], x$mean[x$gate != "reported"]))
+show(if (sameUnderTruncation) x[x$gate != "reported", ] else x, digits = 4, col.names = c("Weights", "Estimand", "Replicates", "Truth", "Mean", "Bias", "Empirical SE",
+                                  "Mean model SE", "z", "Bias / empirical SE", "Coverage", "Gate"))
+```
+
+Of the gated cells, `r sum(abs(x$biasOverEmpSe[x$gate != "reported"]) >= 0.1)` have a bias of at
+least 0.1 empirical SE, the bias criterion of the package's main simulation study (with 500
+replicates, 0.1 empirical SE is about 2.2 Monte Carlo SEs). The largest |z| is
+`r sprintf("%.2f", max(abs(x$z[x$gate != "reported"])))`. With one binary confounder the weights take
+few distinct values, and the 99th-percentile cap (taken over those values)
+`r if (sameUnderTruncation) "leaves every estimate unchanged, so its rows are not shown" else "changes some estimates"`.
+
+Under process (a) the truths of the two grace-period definitions agree:
+
+```{r gformulaTruth}
+show(tab("gformulaTruthByRegime"), digits = 6, col.names = c("Estimand", "Binary at G", "Natural grace"))
+```
+
+## ccwr on the lung cancer data
+
+`ccwr` implements the clone-censor-weight analysis of Maringe et al. (2020) and ships its simulated
+lung cancer data (200 patients; surgery within 182 days vs not). Two comparisons:
+
+- **Outcome stage (gated).** Given `ccwr`'s clones and Cox censoring weights, our weighted
+  Kaplan-Meier risks and Cox marginal structural model must equal `ccwr`'s, refitted with Breslow ties
+  (`ccwr` uses Efron ties), to 1e-10 on risks and 1e-6 on the log hazard ratio and its robust SE.
+- **Full pipeline (reported).** Each package builds its own clones and weights, with times rounded to
+  whole days. Exact agreement is impossible: `ccwr` fits a Cox censoring model in the surgery arm where
+  we fit the binary model at the end of the grace period, and its ties and same-day rules differ. The
+  plan expects the 1-year risk difference and log hazard ratio within about one bootstrap SD, and
+  bootstrap SDs within 10%.
+
+```{r ccwrStage}
+x <- tab("ccwrOutcomeStage")
+x$difference <- formatC(x$difference, format = "e", digits = 1)
+show(x, digits = 10, col.names = c("Quantity", "ccwr", "CloneCensorWeight", "Tolerance", "Difference", "Gate"))
+```
+
+```{r ccwrFull}
+show(tab("ccwrFullPipeline"), digits = 4,
+     col.names = c("Quantity", "ccwr", "ccwr bootstrap SD", "CloneCensorWeight", "CCW robust SE",
+                   "CCW bootstrap SD", "Difference / CCW bootstrap SD", "Bootstrap SD ratio (CCW / ccwr)"))
+```
+
+The `ccwr` bootstrap SD of the log hazard ratio comes from `emul_estimate_bootstrap()`; that of the
+risk difference from the same public `ccwr` steps run on person-level resamples, because
+`emul_estimate_bootstrap()` returns only the hazard ratio.
+
+## Synthea: acute myocardial infarction and metoprolol
+
+On the synthetic Synthea database, persons with a first acute myocardial infarction either start
+metoprolol within 7 days or do not (`initiateWithin(0, 7)` vs `notInitiateWithin(7)`), with all-cause
+death within one year as the outcome. Synthea assigns treatment timing by rule, so its confounding is
+artificial: this is a test of plumbing, not clinical evidence. Both packages analyse the same random
+subsample of 5,000 persons. `ccwr` uses a fixed list of covariates (5-year age groups, sex, the
+Charlson index, and antithrombotic, lipid-modifying and ACE-inhibitor use in the prior year) in Cox
+censoring models for both arms. CloneCensorWeight is shown with the same covariates and no prior, and with its defaults
+(all baseline covariates, L1 prior with cross-validation). The plan expects the same direction and
+overlapping confidence intervals. Counts below 11 are shown as "<11".
+
+```{r syntheaCounts}
+show(tab("syntheaInitiation"), col.names = c("Persons", "Start on day 0", "Start on days 1-7",
+                                              "No start by day 7", "Deaths within 365 days"))
+```
+
+```{r syntheaEstimates}
+x <- tab("syntheaEstimates")
+show(x, digits = 3, col.names = c("Fit", "Risk, start", "Risk, no start", "RD", "RD lower", "RD upper",
+                                  "HR", "HR lower", "HR upper", "Largest weight", "Same direction as ccwr",
+                                  "HR CI overlaps ccwr's"))
+```
+
+`ccwr`'s Kaplan-Meier fit has no person-clustered variance, so its risk difference has no confidence
+interval. The covariates of this extraction include records on day 0, which can follow the treatment
+decision when treatment starts on day 0, as it does for
+`r syn <- tab("syntheaInitiation"); syn$startDay0` of the `r syn$persons` persons;
+`fitCensoringModels()` warns about it in both CloneCensorWeight fits. The fixed list has four such
+covariates (the Charlson index and the three drug groups), the default fit every covariate of the
+extraction. The estimates of the default fit go in the
+`r if (isTRUE(as.logical(x$sameDirectionAsCcwr[3]))) "same direction as" else "opposite direction to"`
+those of `ccwr`. The `TrialEmulation` comparison of the plan (start on day 0 vs never) was skipped because the
+package was not installed.
+
+## Not run
+
+- **Webster-Clark et al. (2025) tutorial.** The plan gates the clone counts, end reasons and person-time
+  of the 0–30 and 0–90 day regimes against the tutorial's `01_cloning_and_censoring.R` on its
+  SynPUF-derived `baseccwcohort.sas7bdat`, with `"deviationFirst"`. The tutorial's data and code were
+  not available locally and `haven` was not installed.
+- **The Maringe 2020 gist translation**, whose sanity targets are a 1-year survival difference of about
+  0.12 and a hazard ratio of about 0.607: the gist was not available locally.
+- **`ccwbalance`** (the natural-grace truth) and **`TrialEmulation`**: not installed.
+
+```{r crossChecks, eval = has("crossChecks"), results = "asis"}
+cat("## The nightly cross-checks\n\nThe Tier 2 cross-check suite, as last run for these results:\n\n")
+print(show(tab("crossChecks"), col.names = c("Test file", "Tests", "Expectations", "Failed", "Errors", "Skipped", "Commit", "Date")))
+```
+
+## How the results were made
+
+The scripts are in the developers' `extras/comparison/` folder, which is part of neither the git
+repository nor the installed package: `whatif/` (with a reviewed transcription of Program 17.3), `gformula/`, `ccwr/`,
+`synthea/`, and `PackageComparisonVignetteDataFetch.R`, which writes the tables shown here.
+`extras/nightly/runNightly.sh` runs the cross-check suite and writes a dated log.
+
+## References
+
+Hernán MA, Robins JM (2020). *Causal Inference: What If*. Boca Raton: Chapman & Hall/CRC.
+
+Maringe C, Benitez Majano S, Exarchakou A, et al. (2020). Reflection on modern methods: trial
+emulation in the presence of immortal-time bias. Assessing the benefit of major surgery for elderly
+lung cancer patients using observational data. *International Journal of Epidemiology* 49(5):1719–1729.

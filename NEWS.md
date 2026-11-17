@@ -175,3 +175,12 @@ New features:
   the hazard model's `intervalLength` does not allow). `fitCensoringModels()` warns when, under
   `"naturalGrace"`, persons reach day `G` untreated but nobody starts on day `G`, so that the regime is
   not identified.
+* The `PackageComparison` vignette (plan sections 6.4 and 7.3) shows precomputed end-to-end comparisons:
+  the What If G = 0 reduction (Program 17.3 on NHEFS; gated at 1e-6 on coefficients and risks), the
+  simulated DGP (a) against `computeTrueRisks()` (gated; the g-formula packages were not installed, so
+  their half is skipped), `ccwr` on its lung cancer data (outcome stage gated, full pipeline reported),
+  and Synthea AMI against `ccwr` (reported). Comparisons whose package or data were missing are listed
+  as skipped. The scripts that make the results are in `extras/comparison/`.
+* The cross-check `test-crossChecks-whatif.R` repeats the What If G = 0 reduction when the environment
+  variable `CCW_NHEFS_PATH` names a local copy of the NHEFS data, which is not distributed with the
+  package; it skips otherwise.
