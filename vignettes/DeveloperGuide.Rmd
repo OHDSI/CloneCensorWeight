@@ -592,11 +592,11 @@ exported function and every value of every design choice at least once, in a lig
 few minutes:
 
 - The test files run in parallel (`Config/testthat/parallel: true` in `DESCRIPTION`). testthat starts
-  `TESTTHAT_CPUS` processes; `tests/testthat.R` sets 4 when `NOT_CRAN=true` (as `devtools::check()`
+  `TESTTHAT_CPUS` processes; `tests/testthat.R` sets up to 8 (the number of cores less 2, at least 2) when `NOT_CRAN=true` (as `devtools::check()`
   sets it) and `TESTTHAT_CPUS` is unset, and otherwise (on CRAN) testthat's default of 2 applies. Set
   `TESTTHAT_CPUS` to use another number, or `TESTTHAT_PARALLEL=false` to run the files one after the
   other. `devtools::test()` does not run `tests/testthat.R`, so it starts 2 processes unless you first
-  run `Sys.setenv(TESTTHAT_CPUS = 4)`. Each process has its own temporary folder, so tests that write files or build a Eunomia
+  run `Sys.setenv(TESTTHAT_CPUS = 8)`. Each process has its own temporary folder, so tests that write files or build a Eunomia
   database do not collide.
 - `tests/testthat/setup-andromeda.R` works around a bug in Andromeda 1.2.0 and 1.2.1, whose `flushAndromeda()`
   creates a new temporary duckdb database on every flush (it lives until garbage collection), and a
@@ -618,7 +618,7 @@ reference implementations, the statistical checks at large sample sizes, the boo
 with 20 replicates and the Cox MSM on a million segments. Run it with
 
 ```r
-Sys.setenv(CCW_FULL_TESTS = "true", TESTTHAT_CPUS = 4)
+Sys.setenv(CCW_FULL_TESTS = "true", TESTTHAT_CPUS = 8)
 devtools::test()
 ```
 
