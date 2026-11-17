@@ -114,4 +114,7 @@ New features:
   with `initiateWithinModel = "hazard"`). The default, `"binaryAtG"`, keeps the binary-at-`G` weights
   (plan decision 9 item 7). `computeTrueRisks(graceRegime = )` gives the truth of either regime. The
   calibration and positivity diagnostics, `computeCcwDiagnostics()` and the default variants of
-  `computeCcwSensitivity()` include both regimes.
+  `computeCcwSensitivity()` include both regimes (leaving out a regime or `initiateWithinModel` that
+  the hazard model's `intervalLength` does not allow). `fitCensoringModels()` warns when, under
+  `"naturalGrace"`, persons reach day `G` untreated but nobody starts on day `G`, so that the regime is
+  not identified.

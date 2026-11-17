@@ -58,7 +58,9 @@ other values: \code{postGraceModel}, \code{initiateWithinModel}, \code{graceRegi
 them), \code{truncateMsmWeights} (with
 truncation, not for \code{modelType = "km"}, which does not use the weights on the MSM scale) and the
 truncation \code{basis} of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (with percentile truncation), and \code{msmWeights} of
-\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} (not for \code{modelType = "km"}). Pass \code{variants} for other combinations.
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} (not for \code{modelType = "km"}). An \code{initiateWithinModel} or \code{graceRegime}
+variant that the pooled logistic hazard model's \code{intervalLength} does not allow (see
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}) is left out. Pass \code{variants} for other combinations.
 
 \code{graceRegime} is not a modelling choice: \code{"binaryAtG"} and \code{"naturalGrace"} define different
 \code{"initiateWithin"} regimes (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}), so their estimates differ when the

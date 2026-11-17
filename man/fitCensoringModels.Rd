@@ -98,7 +98,11 @@ gives both.
 \item \code{"initiateWithin"} with \code{graceRegime = "naturalGrace"}: the binary model at \code{G} is fit on the
 persons who reach day \code{G} untreated (no start before day \code{G}), with the response "started on day
 \code{G}", the probability of the last-interval weight (with \code{initiateWithinModel = "hazard"}, the
-hazard model through \code{G} gives it).
+hazard model through \code{G} gives it). Only the clones that start on day \code{G} represent the persons
+who reach day \code{G} untreated after \code{G}, so when none of these persons starts on day \code{G} the
+regime is not identified: those persons are all censored at \code{G}, and the risks after \code{G} stand
+for the persons who started before \code{G} only. \code{fitCensoringModels()} then warns. A covariate
+stratum without starts on day \code{G} shows in \code{\link[=computePositivity]{computePositivity()}}.
 \item \code{"notInitiateWithin"} and \code{"neverInitiate"}: a model of the hazard of initiation. Each person is
 at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 death (that day with \code{"deviationFirst"}), \code{riskEnd}, and the strategy's horizon \code{H} (\code{G}, or the

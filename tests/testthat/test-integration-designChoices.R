@@ -518,6 +518,42 @@ test_that("The default sensitivity variants include initiateWithinModel, and its
   expect_false(any(grepl("initiateWithinModel|graceRegime", variants(designStrategies()[2]))))
 })
 
+test_that("The default sensitivity variants leave out choices the hazard model's grid does not allow", {
+  notWithin3 <- createTreatmentStrategy(2, "Not within 3", "notInitiateWithin", graceEnd = 3)
+  twoDays <- createTimeBasis(intervalLength = 2)
+  variants <- function(strategies, ...) {
+    names(.defaultSensitivityVariants(strategies, designArgs(timeBasis = twoDays, ...), createComputeWeightsArgs(), createFitOutcomeModelArgs(modelType = "km")))
+  }
+  # initiateWithinModel = "hazard" with G = 3: "naturalGrace" needs G to be a multiple of 2:
+  initiate03 <- list(createTreatmentStrategy(1, "Init 0-3", "initiateWithin", graceEnd = 3), notWithin3)
+  expect_false("graceRegime = naturalGrace" %in% variants(initiate03, initiateWithinModel = "hazard"))
+  expect_true("initiateWithinModel = binary" %in% variants(initiate03, initiateWithinModel = "hazard"))
+  expect_true("graceRegime = naturalGrace" %in% variants(initiate03))
+  # graceStart = 1: initiateWithinModel = "hazard" needs graceStart to be a multiple of 2:
+  initiate13 <- list(createTreatmentStrategy(1, "Init 1-3", "initiateWithin", graceStart = 1, graceEnd = 3), notWithin3)
+  expect_false("initiateWithinModel = hazard" %in% variants(initiate13))
+  expect_true("graceRegime = naturalGrace" %in% variants(initiate13))
+
+  # computeCcwSensitivity() runs without the disallowed variant (it stopped before):
+  data <- simulateCloneCensorWeightData(n = 300, maxDays = 20, graceEnd = 3, seed = 7)
+  population <- suppressMessages(createStudyPopulation(
+    cloneCensorWeightData = data,
+    outcomeId = 3,
+    createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowStart = 0, riskWindowEnd = 20, endAnchor = "cohort start")
+  ))
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = initiate03)))
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  sensitivity <- suppressMessages(computeCcwSensitivity(
+    clones, data, designArgs(timeBasis = twoDays, initiateWithinModel = "hazard"),
+    fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 10)
+  ))
+  expect_false(any(attr(sensitivity, "variants")$graceRegime == "naturalGrace"))
+  expect_true("initiateWithinModel = binary" %in% sensitivity$variant)
+})
+
 test_that("The sensitivity analysis refits every default variant and custom ones", {
   data <- simulateCloneCensorWeightData(n = 300, maxDays = 60, graceEnd = 7, seed = 7)
   clones <- designClones(data)

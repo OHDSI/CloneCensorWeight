@@ -957,7 +957,9 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #' them), `truncateMsmWeights` (with
 #' truncation, not for `modelType = "km"`, which does not use the weights on the MSM scale) and the
 #' truncation `basis` of [createComputeWeightsArgs()] (with percentile truncation), and `msmWeights` of
-#' [createFitOutcomeModelArgs()] (not for `modelType = "km"`). Pass `variants` for other combinations.
+#' [createFitOutcomeModelArgs()] (not for `modelType = "km"`). An `initiateWithinModel` or `graceRegime`
+#' variant that the pooled logistic hazard model's `intervalLength` does not allow (see
+#' [createFitCensoringModelsArgs()]) is left out. Pass `variants` for other combinations.
 #'
 #' `graceRegime` is not a modelling choice: `"binaryAtG"` and `"naturalGrace"` define different
 #' `"initiateWithin"` regimes (see [createFitCensoringModelsArgs()]), so their estimates differ when the
@@ -1030,6 +1032,7 @@ computeCcwSensitivity <- function(clones,
   # Each censoring model is fit once, also when variants (or computeCcwDiagnostics()) share it:
   fits <- if (is.null(.censoringModelFits)) list() else .censoringModelFits
   warnDay0CovariateWindows <- is.null(.censoringModelFits)
+  warnNaturalGrace <- is.null(.censoringModelFits)
   weightedClones <- list()
   on.exit(for (weighted in weightedClones) close(weighted))
   estimates <- list()
@@ -1038,8 +1041,11 @@ computeCcwSensitivity <- function(clones,
     args <- .applyVariant(base, variants[[name]], name)
     censoringKey <- as.character(args$fitCensoringModelsArgs$toJson())
     if (is.null(censoringModels[[censoringKey]])) {
-      fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args$fitCensoringModelsArgs, fits = fits, warnDay0CovariateWindows = warnDay0CovariateWindows)
+      fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args$fitCensoringModelsArgs, fits = fits, warnDay0CovariateWindows = warnDay0CovariateWindows, warnNaturalGrace = warnNaturalGrace)
       warnDay0CovariateWindows <- FALSE
+      if (args$fitCensoringModelsArgs$graceRegime == "naturalGrace") {
+        warnNaturalGrace <- FALSE
+      }
       fits <- fitted$fits
       censoringModels[[censoringKey]] <- fitted$models
     }
@@ -1087,11 +1093,16 @@ computeCcwSensitivity <- function(clones,
     }
   }
   if (any(types == "initiateWithin")) {
+    # Choices the hazard model's grid does not allow (.checkInitiateWithinHazardGrid()) are left out:
     for (value in setdiff(c("binary", "hazard"), fitCensoringModelsArgs$initiateWithinModel)) {
-      add("fitCensoringModelsArgs", "initiateWithinModel", value)
+      if (.hazardGridAllows(strategies, fitCensoringModelsArgs, initiateWithinModel = value)) {
+        add("fitCensoringModelsArgs", "initiateWithinModel", value)
+      }
     }
     for (value in setdiff(c("binaryAtG", "naturalGrace"), fitCensoringModelsArgs$graceRegime)) {
-      add("fitCensoringModelsArgs", "graceRegime", value)
+      if (.hazardGridAllows(strategies, fitCensoringModelsArgs, graceRegime = value)) {
+        add("fitCensoringModelsArgs", "graceRegime", value)
+      }
     }
   }
   usesHazardModel <- .usesHazardModel(strategies, fitCensoringModelsArgs$initiateWithinModel)
@@ -1113,6 +1124,18 @@ computeCcwSensitivity <- function(clones,
     add("fitOutcomeModelArgs", "msmWeights", setdiff(c("unstabilized", "stabilized"), fitOutcomeModelArgs$msmWeights))
   }
   return(variants)
+}
+
+# Does the hazard model's interval grid allow these choices of initiateWithinModel and graceRegime
+# (.checkInitiateWithinHazardGrid())?
+.hazardGridAllows <- function(strategies,
+                              fitCensoringModelsArgs,
+                              initiateWithinModel = fitCensoringModelsArgs$initiateWithinModel,
+                              graceRegime = fitCensoringModelsArgs$graceRegime) {
+  args <- fitCensoringModelsArgs$clone(deep = TRUE)
+  args$initiateWithinModel <- initiateWithinModel
+  args$graceRegime <- graceRegime
+  return(!inherits(tryCatch(.checkInitiateWithinHazardGrid(strategies, args), error = function(e) e), "error"))
 }
 
 # Does an analysis use an initiation hazard model (whose covariateTimeInteraction then matters)? Every
@@ -1389,10 +1412,7 @@ computeCcwDiagnostics <- function(clones,
   )
   # Combinations the hazard model's grid does not allow (.checkInitiateWithinHazardGrid()) are left out:
   allowed <- vapply(seq_len(nrow(variants)), function(i) {
-    args <- fitCensoringModelsArgs$clone(deep = TRUE)
-    args$initiateWithinModel <- variants$initiateWithinModel[i]
-    args$graceRegime <- variants$graceRegime[i]
-    !inherits(tryCatch(.checkInitiateWithinHazardGrid(strategies, args), error = function(e) e), "error")
+    .hazardGridAllows(strategies, fitCensoringModelsArgs, variants$initiateWithinModel[i], variants$graceRegime[i])
   }, logical(1))
   variants <- variants[allowed, ]
   variants$variant <- sprintf(
@@ -1418,7 +1438,14 @@ computeCcwDiagnostics <- function(clones,
     args$covariateTimeInteraction <- variants$covariateTimeInteraction[i]
     args$initiateWithinModel <- variants$initiateWithinModel[i]
     args$graceRegime <- variants$graceRegime[i]
-    fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args, fits = fits, warnDay0CovariateWindows = i == 1)
+    # Warn about day-0 covariate windows once, and about a natural-grace regime without starts on day G
+    # once (with the first variant of that regime):
+    fitted <- .fitCensoringModelsWithFits(
+      clones, cloneCensorWeightData, args,
+      fits = fits,
+      warnDay0CovariateWindows = i == 1,
+      warnNaturalGrace = isTRUE(i == match("naturalGrace", variants$graceRegime))
+    )
     fits <- fitted$fits
     variantModels[[i]] <- fitted$models
   }

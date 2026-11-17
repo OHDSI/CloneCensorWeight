@@ -669,9 +669,16 @@ TimeBasis <- R6Class(
 #'   selection that biases `initiateWithinModel = "hazard"` under `"binaryAtG"` does not arise). With
 #'   the pooled logistic hazard model the last interval must be day `G` alone (`graceEnd` a multiple of
 #'   `intervalLength`). The weights of few clones (those that start on day `G`) vary, so they are less
-#'   stable than those of `"binaryAtG"`. The stabilized weights after `G` multiply by the same quantity
-#'   for every clone (the marginal probability of starting by `G` of the persons under follow-up at
-#'   `G`), so the weighted Kaplan-Meier risks do not depend on stabilization.
+#'   stable than those of `"binaryAtG"`. Only those clones stand for the persons who reach day `G`
+#'   untreated, so the regime needs starts on day `G`: [fitCensoringModels()] warns when nobody starts
+#'   on day `G`, and [computePositivity()] shows covariate strata where few do. When few day-`G`
+#'   starters carry the weight after `G`, the standard errors of risks at horizons shortly after `G`
+#'   fall with the estimate and their intervals can under-cover (simulation of plan section 9 item 7,
+#'   `G = 7`, 6000 persons with about 140 day-7 starters and 14 of their outcomes by day 14: coverage
+#'   0.89 to 0.90 at day 14, 0.95 to 0.96 at day 60; with 24000 persons, 0.94 to 0.95 at day 14).
+#'   The stabilized weights after `G` multiply by the same quantity for every clone (the marginal
+#'   probability of starting by `G` of the persons under follow-up at `G`), so the weighted
+#'   Kaplan-Meier risks do not depend on stabilization.
 #'
 #' [computeTrueRisks()] gives the truth of either regime (its argument `graceRegime`). The choice is a
 #' choice of estimand, not of model: [computeCcwSensitivity()] reports both.

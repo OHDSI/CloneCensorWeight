@@ -227,8 +227,10 @@ test_that("The hazard model's interval grid must start an interval at graceStart
   clones3 <- buildM3Clones(gPersons(), gStrategies(graceStart = 0, graceEnd = 3), "eventsFirst")
   on.exit(close(clones3), add = TRUE)
   expect_error(fitCensoringModels(clones3, data, gArgs(initiateWithinModel = "hazard", graceRegime = "naturalGrace", timeBasis = weekly)), "graceEnd of strategy 'Initiate' \\(3\\) must be a multiple")
-  # The binary model at G has no grid, and "binaryAtG" with graceStart = 0 needs none:
-  expect_s3_class(suppressMessages(fitCensoringModels(clones3, data, gArgs(graceRegime = "naturalGrace", timeBasis = weekly))), "CcwCensoringModels")
+  # The binary model at G has no grid, and "binaryAtG" with graceStart = 0 needs none (nobody starts on
+  # day 3, so "naturalGrace" warns):
+  expect_warning(models <- suppressMessages(fitCensoringModels(clones3, data, gArgs(graceRegime = "naturalGrace", timeBasis = weekly))), "none of the 2 persons")
+  expect_s3_class(models, "CcwCensoringModels")
   expect_s3_class(suppressMessages(fitCensoringModels(clones3, data, gArgs(initiateWithinModel = "hazard", timeBasis = weekly))), "CcwCensoringModels")
 })
 
@@ -277,4 +279,110 @@ test_that("Calibration and positivity report the models of graceStart > 0 and na
       expect_s3_class(plotCensoringModelCalibration(calibration), "ggplot")
     }
   }
+})
+
+test_that("graceStart > 0 weights by hand differ by covariate stratum under both regimes", {
+  # gPersons() (X = 0, rowIds 1-7) plus seven persons with X = 1 (covariate 1001, rowIds 8-14): starts
+  # on days 0 (8, 9), 1 (10) and 2 (11); 12, 13 and 14 do not start, and 14 has the outcome on day 5.
+  # With one binary covariate and no prior, the binary models and the early hazard model through day 0
+  # (one interval) are saturated, so they give the empirical shares and hazards of each stratum.
+  persons <- rbind(gPersons(), data.frame(
+    rowId = 8:14,
+    personSeqId = 8:14,
+    riskStart = 0L,
+    riskEnd = 10L,
+    nominalRiskEnd = 10L,
+    outcomeDay = c(NA, NA, NA, NA, NA, NA, 5L),
+    deathDay = NA_integer_,
+    treatmentDay = c(0L, 0L, 1L, 2L, NA, NA, NA),
+    comparatorTreatmentDay = NA_integer_
+  ))
+  data <- createM3Data(list(
+    persons = persons,
+    covariates = data.frame(rowId = 8:14, covariateId = 1001, covariateValue = 1)
+  ))
+  clones <- buildM3Clones(persons, gStrategies(graceStart = 1), "eventsFirst")
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  # Early hazard model (day 0): X = 0: 1 of 7 starts, W = 7/6 on days 1..2; X = 1: 2 of 7, W = 7/5.
+  # "binaryAtG", persons under follow-up at G = 2 not started before day 1: X = 0: 2, 4, 5, 6 (2 and 4
+  # started), pi = 1/2, W = 7/3 after G; X = 1: 10-14 (10 and 11 started), pi = 2/5, W = 7/2.
+  # "naturalGrace", persons untreated at G: X = 0: 4, 5, 6 (4 starts on day 2), p = 1/3; X = 1: 11-14
+  # (11 starts on day 2), p = 1/4. After G, W = 7/6 (clone 2) and 7/2 (clone 4); 7/5 (clone 10) and
+  # 28/5 (clone 11). The clones that start on day 0 (1, 8, 9) deviate on day 0.
+  early <- c(1, rep(7 / 6, 6), 1, 1, rep(7 / 5, 5))
+  after <- list(
+    binaryAtG = c(`2` = 7 / 3, `4` = 7 / 3, `10` = 7 / 2, `11` = 7 / 2),
+    naturalGrace = c(`2` = 7 / 6, `4` = 7 / 2, `10` = 7 / 5, `11` = 28 / 5)
+  )
+  for (graceRegime in names(after)) {
+    models <- suppressMessages(fitCensoringModels(clones, data, gArgs(graceRegime = graceRegime)))
+    segments <- collectSegments(suppressMessages(computeCensoringWeights(clones, models, gNoTruncation())))
+    initiate <- segments[segments$strategyId == 1, ]
+    before <- initiate[initiate$startTime < 3, ]
+    expect_equal(before$weight, early[before$rowId], tolerance = 1e-6)
+    afterG <- initiate[initiate$startTime >= 3, ]
+    expect_setequal(as.character(afterG$rowId), names(after[[graceRegime]]))
+    expect_equal(afterG$weight, unname(after[[graceRegime]][as.character(afterG$rowId)]), tolerance = 1e-6)
+  }
+})
+
+test_that("graceStart > 0 and naturalGrace with the Cox hazard model: Breslow survival by hand", {
+  data <- gData()
+  clones <- buildM3Clones(gPersons(), gStrategies(graceStart = 1), "eventsFirst")
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  # Breslow cumulative hazards without covariates: 1/7 (day 0), + 1/5 (day 1), + 1/3 (day 2), and
+  # S(d) = exp(-Lambda(d)). The early model through day 0 is that of a notInitiateWithin(0) strategy:
+  # W = exp(1/7) on days 1..2.
+  notWithin0 <- buildM3Clones(gPersons(), gStrategies(graceStart = 1, second = createTreatmentStrategy(2, "Not within 0", "notInitiateWithin", graceEnd = 0)), "eventsFirst")
+  on.exit(close(notWithin0), add = TRUE)
+  early <- exp(1 / 7)
+  for (initiateWithinModel in c("binary", "hazard")) {
+    for (graceRegime in c("binaryAtG", "naturalGrace")) {
+      args <- gArgs(initiateWithinModel = initiateWithinModel, graceRegime = graceRegime, hazardModelType = "cox")
+      models <- suppressMessages(fitCensoringModels(clones, data, args))
+      segments <- collectSegments(suppressMessages(computeCensoringWeights(clones, models, gNoTruncation())))
+      initiate <- segments[segments$strategyId == 1, ]
+      # After G: "binaryAtG" with the binary model, W = early / pi = early * 2; with the hazard model,
+      # 1 / (S(0) - S(2)). "naturalGrace": clone 2 (started on day 1) W = early, clone 4 (day 2) W =
+      # early / p with p = 1/3 (binary model) or 1 - S(2) / S(1) = 1 - exp(-1/3) (hazard model).
+      after <- if (graceRegime == "binaryAtG") {
+        rep(if (initiateWithinModel == "binary") 2 * early else 1 / (exp(-1 / 7) - exp(-(1 / 7 + 1 / 5 + 1 / 3))), 2)
+      } else {
+        c(early, early / (if (initiateWithinModel == "binary") 1 / 3 else 1 - exp(-1 / 3)))
+      }
+      expected <- gSegments(early, after[1], after[2])
+      expect_equal(initiate[, gColumns], expected, tolerance = 1e-6, ignore_attr = TRUE)
+    }
+  }
+  # The early weight equals the weight of a notInitiateWithin(0) strategy after day 0:
+  models <- suppressMessages(fitCensoringModels(notWithin0, data, gArgs(hazardModelType = "cox")))
+  segments <- collectSegments(suppressMessages(computeCensoringWeights(notWithin0, models, gNoTruncation())))
+  comparator <- segments[segments$strategyId == 2 & segments$startTime >= 1, ]
+  expect_equal(unique(round(comparator$weight, 8)), round(early, 8))
+})
+
+test_that("naturalGrace warns when nobody starts on day G", {
+  data <- gData()
+  # G = 3: persons 5 and 6 reach day 3 untreated and under follow-up, and nobody starts on day 3 (6
+  # starts on day 4), so nobody represents them after G.
+  clones <- buildM3Clones(gPersons(), gStrategies(graceEnd = 3, second = createTreatmentStrategy(2, "Not within 3", "notInitiateWithin", graceEnd = 3)), "eventsFirst")
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  for (initiateWithinModel in c("binary", "hazard")) {
+    warnings <- capture_warnings(suppressMessages(fitCensoringModels(clones, data, gArgs(initiateWithinModel = initiateWithinModel, graceRegime = "naturalGrace"))))
+    expect_length(warnings, 1)
+    expect_match(warnings, "none of the 2 persons who reach day 3 (graceEnd) of strategy 1 (Initiate) untreated and under follow-up starts on day 3", fixed = TRUE)
+    expect_match(warnings, "computePositivity()", fixed = TRUE)
+    expect_length(capture_warnings(suppressMessages(fitCensoringModels(clones, data, gArgs(initiateWithinModel = initiateWithinModel)))), 0)
+  }
+  # Callers that fit several variants warn once:
+  expect_length(capture_warnings(suppressMessages(.fitCensoringModelsWithFits(clones, data, gArgs(graceRegime = "naturalGrace"), warnNaturalGrace = FALSE))), 0)
 })

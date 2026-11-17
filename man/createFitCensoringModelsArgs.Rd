@@ -207,9 +207,16 @@ response "started on day \code{G}"; with \code{"hazard"} it is the initiation ha
 selection that biases \code{initiateWithinModel = "hazard"} under \code{"binaryAtG"} does not arise). With
 the pooled logistic hazard model the last interval must be day \code{G} alone (\code{graceEnd} a multiple of
 \code{intervalLength}). The weights of few clones (those that start on day \code{G}) vary, so they are less
-stable than those of \code{"binaryAtG"}. The stabilized weights after \code{G} multiply by the same quantity
-for every clone (the marginal probability of starting by \code{G} of the persons under follow-up at
-\code{G}), so the weighted Kaplan-Meier risks do not depend on stabilization.
+stable than those of \code{"binaryAtG"}. Only those clones stand for the persons who reach day \code{G}
+untreated, so the regime needs starts on day \code{G}: \code{\link[=fitCensoringModels]{fitCensoringModels()}} warns when nobody starts
+on day \code{G}, and \code{\link[=computePositivity]{computePositivity()}} shows covariate strata where few do. When few day-\code{G}
+starters carry the weight after \code{G}, the standard errors of risks at horizons shortly after \code{G}
+fall with the estimate and their intervals can under-cover (simulation of plan section 9 item 7,
+\code{G = 7}, 6000 persons with about 140 day-7 starters and 14 of their outcomes by day 14: coverage
+0.89 to 0.90 at day 14, 0.95 to 0.96 at day 60; with 24000 persons, 0.94 to 0.95 at day 14).
+The stabilized weights after \code{G} multiply by the same quantity for every clone (the marginal
+probability of starting by \code{G} of the persons under follow-up at \code{G}), so the weighted
+Kaplan-Meier risks do not depend on stabilization.
 }
 
 \code{\link[=computeTrueRisks]{computeTrueRisks()}} gives the truth of either regime (its argument \code{graceRegime}). The choice is a

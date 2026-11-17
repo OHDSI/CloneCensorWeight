@@ -371,6 +371,32 @@ test_that("With initiateWithinModel = 'hazard', replicates fix the prior varianc
   expect_true(all(is.finite(result$estimates$lb95)))
 })
 
+test_that("With graceStart > 0, replicates fix the prior variance of the early hazard model, under both regimes", {
+  data <- bootstrapData(seed = 4, initiationCoefficient = 0.8)
+  on.exit(close(data))
+  settings <- bootstrapSettings(
+    modelType = "km",
+    useCovariates = TRUE,
+    prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
+    replicates = 2
+  )
+  settings$createClonesArgs$strategies[[1]] <- createTreatmentStrategy(1, "Initiate on days 1 to 3", "initiateWithin", graceStart = 1, graceEnd = 3)
+  # The binary models at G are fit on fewer persons than Cyclops' default minimum for cross-validation:
+  settings$fitCensoringModelsArgs$control$minCVData <- 10
+  for (graceRegime in c("binaryAtG", "naturalGrace")) {
+    settings$fitCensoringModelsArgs$graceRegime <- graceRegime
+    population <- suppressMessages(createStudyPopulation(data, outcomeId = 3, createStudyPopulationArgs = settings$createStudyPopulationArgs))
+    clones <- suppressMessages(createClones(population, data, settings$createClonesArgs))
+    fullModels <- suppressMessages(fitCensoringModels(clones, data, settings$fitCensoringModelsArgs))
+    close(clones)
+    expect_equal(fullModels[[1]]$early$horizon, 0L)
+    result <- runBootstrap(data, settings, censoringModels = fullModels)
+    expect_s3_class(result, "CcwOutcomeModel")
+    expect_equal(result$metaData$bootstrap$fixedPriorVariances[["1.early"]], fullModels[[1]]$early$priorVariance)
+    expect_true(all(is.finite(result$estimates$estimate)))
+  }
+})
+
 test_that("Replicates give the censoring models the person each copy was drawn from", {
   data <- bootstrapData(n = 60, seed = 3)
   on.exit(close(data))

@@ -40,7 +40,11 @@
 #' - `"initiateWithin"` with `graceRegime = "naturalGrace"`: the binary model at `G` is fit on the
 #'   persons who reach day `G` untreated (no start before day `G`), with the response "started on day
 #'   `G`", the probability of the last-interval weight (with `initiateWithinModel = "hazard"`, the
-#'   hazard model through `G` gives it).
+#'   hazard model through `G` gives it). Only the clones that start on day `G` represent the persons
+#'   who reach day `G` untreated after `G`, so when none of these persons starts on day `G` the
+#'   regime is not identified: those persons are all censored at `G`, and the risks after `G` stand
+#'   for the persons who started before `G` only. `fitCensoringModels()` then warns. A covariate
+#'   stratum without starts on day `G` shows in [computePositivity()].
 #' - `"notInitiateWithin"` and `"neverInitiate"`: a model of the hazard of initiation. Each person is
 #'   at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 #'   death (that day with `"deviationFirst"`), `riskEnd`, and the strategy's horizon `H` (`G`, or the
@@ -203,14 +207,16 @@ fitCensoringModels <- function(clones,
 # .censoringFitKey() (from earlier calls, possibly with other design choices, or from
 # .censoringFitsFromModels()), and a model whose key is in it is reused, not refit. Returns a list with
 # the CcwCensoringModels `models` and the `fits`, with the new ones added. Callers that fit several
-# variants of the same analysis warn about day-0 covariate windows once.
+# variants of the same analysis warn about day-0 covariate windows, and about natural-grace regimes
+# without starts on day G, once.
 .fitCensoringModelsWithFits <- function(clones,
                                         cloneCensorWeightData,
                                         fitCensoringModelsArgs,
                                         fixedPriorVariances = NULL,
                                         sourcePersonSeqIds = NULL,
                                         fits = list(),
-                                        warnDay0CovariateWindows = TRUE) {
+                                        warnDay0CovariateWindows = TRUE,
+                                        warnNaturalGrace = TRUE) {
   metaData <- attr(clones, "metaData")
   strategies <- metaData$strategies
   for (strategy in strategies) {
@@ -230,6 +236,9 @@ fitCensoringModels <- function(clones,
   persons$subjectId <- persons$personSeqId
   if (!is.null(sourcePersonSeqIds)) {
     persons$subjectId <- sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, sourcePersonSeqIds$personSeqId)]
+  }
+  if (warnNaturalGrace && fitCensoringModelsArgs$graceRegime == "naturalGrace") {
+    .warnNoNaturalGraceStarts(strategies, persons, sameDayOrdering)
   }
   maxRiskEnd <- if (nrow(persons) == 0) 0L else max(persons$riskEnd)
   argsList <- fitCensoringModelsArgs$toList()
@@ -481,6 +490,30 @@ fitCensoringModels <- function(clones,
   return(as.integer(strategy$graceStart))
 }
 
+# Warns when, with graceRegime = "naturalGrace", persons reach day G of an initiateWithin strategy
+# untreated and under follow-up but none of them starts on day G. Only the clones that start on day G
+# represent these persons after G, so the regime is not identified: they are all censored at G, the fit
+# of the day-G model succeeds without events, no weight is infinite, and the risks after G stand for the
+# persons who started before G only.
+.warnNoNaturalGraceStarts <- function(strategies, persons, sameDayOrdering) {
+  for (strategyId in seq_along(strategies)) {
+    strategy <- strategies[[strategyId]]
+    if (strategy$type != "initiateWithin") {
+      next
+    }
+    treatmentDay <- if (strategy$treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
+    graceEnd <- as.integer(strategy$graceEnd)
+    riskSet <- .getBinaryRiskSet(persons, treatmentDay, graceEnd, sameDayOrdering, graceEnd)
+    if (nrow(riskSet) > 0 && sum(riskSet$y) == 0) {
+      warning(sprintf(
+        "With graceRegime = \"naturalGrace\", none of the %d persons who reach day %d (graceEnd) of strategy %d (%s) untreated and under follow-up starts on day %d, so no clone represents them after day %d: the regime is not identified, and the risks after day %d stand for the persons who started before day %d only. See computePositivity(), or use graceRegime = \"binaryAtG\"",
+        nrow(riskSet), graceEnd, strategyId, strategy$label, graceEnd, graceEnd, graceEnd, graceEnd
+      ), call. = FALSE)
+    }
+  }
+  invisible(NULL)
+}
+
 # With initiateWithinModel = "hazard", the weights of an initiateWithin strategy use S(graceStart - 1 | X)
 # and, with graceRegime = "naturalGrace", S(G - 1 | X) of the pooled logistic hazard model, which it
 # evaluates at the ends of its intervals (counted from day 0). So graceStart, and G for "naturalGrace",
@@ -551,7 +584,7 @@ fitCensoringModels <- function(clones,
 .warnDay0CovariateWindows <- function(strategies, cloneCensorWeightData, fitCensoringModelsArgs) {
   day0 <- vapply(strategies, function(strategy) {
     strategy$type != "initiateWithin" || fitCensoringModelsArgs$initiateWithinModel == "hazard" ||
-      .binaryModelFirstDay(strategy, fitCensoringModelsArgs$graceRegime) == 0
+      strategy$graceStart > 0 || .binaryModelFirstDay(strategy, fitCensoringModelsArgs$graceRegime) == 0
   }, logical(1))
   if (!fitCensoringModelsArgs$useCovariates || !any(day0)) {
     return(invisible(NULL))
