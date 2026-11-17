@@ -355,7 +355,8 @@ test_that("runCcwAnalyses stops before any work when an analysis needs a Cyclops
     list(createTargetTreatmentOutcomes(4, 1, 2, outcomes = list(CohortMethod::createOutcome(3))))
   )
   outputFolder <- tempfile()
-  on.exit(unlink(outputFolder, recursive = TRUE))
+  # add = TRUE keeps the deferred restore of the mocked binding:
+  on.exit(unlink(outputFolder, recursive = TRUE), add = TRUE)
   expect_error(
     runCcwAnalyses(
       connectionDetails = DatabaseConnector::createConnectionDetails(dbms = "sqlite", server = tempfile()),
