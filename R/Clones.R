@@ -22,10 +22,11 @@
 #' `competingEvents = "death"`), deviation from the strategy, the end of observation, or the end of the
 #' risk window. All days are relative to the index date (day 0).
 #'
-#' Let `A` be the first start (on or after day 0) of the strategy's treatment, and `G` its `graceEnd`.
-#' The strategy is violated (`deviationDay`) on:
+#' Let `A` be the first start (on or after day 0) of the strategy's treatment, `G` its `graceEnd` and
+#' `S` its `graceStart`. The strategy is violated (`deviationDay`) on:
 #'
-#' - `"initiateWithin"`: day `G` if the treatment does not start on or before day `G`.
+#' - `"initiateWithin"`: day `A` if `A < S` (a start before the grace period, only when `S > 0`), and
+#'   day `G` if the treatment does not start on or before day `G`.
 #' - `"notInitiateWithin"`: day `A` if `A <= G`.
 #' - `"neverInitiate"`: day `A`.
 #'
@@ -54,7 +55,7 @@
 #' strategy in the comparator columns, so that [drawAttritionDiagram()] shows the clones without
 #' follow-up as removed from each strategy.
 #'
-#' This version supports strategies with `graceStart = 0` and without `prohibitedTreatments`.
+#' This version supports strategies without `prohibitedTreatments`.
 #'
 #' @param population            A study population as created using [createStudyPopulation()].
 #' @param cloneCensorWeightData An object of type [CloneCensorWeightData], the one used to create the
@@ -131,9 +132,6 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
   treatmentIds <- dataMetaData$treatmentIds
   strategies <- createClonesArgs$strategies
   for (strategy in strategies) {
-    if (strategy$graceStart > 0) {
-      stop(sprintf("Not yet supported in this version: graceStart > 0 (strategy '%s')", strategy$label))
-    }
     if (length(strategy$prohibitedTreatments) > 0) {
       stop(sprintf("Not yet supported in this version: prohibitedTreatments (strategy '%s')", strategy$label))
     }
@@ -154,6 +152,7 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
       strategyId = 1:2,
       strategyType = vapply(strategies, function(strategy) strategy$type, character(1)),
       role = vapply(strategies, function(strategy) strategy$treatment, character(1)),
+      graceStart = vapply(strategies, function(strategy) as.integer(strategy$graceStart), integer(1)),
       graceEnd = vapply(strategies, function(strategy) {
         if (is.null(strategy$graceEnd)) NA_integer_ else as.integer(strategy$graceEnd)
       }, integer(1))
@@ -303,6 +302,7 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
         workPersons.deathDay,
         strategies.strategyId,
         strategies.strategyType,
+        strategies.graceStart,
         strategies.graceEnd,
         CASE
           WHEN strategies.role = 'treatment' THEN workPersons.treatmentDay
@@ -314,6 +314,7 @@ createClones <- function(population, cloneCensorWeightData, createClonesArgs) {
     violations AS (
       SELECT *,
         CASE
+          WHEN strategyType = 'initiateWithin' AND startDay < graceStart THEN startDay
           WHEN strategyType = 'initiateWithin' AND (startDay IS NULL OR startDay > graceEnd) THEN graceEnd
           WHEN strategyType = 'notInitiateWithin' AND startDay <= graceEnd THEN startDay
           WHEN strategyType = 'neverInitiate' THEN startDay

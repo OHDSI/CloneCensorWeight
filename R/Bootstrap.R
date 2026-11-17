@@ -224,7 +224,10 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     # The binary models of notInitiateWithin strategies' weights after the grace period:
     postGraceVariances <- lapply(full$censoringModels, function(model) model$postGrace$priorVariance)
     names(postGraceVariances) <- paste0(seq_along(postGraceVariances), ".postGrace")
-    variances <- c(variances, postGraceVariances)
+    # The hazard models of the days before graceStart of initiateWithin strategies:
+    earlyVariances <- lapply(full$censoringModels, function(model) model$early$priorVariance)
+    names(earlyVariances) <- paste0(seq_along(earlyVariances), ".early")
+    variances <- c(variances, postGraceVariances, earlyVariances)
     variances <- variances[!vapply(variances, function(variance) is.null(variance) || is.na(variance), logical(1))]
     if (length(variances) > 0) {
       fixedPriorVariances <- variances

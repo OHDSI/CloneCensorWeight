@@ -41,10 +41,11 @@ from the start of the risk window (\code{riskStart}) until the first of: the out
 \code{competingEvents = "death"}), deviation from the strategy, the end of observation, or the end of the
 risk window. All days are relative to the index date (day 0).
 
-Let \code{A} be the first start (on or after day 0) of the strategy's treatment, and \code{G} its \code{graceEnd}.
-The strategy is violated (\code{deviationDay}) on:
+Let \code{A} be the first start (on or after day 0) of the strategy's treatment, \code{G} its \code{graceEnd} and
+\code{S} its \code{graceStart}. The strategy is violated (\code{deviationDay}) on:
 \itemize{
-\item \code{"initiateWithin"}: day \code{G} if the treatment does not start on or before day \code{G}.
+\item \code{"initiateWithin"}: day \code{A} if \code{A < S} (a start before the grace period, only when \code{S > 0}), and
+day \code{G} if the treatment does not start on or before day \code{G}.
 \item \code{"notInitiateWithin"}: day \code{A} if \code{A <= G}.
 \item \code{"neverInitiate"}: day \code{A}.
 }
@@ -73,7 +74,7 @@ cloned into both strategies), and two rows are added, \code{"Clones created"} an
 strategy in the comparator columns, so that \code{\link[=drawAttritionDiagram]{drawAttritionDiagram()}} shows the clones without
 follow-up as removed from each strategy.
 
-This version supports strategies with \code{graceStart = 0} and without \code{prohibitedTreatments}.
+This version supports strategies without \code{prohibitedTreatments}.
 }
 \examples{
 data <- createCloneCensorWeightData(

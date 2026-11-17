@@ -235,6 +235,32 @@ test_that("FitCensoringModelsArgs initiateWithinModel (contract section 13.1)", 
   expect_equal(old$initiateWithinModel, "binary")
 })
 
+test_that("FitCensoringModelsArgs graceRegime (decision 9 item 7)", {
+  expect_equal(createFitCensoringModelsArgs()$graceRegime, "binaryAtG")
+  for (graceRegime in c("binaryAtG", "naturalGrace")) {
+    for (initiateWithinModel in c("binary", "hazard")) {
+      expectRoundTrip(createFitCensoringModelsArgs(initiateWithinModel = initiateWithinModel, graceRegime = graceRegime), FitCensoringModelsArgs)
+    }
+  }
+  reloaded <- FitCensoringModelsArgs$new(json = createFitCensoringModelsArgs(graceRegime = "naturalGrace")$toJson())
+  expect_equal(reloaded$graceRegime, "naturalGrace")
+  expect_error(createFitCensoringModelsArgs(graceRegime = "natural"), "graceRegime")
+  # Settings saved before the field existed load with "binaryAtG", the earlier behaviour:
+  untypedList <- jsonlite::fromJSON(createFitCensoringModelsArgs(graceRegime = "naturalGrace")$toJson(), simplifyDataFrame = FALSE)
+  untypedList$graceRegime <- NULL
+  expect_message(old <- FitCensoringModelsArgs$new(untypedList = untypedList), "saved without graceRegime: filled with the current default graceRegime = binaryAtG")
+  expect_equal(old$graceRegime, "binaryAtG")
+  expect_message(old <- FitCensoringModelsArgs$new(json = jsonlite::toJSON(untypedList, auto_unbox = TRUE, null = "null", digits = NA)), "graceRegime = binaryAtG")
+  expect_equal(old$graceRegime, "binaryAtG")
+})
+
+test_that("TreatmentStrategy graceStart > 0 round trip, only for initiateWithin", {
+  expectRoundTrip(createTreatmentStrategy(1, "Days 30 to 90", "initiateWithin", graceStart = 30, graceEnd = 90), TreatmentStrategy)
+  expect_equal(TreatmentStrategy$new(json = createTreatmentStrategy(1, "x", "initiateWithin", graceStart = 30, graceEnd = 90)$toJson())$graceStart, 30)
+  expect_error(createTreatmentStrategy(1, "x", "notInitiateWithin", graceStart = 2, graceEnd = 7), "graceStart must be 0 for strategy type 'notInitiateWithin'")
+  expect_error(createTreatmentStrategy(1, "x", "neverInitiate", graceStart = 2), "graceStart must be 0")
+})
+
 test_that("WeightTruncation basis (contract section 11.5)", {
   expect_equal(createWeightTruncation()$basis, "varying")
   expectRoundTrip(createWeightTruncation(basis = "allClones"), WeightTruncation)

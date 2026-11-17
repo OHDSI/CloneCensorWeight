@@ -64,7 +64,13 @@ Let \code{W(d)} be the weight on day \code{d} (days since index). With \code{sam
 \code{d > G}, where \code{pi(X)} is the probability of starting by \code{G} from the binary model when the models
 were fit with \code{initiateWithinModel = "binary"} (the default), and \code{1 - S(G | X)} from the
 initiation hazard model with \code{initiateWithinModel = "hazard"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}
-for when each is valid).
+for when each is valid). With \code{graceRegime = "naturalGrace"}, \code{W(d) = 1} for all \code{d} for a clone
+that started before day \code{G}, and \code{1 / p(X)} for \code{d > G} for a clone that started on day \code{G}, where
+\code{p(X)} is the probability of starting on day \code{G} of the persons who reach it untreated (binary
+model fit on them, or \code{1 - S(G | X) / S(G - 1 | X)}). With \code{graceStart = S > 0}, \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= S} and \code{1 / S(S - 1 | X)} for \verb{S < d <= G} (the weights of a
+\code{"notInitiateWithin(S - 1)"} strategy), and after \code{G} also divided by \code{pi(X)} (or \code{p(X)}), now the
+probability of starting on days \code{S..G} (on day \code{G}) of the persons who have not started before day
+\code{S} (\code{G}).
 \item \code{"notInitiateWithin"}: \code{W(d) = 1 / S(d - 1 | X)} for \code{d <= G} (with \code{S(-1) = 1}), where
 \code{S(d | X)} is the probability of not initiating on days \verb{0..d} from the initiation hazard model.
 For \code{d > G}, \code{W(d) = 1 / S(G | X)} when the models were fit with \code{postGraceModel = "hazard"} (the
@@ -87,7 +93,8 @@ Each clone's follow-up is split, on the survival time scale \code{t = day - risk
 day \code{G} (day \code{G - 1} with \code{"deviationFirst"}) for \code{"initiateWithin"}, and, for the hazard
 strategies, at every distinct outcome or competing-event time of any clone (of either strategy)
 that falls inside the clone's window where the weight varies (days \code{riskStart..G} for
-\code{"notInitiateWithin"}, all follow-up for \code{"neverInitiate"}). A segment \verb{(startTime, stopTime]} gets
+\code{"notInitiateWithin"}, all follow-up for \code{"neverInitiate"}, days \code{riskStart..S - 1} for
+\code{"initiateWithin"} with \code{graceStart = S > 0}). A segment \verb{(startTime, stopTime]} gets
 the weight of its last day, which is exact for estimators that use the weights only at event times
 (Cox, Kaplan-Meier and Aalen-Johansen).
 

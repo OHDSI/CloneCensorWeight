@@ -53,11 +53,17 @@ them.
 }
 \details{
 By default the variants change one choice at a time from the specified settings, to each of its
-other values: \code{postGraceModel}, \code{initiateWithinModel} and \code{covariateTimeInteraction} (pooled
-logistic hazard model only) of \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses them), \code{truncateMsmWeights} (with
+other values: \code{postGraceModel}, \code{initiateWithinModel}, \code{graceRegime} and \code{covariateTimeInteraction}
+(pooled logistic hazard model only) of \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}} (only when a strategy uses
+them), \code{truncateMsmWeights} (with
 truncation, not for \code{modelType = "km"}, which does not use the weights on the MSM scale) and the
 truncation \code{basis} of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (with percentile truncation), and \code{msmWeights} of
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} (not for \code{modelType = "km"}). Pass \code{variants} for other combinations.
+
+\code{graceRegime} is not a modelling choice: \code{"binaryAtG"} and \code{"naturalGrace"} define different
+\code{"initiateWithin"} regimes (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}), so their estimates differ when the
+start day within the grace period changes later risk. A large difference shows that the choice of
+regime matters for the data at hand, not that one of them is biased.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

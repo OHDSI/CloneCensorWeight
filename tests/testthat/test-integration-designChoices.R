@@ -155,7 +155,7 @@ test_that("Calibration reports groups, calibration in the large, covariate strat
   models <- suppressMessages(fitCensoringModels(clones, data, designArgs(postGraceModel = "binary")))
   calibration <- computeCensoringModelCalibration(clones, models, numberOfGroups = 5, cloneCensorWeightData = data, strataCovariateIds = c(1001, 2002))
   expect_s3_class(calibration, "CcwCensoringModelCalibration")
-  expect_equal(colnames(calibration), c("strategyId", "model", "covariateTimeInteraction", "grouping", "covariateId", "group", "persons", "predicted", "observed"))
+  expect_equal(colnames(calibration), c("strategyId", "model", "covariateTimeInteraction", "graceRegime", "grouping", "covariateId", "group", "persons", "predicted", "observed"))
   expect_equal(unique(calibration$covariateTimeInteraction[calibration$model == "hazard"]), "day0")
   expect_true(all(is.na(calibration$covariateTimeInteraction[calibration$model == "binary"])))
 
@@ -505,13 +505,17 @@ test_that("The default sensitivity variants include initiateWithinModel, and its
   variants <- function(strategies, ...) {
     names(.defaultSensitivityVariants(strategies, designArgs(...), createComputeWeightsArgs(), createFitOutcomeModelArgs(modelType = "km")))
   }
-  expect_equal(variants(initiateBoth), c("initiateWithinModel = hazard", "basis = allClones"))
+  expect_equal(variants(initiateBoth), c("initiateWithinModel = hazard", "graceRegime = naturalGrace", "basis = allClones"))
   expect_equal(
     variants(initiateBoth, initiateWithinModel = "hazard"),
-    c("initiateWithinModel = binary", "covariateTimeInteraction = none", "covariateTimeInteraction = interval", "basis = allClones")
+    c("initiateWithinModel = binary", "graceRegime = naturalGrace", "covariateTimeInteraction = none", "covariateTimeInteraction = interval", "basis = allClones")
   )
+  expect_equal(variants(initiateBoth, graceRegime = "naturalGrace"), c("initiateWithinModel = hazard", "graceRegime = binaryAtG", "basis = allClones"))
+  # With graceStart > 0 the days before graceStart use the hazard model, so its interactions vary:
+  lateStart <- list(createTreatmentStrategy(1, "Initiate on days 3 to 7", "initiateWithin", graceStart = 3, graceEnd = 7), initiateBoth[[2]])
+  expect_true("covariateTimeInteraction = none" %in% variants(lateStart))
   expect_true("initiateWithinModel = hazard" %in% variants(designStrategies("neverInitiate")))
-  expect_false(any(grepl("initiateWithinModel", variants(designStrategies()[2]))))
+  expect_false(any(grepl("initiateWithinModel|graceRegime", variants(designStrategies()[2]))))
 })
 
 test_that("The sensitivity analysis refits every default variant and custom ones", {
@@ -527,15 +531,16 @@ test_that("The sensitivity analysis refits every default variant and custom ones
   expect_s3_class(sensitivity, "CcwSensitivity")
   variants <- attr(sensitivity, "variants")
   expect_equal(variants$variant, c(
-    "specified", "postGraceModel = binary", "initiateWithinModel = hazard", "covariateTimeInteraction = none",
+    "specified", "postGraceModel = binary", "initiateWithinModel = hazard", "graceRegime = naturalGrace", "covariateTimeInteraction = none",
     "covariateTimeInteraction = interval", "truncateMsmWeights = FALSE", "basis = allClones", "msmWeights = stabilized"
   ))
-  expect_equal(variants$postGraceModel, c("hazard", "binary", rep("hazard", 6)))
-  expect_equal(variants$initiateWithinModel, c("binary", "binary", "hazard", rep("binary", 5)))
-  expect_equal(variants$covariateTimeInteraction, c("day0", "day0", "day0", "none", "interval", "day0", "day0", "day0"))
-  expect_equal(variants$truncateMsmWeights, c(TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, TRUE))
-  expect_equal(variants$truncationBasis, c(rep("varying", 6), "allClones", "varying"))
-  expect_equal(variants$msmWeights, c(rep("unstabilized", 7), "stabilized"))
+  expect_equal(variants$postGraceModel, c("hazard", "binary", rep("hazard", 7)))
+  expect_equal(variants$initiateWithinModel, c("binary", "binary", "hazard", rep("binary", 6)))
+  expect_equal(variants$graceRegime, c(rep("binaryAtG", 3), "naturalGrace", rep("binaryAtG", 5)))
+  expect_equal(variants$covariateTimeInteraction, c("day0", "day0", "day0", "day0", "none", "interval", "day0", "day0", "day0"))
+  expect_equal(variants$truncateMsmWeights, c(TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, TRUE))
+  expect_equal(variants$truncationBasis, c(rep("varying", 7), "allClones", "varying"))
+  expect_equal(variants$msmWeights, c(rep("unstabilized", 8), "stabilized"))
   # Each variant equals the pipeline run directly with its settings:
   direct <- function(fitCensoringModelsArgs, computeWeightsArgs, fitOutcomeModelArgs) {
     models <- suppressMessages(fitCensoringModels(clones, data, fitCensoringModelsArgs))
@@ -551,6 +556,7 @@ test_that("The sensitivity analysis refits every default variant and custom ones
   expect_equal(pick("specified"), as.data.frame(direct(fitCensoringModelsArgs, createComputeWeightsArgs(), fitOutcomeModelArgs)))
   expect_equal(pick("postGraceModel = binary"), as.data.frame(direct(designArgs(postGraceModel = "binary"), createComputeWeightsArgs(), fitOutcomeModelArgs)))
   expect_equal(pick("initiateWithinModel = hazard"), as.data.frame(direct(designArgs(initiateWithinModel = "hazard"), createComputeWeightsArgs(), fitOutcomeModelArgs)))
+  expect_equal(pick("graceRegime = naturalGrace"), as.data.frame(direct(designArgs(graceRegime = "naturalGrace"), createComputeWeightsArgs(), fitOutcomeModelArgs)))
   expect_equal(pick("covariateTimeInteraction = none"), as.data.frame(direct(designArgs(covariateTimeInteraction = "none"), createComputeWeightsArgs(), fitOutcomeModelArgs)))
   expect_equal(pick("truncateMsmWeights = FALSE"), as.data.frame(direct(fitCensoringModelsArgs, createComputeWeightsArgs(truncateMsmWeights = FALSE), fitOutcomeModelArgs)))
   expect_equal(pick("msmWeights = stabilized"), as.data.frame(direct(fitCensoringModelsArgs, createComputeWeightsArgs(), createFitOutcomeModelArgs(horizons = 30, msmWeights = "stabilized"))))
@@ -578,40 +584,48 @@ test_that("The sensitivity analysis refits every default variant and custom ones
   expect_s3_class(plotCcwSensitivity(sensitivity, estimands = "hr"), "ggplot")
 })
 
-test_that("computeCcwDiagnostics compares postGraceModel, covariateTimeInteraction and initiateWithinModel choices", {
+test_that("computeCcwDiagnostics compares postGraceModel, covariateTimeInteraction, initiateWithinModel and graceRegime choices", {
   data <- simulateCloneCensorWeightData(n = 300, maxDays = 60, graceEnd = 7, seed = 8)
   clones <- designClones(data)
   on.exit({
     close(clones)
     close(data)
   })
-  # Three models are fit: the binary model at G, and the hazard model through G with each interaction
-  # setting, shared by both strategies with initiateWithinModel = "hazard":
+  # Four models are fit: the binary model at G, that of the persons untreated at G (graceRegime =
+  # "naturalGrace"), and the hazard model through G with each interaction setting, shared by both
+  # strategies with initiateWithinModel = "hazard" (under both regimes):
   messages <- capture_messages(diagnostics <- computeCcwDiagnostics(clones, data, designArgs(), numberOfGroups = 5, strataCovariateIds = 1001))
-  expect_equal(sum(grepl("^Fitting", messages)), 3)
+  expect_equal(sum(grepl("^Fitting", messages)), 4)
   expect_s3_class(diagnostics, "CcwDiagnostics")
-  expect_equal(diagnostics$variants$postGraceModel, rep(c("hazard", "binary"), 4))
-  expect_equal(diagnostics$variants$covariateTimeInteraction, rep(c("day0", "day0", "none", "none"), 2))
-  expect_equal(diagnostics$variants$initiateWithinModel, rep(c("binary", "hazard"), each = 4))
-  expect_equal(diagnostics$variants$specified, c(TRUE, rep(FALSE, 7)))
-  expect_equal(diagnostics$variants$variant[1], "postGraceModel = hazard, covariateTimeInteraction = day0, initiateWithinModel = binary")
+  expect_equal(diagnostics$variants$postGraceModel, rep(c("hazard", "binary"), 8))
+  expect_equal(diagnostics$variants$covariateTimeInteraction, rep(c("day0", "day0", "none", "none"), 4))
+  expect_equal(diagnostics$variants$initiateWithinModel, rep(rep(c("binary", "hazard"), each = 4), 2))
+  expect_equal(diagnostics$variants$graceRegime, rep(c("binaryAtG", "naturalGrace"), each = 8))
+  expect_equal(diagnostics$variants$specified, c(TRUE, rep(FALSE, 15)))
+  expect_equal(diagnostics$variants$variant[1], "postGraceModel = hazard, covariateTimeInteraction = day0, initiateWithinModel = binary, graceRegime = binaryAtG")
   expect_equal(diagnostics$balance$variant, diagnostics$variants$variant)
   expect_equal(colnames(diagnostics$balance), c("variant", "covariates", "maxAbsStdDiffBefore", "maxAbsStdDiffAfter", "aboveThresholdBefore", "aboveThresholdAfter"))
   expect_equal(sort(unique(diagnostics$weightSummary$variant)), sort(diagnostics$variants$variant))
   # The hazard model with each interaction setting and the binary model once per strategy:
   overall <- diagnostics$calibration[diagnostics$calibration$grouping == "overall", ]
   expect_equal(
-    paste(overall$strategyId, overall$model, overall$covariateTimeInteraction),
-    c("1 binary NA", "2 hazard day0", "2 binary NA", "2 hazard none", "1 hazard day0", "1 hazard none")
+    paste(overall$strategyId, overall$model, overall$covariateTimeInteraction, overall$graceRegime),
+    c(
+      "1 binary NA binaryAtG", "2 hazard day0 NA", "2 binary NA NA", "2 hazard none NA", "1 hazard day0 binaryAtG", "1 hazard none binaryAtG",
+      "1 binary NA naturalGrace", "1 hazard day0 naturalGrace", "1 hazard none naturalGrace"
+    )
   )
   expect_true(any(diagnostics$calibration$grouping == "covariate"))
   expect_s3_class(diagnostics$gracePeriodSelection, "CcwGracePeriodSelection")
   expect_s3_class(diagnostics$positivity, "CcwPositivity")
   # Positivity of both models of each strategy, for the specified interaction setting:
-  expect_equal(paste(diagnostics$positivity$strategyId, diagnostics$positivity$model), c("1 binary", "1 hazard", "2 hazard", "2 binary"))
+  expect_equal(
+    paste(diagnostics$positivity$strategyId, diagnostics$positivity$model, diagnostics$positivity$graceRegime),
+    c("1 binary binaryAtG", "1 hazard binaryAtG", "1 binary naturalGrace", "1 hazard naturalGrace", "2 hazard NA", "2 binary NA")
+  )
   predictions <- attr(diagnostics$positivity, "predictions")
-  expect_equal(nrow(unique(predictions[, c("strategyId", "model")])), 4)
-  expect_false(anyDuplicated(predictions[, c("strategyId", "model", "rowId")]) > 0)
+  expect_equal(nrow(unique(predictions[, c("strategyId", "model", "graceRegime")])), 6)
+  expect_false(anyDuplicated(predictions[, c("strategyId", "model", "graceRegime", "rowId")]) > 0)
   expect_null(diagnostics$sensitivity)
   expect_output(print(diagnostics), "Clone-censor-weight diagnostics")
 
@@ -641,9 +655,9 @@ test_that("computeCcwDiagnostics compares postGraceModel, covariateTimeInteracti
     numberOfGroups = 5, sensitivity = TRUE,
     fitOutcomeModelArgs = createFitOutcomeModelArgs(modelType = "km", horizons = 30)
   ))
-  # The Cox model has no interactions, so only postGraceModel and initiateWithinModel vary:
-  expect_equal(withSensitivity$variants$covariateTimeInteraction, rep("none", 4))
-  expect_equal(withSensitivity$variants$initiateWithinModel, c("binary", "binary", "hazard", "hazard"))
+  # The Cox model has no interactions, so only postGraceModel, initiateWithinModel and graceRegime vary:
+  expect_equal(withSensitivity$variants$covariateTimeInteraction, rep("none", 8))
+  expect_equal(withSensitivity$variants$initiateWithinModel, rep(c("binary", "binary", "hazard", "hazard"), 2))
   expect_s3_class(withSensitivity$sensitivity, "CcwSensitivity")
   expect_output(print(withSensitivity), "Estimates under the specified settings")
 })
@@ -661,10 +675,12 @@ test_that("computeCcwDiagnostics reuses given censoring models and fits only the
   messages <- capture_messages(reused <- computeCcwDiagnostics(clones, data, args, numberOfGroups = 5, censoringModels = models))
   # The specified variant's models (the binary model at G and the hazard model with "day0") are not
   # refit; the binary model at G also serves postGraceModel = "binary", and the hazard model through G
-  # initiateWithinModel = "hazard". Only the hazard model without interactions is fit:
+  # initiateWithinModel = "hazard" (under both regimes). Only the hazard model without interactions and
+  # the binary model of graceRegime = "naturalGrace" are fit:
   fitting <- grep("^Fitting", messages, value = TRUE)
-  expect_length(fitting, 1)
-  expect_match(fitting, "logistic initiation hazard model through day 7 for strategy 2")
+  expect_length(fitting, 2)
+  expect_match(fitting[1], "logistic initiation hazard model through day 7 for strategy 2")
+  expect_match(fitting[2], "binary censoring model at day 7 of the persons who have not started before day 7 for strategy 1")
   expect_true(any(grepl("^Reusing the fitted binary censoring model at day 7 for strategy 1", messages)))
   fresh <- suppressMessages(computeCcwDiagnostics(clones, data, args, numberOfGroups = 5))
   expect_equal(reused$variants, fresh$variants)
@@ -680,9 +696,9 @@ test_that("computeCcwDiagnostics reuses given censoring models and fits only the
   specified <- fromModels$variants[fromModels$variants$specified, ]
   expect_equal(c(specified$postGraceModel, specified$covariateTimeInteraction, specified$initiateWithinModel), c("hazard", "none", "hazard"))
   expect_equal(fromModels$variants$variant[1], specified$variant)
-  # The hazard model without interactions is reused; the binary model at G and the hazard model with
-  # "day0" are fit:
-  expect_equal(sum(grepl("^Fitting", messages)), 2)
+  # The hazard model without interactions is reused; the binary models at G (of both regimes) and the
+  # hazard model with "day0" are fit:
+  expect_equal(sum(grepl("^Fitting", messages)), 3)
   # Models fit with other settings are refit, with a message:
   expect_message(
     computeCcwDiagnostics(clones, data, designArgs(useCovariates = FALSE), numberOfGroups = 5, censoringModels = models),
@@ -694,8 +710,8 @@ test_that("computeCcwDiagnostics reuses given censoring models and fits only the
   messages <- capture_messages(fromWeekly <- computeCcwDiagnostics(clones, data, args, numberOfGroups = 5, censoringModels = weekly))
   expect_true(any(grepl("fit with other settings than fitCensoringModelsArgs", messages)))
   expect_true(any(grepl("^Reusing the fitted binary censoring model at day 7 for strategy 1", messages)))
-  expect_equal(sum(grepl("^Fitting", messages)), 2)
-  expect_false(any(grepl("^Fitting.*binary", messages)))
+  expect_equal(sum(grepl("^Fitting", messages)), 3)
+  expect_false(any(grepl("^Fitting binary censoring model at day 7 for strategy", messages)))
   expect_equal(fromWeekly$weightSummary, fresh$weightSummary)
   expect_error(computeCcwDiagnostics(clones, data, args, censoringModels = list()), "CcwCensoringModels")
 })
@@ -719,12 +735,16 @@ test_that("computeCcwDiagnostics compares choices that give the same models once
   diagnostics <- suppressMessages(computeCcwDiagnostics(clones, data, designArgs(), numberOfGroups = 5))
   # With initiateWithinModel = "binary" no hazard model is used, so the interaction settings give the
   # same models:
-  expect_equal(diagnostics$variants$initiateWithinModel, c("binary", "hazard", "hazard"))
-  expect_equal(diagnostics$variants$covariateTimeInteraction, c("day0", "day0", "none"))
-  expect_equal(diagnostics$variants$specified, c(TRUE, FALSE, FALSE))
+  expect_equal(diagnostics$variants$initiateWithinModel, rep(c("binary", "hazard", "hazard"), 2))
+  expect_equal(diagnostics$variants$covariateTimeInteraction, rep(c("day0", "day0", "none"), 2))
+  expect_equal(diagnostics$variants$graceRegime, rep(c("binaryAtG", "naturalGrace"), each = 3))
+  expect_equal(diagnostics$variants$specified, c(TRUE, rep(FALSE, 5)))
   expect_equal(diagnostics$balance$variant, diagnostics$variants$variant)
   overall <- diagnostics$calibration[diagnostics$calibration$grouping == "overall", ]
-  expect_equal(paste(overall$strategyId, overall$model, overall$covariateTimeInteraction), c("1 binary NA", "2 binary NA", "1 hazard day0", "2 hazard day0", "1 hazard none", "2 hazard none"))
+  expect_equal(
+    paste(overall$strategyId, overall$model, overall$covariateTimeInteraction, overall$graceRegime),
+    paste(c("1 binary NA", "2 binary NA", "1 hazard day0", "2 hazard day0", "1 hazard none", "2 hazard none"), rep(c("binaryAtG", "naturalGrace"), each = 6))
+  )
 })
 
 test_that("Diagnostic plots accept minimal input", {

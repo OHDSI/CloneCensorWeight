@@ -59,7 +59,10 @@
 #' strategies; the check of an `"initiateWithin"` strategy of the same treatment and `G` uses the same
 #' person-time, and concerns `initiateWithinModel`: a flag there means that
 #' `initiateWithinModel = "hazard"` is likely biased and `"binary"` is the valid choice (see
-#' [createFitCensoringModelsArgs()]).
+#' [createFitCensoringModelsArgs()]). This holds for `graceRegime = "binaryAtG"` (the default). With
+#' `graceRegime = "naturalGrace"` both models give the probability of starting on day `G` of the
+#' persons who reach day `G` untreated, the risk set of the hazard model on day `G`, so the check does
+#' not choose between them.
 #'
 #' @param clones          An object of type [CcwClones] as created by `createClones()` (or the
 #'                        weighted clones returned by [computeCensoringWeights()]).
@@ -334,7 +337,7 @@ computeGracePeriodSelection <- function(clones, censoringModels = NULL, numberOf
       if (is.null(types) || types[row$strategyId] == "notInitiateWithin") {
         flag <- paste0(flag, "; postGraceModel = \"binary\" is likely biased, \"hazard\" is valid")
       } else if (types[row$strategyId] == "initiateWithin") {
-        flag <- paste0(flag, "; initiateWithinModel = \"hazard\" is likely biased, \"binary\" is valid")
+        flag <- paste0(flag, "; initiateWithinModel = \"hazard\" is likely biased, \"binary\" is valid (with graceRegime = \"binaryAtG\"; with \"naturalGrace\" both are fit on the persons who reach day G untreated)")
       }
     }
     writeLines(sprintf(
@@ -475,6 +478,15 @@ plotGracePeriodSelection <- function(gracePeriodSelection, labels = NULL, fileNa
 #' inverse is the weight, so persons with a probability below `threshold` get weights above
 #' `1 / threshold`.
 #'
+#' For an `"initiateWithin"` strategy with `graceStart = S > 0` the binary model at `G` is fit on the
+#' persons who have not started before day `S`, and the hazard model's prediction at `G` is
+#' `1 - S(G | X) / S(S - 1 | X)`, the probability of starting on days `S..G` of those persons; the
+#' result also has the probability of starting before day `S`, `1 - S(S - 1 | X)` (`day = S - 1`),
+#' from the hazard model of the days before `S` (or the hazard model through `G`), whose complement is
+#' the probability of following the strategy. With `graceRegime = "naturalGrace"` (see
+#' [createFitCensoringModelsArgs()]) the prediction at `G` is the probability of starting on day `G` of
+#' the persons who reach it untreated (binary model fit on them, or `1 - S(G | X) / S(G - 1 | X)`).
+#'
 #' @param clones          An object of type [CcwClones] as created by `createClones()`.
 #' @param censoringModels An object of class `CcwCensoringModels` as created by [fitCensoringModels()]
 #'                        on the same clones.
@@ -483,11 +495,13 @@ plotGracePeriodSelection <- function(gracePeriodSelection, labels = NULL, fileNa
 #'
 #' @return
 #' A tibble of class `CcwPositivity` with columns `strategyId`, `model` (`"binary"` or `"hazard"`),
+#' `graceRegime` (that of the models of an `"initiateWithin"` strategy, `NA` for the other strategies),
 #' `day` (the horizon of the prediction), `persons`, the `mean`, `min`, `p01`, `p05`, `p25`, `median`,
 #' `p75`, `p95`, `p99` and `max` of the predicted probability of starting by `day`, `shareBelow` and
 #' `shareAbove` (the shares of predictions below `threshold` and above `1 - threshold`), and
 #' `shareExtreme`, the share whose probability of following the strategy is below `threshold`. The
-#' attribute `predictions` holds the predictions (`strategyId`, `model`, `rowId`, `probability`), and
+#' attribute `predictions` holds the predictions (`strategyId`, `model`, `graceRegime`, `day`, `rowId`,
+#' `probability`), and
 #' `strategyLabels` the strategy labels.
 #'
 #' @example inst/examples/clones.R
@@ -519,23 +533,48 @@ computePositivity <- function(clones, censoringModels, threshold = 0.01) {
   predictions <- list()
   for (strategyId in seq_along(strategies)) {
     model <- censoringModels[[strategyId]]
+    strategy <- strategies[[strategyId]]
+    isInitiateWithin <- strategy$type == "initiateWithin"
+    graceRegime <- NA_character_
+    firstDay <- 0L
+    if (isInitiateWithin) {
+      graceRegime <- if (is.null(model$graceRegime)) "binaryAtG" else model$graceRegime
+      firstDay <- .binaryModelFirstDay(strategy, graceRegime)
+    }
+    # Each entry: the model, its day, the predictions and whether the probability of following the
+    # strategy is the prediction (starting) or its complement (not starting):
     entries <- list()
     if (model$kind == "binary") {
-      entries$binary <- list(day = model$horizon, rowId = model$predictions$rowId, probability = model$predictions$propensityScore)
+      entries[[1]] <- list(model = "binary", day = model$horizon, rowId = model$predictions$rowId, probability = model$predictions$propensityScore, starting = isInitiateWithin)
     } else {
-      entries$hazard <- list(day = model$horizon, rowId = model$predictions$rowId, probability = 1 - .computeHazardSurvival(model, model$predictions$rowId, model$horizon))
+      probability <- if (isInitiateWithin) {
+        .hazardStartProbability(model, model$predictions$rowId, firstDay, model$horizon)
+      } else {
+        1 - .computeHazardSurvival(model, model$predictions$rowId, model$horizon)
+      }
+      entries[[1]] <- list(model = "hazard", day = model$horizon, rowId = model$predictions$rowId, probability = probability, starting = isInitiateWithin)
       if (!is.null(model$postGrace)) {
-        entries$binary <- list(day = model$postGrace$horizon, rowId = model$postGrace$predictions$rowId, probability = model$postGrace$predictions$propensityScore)
+        entries[[2]] <- list(model = "binary", day = model$postGrace$horizon, rowId = model$postGrace$predictions$rowId, probability = model$postGrace$predictions$propensityScore, starting = FALSE)
       }
     }
-    for (modelName in names(entries)) {
-      entry <- entries[[modelName]]
+    # initiateWithin with graceStart > 0: also the probability of starting before graceStart, from the
+    # hazard model of those days (or the hazard model through G):
+    graceStart <- if (is.null(model$graceStart)) 0L else as.integer(model$graceStart)
+    if (isInitiateWithin && graceStart > 0) {
+      earlyModel <- if (model$kind == "hazard") model else model$early
+      entries[[length(entries) + 1]] <- list(
+        model = "hazard", day = graceStart - 1L, rowId = earlyModel$predictions$rowId,
+        probability = 1 - .computeHazardSurvival(earlyModel, earlyModel$predictions$rowId, graceStart - 1L), starting = FALSE
+      )
+    }
+    for (entry in entries) {
       p <- entry$probability
-      following <- if (strategies[[strategyId]]$type == "initiateWithin") p else 1 - p
+      following <- if (entry$starting) p else 1 - p
       quantiles <- stats::quantile(p, c(0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99), names = FALSE, type = 7)
       rows[[length(rows) + 1]] <- tibble(
         strategyId = as.integer(strategyId),
-        model = modelName,
+        model = entry$model,
+        graceRegime = graceRegime,
         day = as.integer(entry$day),
         persons = length(p),
         mean = mean(p),
@@ -552,7 +591,7 @@ computePositivity <- function(clones, censoringModels, threshold = 0.01) {
         shareAbove = mean(p > 1 - threshold),
         shareExtreme = mean(following < threshold)
       )
-      predictions[[length(predictions) + 1]] <- tibble(strategyId = as.integer(strategyId), model = modelName, rowId = entry$rowId, probability = p)
+      predictions[[length(predictions) + 1]] <- tibble(strategyId = as.integer(strategyId), model = entry$model, graceRegime = graceRegime, day = as.integer(entry$day), rowId = entry$rowId, probability = p)
     }
   }
   positivity <- dplyr::bind_rows(rows)
@@ -611,9 +650,16 @@ plotPositivity <- function(positivity, labels = NULL, fileName = NULL) {
   data <- as.data.frame(attr(positivity, "predictions"))
   data$strategy <- factor(labels[data$strategyId], levels = labels)
   modelLabels <- c(binary = "pi(X), binary model", hazard = "1 - S(H | X), hazard model")
-  data$modelLabel <- factor(modelLabels[data$model], levels = modelLabels)
-  colors <- c("#2a78d6", "#eb6834")
-  names(colors) <- modelLabels
+  data$modelLabel <- modelLabels[data$model]
+  # Several predictions of one model kind for a strategy (an initiateWithin strategy with graceStart > 0
+  # also has the probability of starting before graceStart) are told apart by their day:
+  if (!is.null(data$day) && anyDuplicated(unique(data[, c("strategyId", "model", "day")])[, c("strategyId", "model")]) > 0) {
+    data$modelLabel <- sprintf("%s, day %d", data$modelLabel, as.integer(data$day))
+  }
+  levels <- unique(data$modelLabel[if (is.null(data$day)) order(data$model) else order(data$model, data$day)])
+  data$modelLabel <- factor(data$modelLabel, levels = levels)
+  colors <- rep(c("#2a78d6", "#eb6834", "#1f9e6e", "#8a5cc2"), length.out = length(levels))
+  names(colors) <- levels
   plot <- ggplot2::ggplot(data, ggplot2::aes(x = .data$probability, fill = .data$modelLabel)) +
     ggplot2::geom_histogram(bins = 40, boundary = 0, alpha = 0.6, position = "identity") +
     ggplot2::facet_wrap(~strategy, scales = "free_y") +
@@ -906,11 +952,17 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #'
 #' @details
 #' By default the variants change one choice at a time from the specified settings, to each of its
-#' other values: `postGraceModel`, `initiateWithinModel` and `covariateTimeInteraction` (pooled
-#' logistic hazard model only) of [createFitCensoringModelsArgs()] (only when a strategy uses them), `truncateMsmWeights` (with
+#' other values: `postGraceModel`, `initiateWithinModel`, `graceRegime` and `covariateTimeInteraction`
+#' (pooled logistic hazard model only) of [createFitCensoringModelsArgs()] (only when a strategy uses
+#' them), `truncateMsmWeights` (with
 #' truncation, not for `modelType = "km"`, which does not use the weights on the MSM scale) and the
 #' truncation `basis` of [createComputeWeightsArgs()] (with percentile truncation), and `msmWeights` of
 #' [createFitOutcomeModelArgs()] (not for `modelType = "km"`). Pass `variants` for other combinations.
+#'
+#' `graceRegime` is not a modelling choice: `"binaryAtG"` and `"naturalGrace"` define different
+#' `"initiateWithin"` regimes (see [createFitCensoringModelsArgs()]), so their estimates differ when the
+#' start day within the grace period changes later risk. A large difference shows that the choice of
+#' regime matters for the data at hand, not that one of them is biased.
 #'
 #' @param clones                 An object of type [CcwClones] as created by `createClones()`.
 #' @param cloneCensorWeightData  The object of type [CloneCensorWeightData] the clones were created
@@ -1004,6 +1056,7 @@ computeCcwSensitivity <- function(clones,
       changes = changes,
       postGraceModel = args$fitCensoringModelsArgs$postGraceModel,
       initiateWithinModel = args$fitCensoringModelsArgs$initiateWithinModel,
+      graceRegime = args$fitCensoringModelsArgs$graceRegime,
       covariateTimeInteraction = args$fitCensoringModelsArgs$covariateTimeInteraction,
       stabilized = args$computeWeightsArgs$stabilized,
       truncationType = args$computeWeightsArgs$truncation$type,
@@ -1037,8 +1090,11 @@ computeCcwSensitivity <- function(clones,
     for (value in setdiff(c("binary", "hazard"), fitCensoringModelsArgs$initiateWithinModel)) {
       add("fitCensoringModelsArgs", "initiateWithinModel", value)
     }
+    for (value in setdiff(c("binaryAtG", "naturalGrace"), fitCensoringModelsArgs$graceRegime)) {
+      add("fitCensoringModelsArgs", "graceRegime", value)
+    }
   }
-  usesHazardModel <- any(types != "initiateWithin") || fitCensoringModelsArgs$initiateWithinModel == "hazard"
+  usesHazardModel <- .usesHazardModel(strategies, fitCensoringModelsArgs$initiateWithinModel)
   if (usesHazardModel && fitCensoringModelsArgs$hazardModelType == "logistic") {
     for (value in setdiff(c("day0", "none", "interval"), fitCensoringModelsArgs$covariateTimeInteraction)) {
       add("fitCensoringModelsArgs", "covariateTimeInteraction", value)
@@ -1057,6 +1113,15 @@ computeCcwSensitivity <- function(clones,
     add("fitOutcomeModelArgs", "msmWeights", setdiff(c("unstabilized", "stabilized"), fitOutcomeModelArgs$msmWeights))
   }
   return(variants)
+}
+
+# Does an analysis use an initiation hazard model (whose covariateTimeInteraction then matters)? Every
+# strategy but initiateWithin does, and initiateWithin with initiateWithinModel = "hazard" or with
+# graceStart > 0 (the days before graceStart).
+.usesHazardModel <- function(strategies, initiateWithinModel) {
+  return(any(vapply(strategies, function(strategy) {
+    strategy$type != "initiateWithin" || strategy$graceStart > 0
+  }, logical(1))) || "hazard" %in% initiateWithinModel)
 }
 
 # Copies of the settings objects in `base` with the changes of `variant`.
@@ -1166,7 +1231,7 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'
 #' @description
 #' Computes, for the specified settings and for the alternative choices of `postGraceModel`,
-#' `initiateWithinModel` and `covariateTimeInteraction`, the diagnostics that help choose between them for the data at hand:
+#' `initiateWithinModel`, `graceRegime` and `covariateTimeInteraction`, the diagnostics that help choose between them for the data at hand:
 #' calibration of the censoring models, the grace-period selection check, the weights on both scales,
 #' covariate balance after the grace period, positivity and, optionally, the estimates under each
 #' choice.
@@ -1175,8 +1240,11 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #' The choices compared are `postGraceModel` `"hazard"` and `"binary"` (when a strategy is
 #' `"notInitiateWithin"`), crossed with `covariateTimeInteraction` `"none"`, `"day0"` and the
 #' specified one (with the pooled logistic hazard model, when a strategy uses it; the Cox model has
-#' none), crossed with `initiateWithinModel` `"binary"` and `"hazard"` (when a strategy is
-#' `"initiateWithin"`). Choices that give the same censoring models (for example the interaction
+#' none), crossed with `initiateWithinModel` `"binary"` and `"hazard"` and with `graceRegime`
+#' `"binaryAtG"` and `"naturalGrace"` (when a strategy is `"initiateWithin"`; combinations that the
+#' hazard model's interval grid does not allow are left out). `graceRegime` chooses the regime (the
+#' estimand) rather than a model, so its diagnostics describe the weights of each regime and do not
+#' rank them. Choices that give the same censoring models (for example the interaction
 #' settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
 #' and shared by the choices that use it (for example the hazard model through `G` serves both
 #' `postGraceModel` choices, and both strategies with `initiateWithinModel = "hazard"`), and the models
@@ -1231,7 +1299,8 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'                                    refitted. When `fitCensoringModelsArgs` is not given, the
 #'                                    specified settings are those the models were fit with. When they
 #'                                    were fit with settings other than `fitCensoringModelsArgs` (besides
-#'                                    the design choices compared), the models that depend on those
+#'                                    the design choices compared, including `graceRegime`), the models
+#'                                    that depend on those
 #'                                    settings are fit again. For example, the binary model at G is
 #'                                    reused when only the hazard model's settings (`timeBasis` or
 #'                                    `hazardModelType`) differ, and the hazard models when only
@@ -1239,7 +1308,9 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'
 #' @return
 #' An object of class `CcwDiagnostics`: a list with `variants` (a tibble with `variant`,
-#' `postGraceModel`, `covariateTimeInteraction`, `initiateWithinModel` and `specified`), `calibration`,
+#' `postGraceModel`, `covariateTimeInteraction`, `initiateWithinModel`, `graceRegime` and
+#' `specified`; the `variant` label names `graceRegime` only when a strategy is `"initiateWithin"`),
+#' `calibration`,
 #' `gracePeriodSelection`, `weightSummary`, `balance`, `positivity`, `sensitivity` (`NULL` unless
 #' requested) and `thresholds`.
 #'
@@ -1294,7 +1365,7 @@ computeCcwDiagnostics <- function(clones,
     if (missing(fitCensoringModelsArgs)) {
       fitCensoringModelsArgs <- FitCensoringModelsArgs$new(untypedList = modelsArgs)
     } else if (.withoutDesignChoices(modelsArgs) != .withoutDesignChoices(fitCensoringModelsArgs$toList())) {
-      message("The censoring models given were fit with other settings than fitCensoringModelsArgs (besides postGraceModel, initiateWithinModel and covariateTimeInteraction), so the models that depend on them are fit again")
+      message("The censoring models given were fit with other settings than fitCensoringModelsArgs (besides postGraceModel, initiateWithinModel, graceRegime and covariateTimeInteraction), so the models that depend on them are fit again")
     }
     fits <- .censoringFitsFromModels(censoringModels)
   }
@@ -1303,8 +1374,9 @@ computeCcwDiagnostics <- function(clones,
 
   postGraceModels <- if (any(types == "notInitiateWithin")) c("hazard", "binary") else fitCensoringModelsArgs$postGraceModel
   initiateWithinModels <- if (any(types == "initiateWithin")) c("binary", "hazard") else fitCensoringModelsArgs$initiateWithinModel
+  graceRegimes <- if (any(types == "initiateWithin")) c("binaryAtG", "naturalGrace") else fitCensoringModelsArgs$graceRegime
   interactions <- fitCensoringModelsArgs$covariateTimeInteraction
-  usesHazardModel <- any(types != "initiateWithin") || "hazard" %in% initiateWithinModels
+  usesHazardModel <- .usesHazardModel(strategies, initiateWithinModels)
   if (fitCensoringModelsArgs$hazardModelType == "logistic" && usesHazardModel) {
     interactions <- unique(c(interactions, "none", "day0"))
   }
@@ -1312,16 +1384,31 @@ computeCcwDiagnostics <- function(clones,
     postGraceModel = postGraceModels,
     covariateTimeInteraction = interactions,
     initiateWithinModel = initiateWithinModels,
+    graceRegime = graceRegimes,
     stringsAsFactors = FALSE
   )
+  # Combinations the hazard model's grid does not allow (.checkInitiateWithinHazardGrid()) are left out:
+  allowed <- vapply(seq_len(nrow(variants)), function(i) {
+    args <- fitCensoringModelsArgs$clone(deep = TRUE)
+    args$initiateWithinModel <- variants$initiateWithinModel[i]
+    args$graceRegime <- variants$graceRegime[i]
+    !inherits(tryCatch(.checkInitiateWithinHazardGrid(strategies, args), error = function(e) e), "error")
+  }, logical(1))
+  variants <- variants[allowed, ]
   variants$variant <- sprintf(
     "postGraceModel = %s, covariateTimeInteraction = %s, initiateWithinModel = %s",
     variants$postGraceModel, variants$covariateTimeInteraction, variants$initiateWithinModel
   )
+  # The regime is named only when the analysis has an initiateWithin strategy, so the labels of other
+  # analyses stay as they were:
+  if (any(types == "initiateWithin")) {
+    variants$variant <- sprintf("%s, graceRegime = %s", variants$variant, variants$graceRegime)
+  }
   variants$specified <- variants$postGraceModel == fitCensoringModelsArgs$postGraceModel &
     variants$covariateTimeInteraction == fitCensoringModelsArgs$covariateTimeInteraction &
-    variants$initiateWithinModel == fitCensoringModelsArgs$initiateWithinModel
-  variants <- dplyr::as_tibble(variants[order(!variants$specified), c("variant", "postGraceModel", "covariateTimeInteraction", "initiateWithinModel", "specified")])
+    variants$initiateWithinModel == fitCensoringModelsArgs$initiateWithinModel &
+    variants$graceRegime == fitCensoringModelsArgs$graceRegime
+  variants <- dplyr::as_tibble(variants[order(!variants$specified), c("variant", "postGraceModel", "covariateTimeInteraction", "initiateWithinModel", "graceRegime", "specified")])
 
   # The censoring models of each choice, each model fit once (or taken from censoringModels):
   variantModels <- list()
@@ -1330,6 +1417,7 @@ computeCcwDiagnostics <- function(clones,
     args$postGraceModel <- variants$postGraceModel[i]
     args$covariateTimeInteraction <- variants$covariateTimeInteraction[i]
     args$initiateWithinModel <- variants$initiateWithinModel[i]
+    args$graceRegime <- variants$graceRegime[i]
     fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args, fits = fits, warnDay0CovariateWindows = i == 1)
     fits <- fitted$fits
     variantModels[[i]] <- fitted$models
@@ -1345,7 +1433,7 @@ computeCcwDiagnostics <- function(clones,
   calibration <- dplyr::bind_rows(lapply(variantModels, function(models) {
     computeCensoringModelCalibration(clones, models, numberOfGroups, cloneCensorWeightData, strataCovariateIds)
   }))
-  calibration <- calibration[!duplicated(calibration[, c("strategyId", "model", "covariateTimeInteraction", "grouping", "covariateId", "group")]), ]
+  calibration <- calibration[!duplicated(calibration[, c("strategyId", "model", "covariateTimeInteraction", "graceRegime", "grouping", "covariateId", "group")]), ]
 
   balance <- list()
   weightSummaries <- list()
@@ -1394,6 +1482,7 @@ computeCcwDiagnostics <- function(clones,
 .withoutDesignChoices <- function(argsList) {
   argsList$postGraceModel <- NULL
   argsList$initiateWithinModel <- NULL
+  argsList$graceRegime <- NULL
   argsList$covariateTimeInteraction <- NULL
   return(.settingsJson(argsList))
 }
@@ -1410,11 +1499,11 @@ computeCcwDiagnostics <- function(clones,
 # One CcwPositivity from several, each model of each strategy once (in strategy order).
 .combinePositivity <- function(positivities) {
   positivity <- dplyr::bind_rows(lapply(positivities, dplyr::as_tibble))
-  keep <- !duplicated(positivity[, c("strategyId", "model", "day")])
+  keep <- !duplicated(positivity[, c("strategyId", "model", "graceRegime", "day")])
   positivity <- positivity[keep, ]
   positivity <- positivity[order(positivity$strategyId), ]
   predictions <- dplyr::bind_rows(lapply(positivities, function(x) attr(x, "predictions")))
-  predictions <- predictions[!duplicated(predictions[, c("strategyId", "model", "rowId")]), ]
+  predictions <- predictions[!duplicated(predictions[, c("strategyId", "model", "graceRegime", "day", "rowId")]), ]
   attr(positivity, "predictions") <- predictions[order(predictions$strategyId), ]
   attr(positivity, "threshold") <- attr(positivities[[1]], "threshold")
   attr(positivity, "strategyLabels") <- attr(positivities[[1]], "strategyLabels")
@@ -1447,9 +1536,9 @@ print.CcwDiagnostics <- function(x, ...) {
   .printSelectionFlags(x$gracePeriodSelection)
   writeLines("")
   calibration <- as.data.frame(x$calibration)
-  overall <- calibration[calibration$grouping == "overall", c("strategyId", "model", "covariateTimeInteraction", "persons", "observed", "predicted")]
+  overall <- calibration[calibration$grouping == "overall", c("strategyId", "model", "covariateTimeInteraction", "graceRegime", "persons", "observed", "predicted")]
   groups <- calibration[calibration$grouping == "prediction", ]
-  key <- function(d) paste(d$strategyId, d$model, d$covariateTimeInteraction)
+  key <- function(d) paste(d$strategyId, d$model, d$covariateTimeInteraction, d$graceRegime)
   overall$largestGroupGap <- as.vector(tapply(abs(groups$observed - groups$predicted), key(groups), max)[key(overall)])
   writeLines("Calibration at the end of the grace period (in the large, and the largest gap over groups of the prediction):")
   print(overall, row.names = FALSE, digits = 3)
@@ -1463,7 +1552,7 @@ print.CcwDiagnostics <- function(x, ...) {
   writeLines(sprintf("Weights after truncation (flagged above %s or with an effective sample share below %s):", format(thresholds$maxWeightThreshold), format(thresholds$essFractionThreshold)))
   print(worst[order(worst$variant, worst$strategyId, worst$scale), ], row.names = FALSE, digits = 3)
   writeLines("")
-  positivity <- as.data.frame(x$positivity)[, c("strategyId", "model", "day", "persons", "min", "median", "max", "shareExtreme")]
+  positivity <- as.data.frame(x$positivity)[, c("strategyId", "model", "graceRegime", "day", "persons", "min", "median", "max", "shareExtreme")]
   writeLines(sprintf("Positivity (share of persons whose probability of following the strategy is below %s):", format(thresholds$positivityThreshold)))
   print(positivity, row.names = FALSE, digits = 3)
   if (!is.null(x$sensitivity)) {

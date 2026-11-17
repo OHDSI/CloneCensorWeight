@@ -181,13 +181,14 @@
   return(eventDay)
 }
 
-# Draws, for persons who have not started by day graceEnd, a start day a in 0..graceEnd from
-# P(A = a | A <= graceEnd, no outcome or death on or before graceEnd, X), which is proportional to
-# P(A = a | X) * P(no outcome on or before graceEnd | A = a, X). Death does not depend on the
-# treatment, so its survival cancels. Two passes (total, then inverse CDF), to avoid an
+# Draws, for persons who have not started by day graceEnd, a start day a in graceStart..graceEnd from
+# P(A = a | graceStart <= A <= graceEnd, no outcome or death on or before graceEnd, X), which is
+# proportional to P(A = a | X) * P(no outcome on or before graceEnd | A = a, X). Death does not depend on
+# the treatment, so its survival cancels. Two passes (total, then inverse CDF), to avoid an
 # n x (graceEnd + 1) matrix. With a day-0 initiation hazard h0 (etaInitiationDay0), P(A = 0 | X) = h0
-# and P(A = a | X) = (1 - h0) (1 - h)^(a - 1) h for a >= 1.
-.drawGraceStartDay <- function(u, etaInitiation, etaOutcome, graceEnd, settings, etaInitiationDay0 = NULL) {
+# and P(A = a | X) = (1 - h0) (1 - h)^(a - 1) h for a >= 1. With graceStart > 0 these are proportional
+# to P(A = a | A >= graceStart, X), the start days of a person kept from starting before graceStart.
+.drawGraceStartDay <- function(u, etaInitiation, etaOutcome, graceEnd, settings, etaInitiationDay0 = NULL, graceStart = 0) {
   initiationHazard <- stats::plogis(etaInitiation)
   if (!is.null(etaInitiationDay0)) {
     day0Hazard <- stats::plogis(etaInitiationDay0)
@@ -201,7 +202,7 @@
   for (pass in 1:2) {
     rampSum <- 0
     cumulativeWeight <- 0
-    for (daysTreated in 0:graceEnd) {
+    for (daysTreated in 0:(graceEnd - graceStart)) {
       a <- graceEnd - daysTreated
       # Cumulative outcome hazard through day graceEnd for a start on day a:
       if (settings$dgp == "a") {
@@ -251,15 +252,27 @@
     )
     return(.regularPath(startDay, settings))
   }
+  # initiateWithin with graceStart > 0: nobody starts before graceStart. A person who would have started
+  # earlier starts on a day drawn from the natural initiation hazard from day graceStart on (the hazard
+  # after day 0 is constant, so this is the natural start day given no start before graceStart):
+  graceStart <- strategy$graceStart
+  if (graceStart > 0) {
+    naturalStartDay <- ifelse(
+      naturalStartDay >= graceStart,
+      naturalStartDay,
+      graceStart - 1 + ceiling(laterStartE / .dailyCumulativeHazard(eta$initiation))
+    )
+  }
   if (graceRegime == "naturalGrace") {
     return(.regularPath(pmin(naturalStartDay, graceEnd), settings))
   }
-  # binaryAtG: early starters keep their start day. The others follow the untreated hazard through
-  # graceEnd, and then the hazard of a start on a day drawn from the starters by graceEnd.
+  # binaryAtG: persons who start by graceEnd keep their start day. The others follow the untreated hazard
+  # through graceEnd, and then the hazard of a start on a day drawn from the starters on days
+  # graceStart..graceEnd.
   path <- .regularPath(naturalStartDay, settings)
   late <- which(naturalStartDay > graceEnd)
   etaInitiationDay0 <- if (.hasDay0Initiation(settings)) eta$initiationDay0[late] else NULL
-  drawnStartDay <- .drawGraceStartDay(u[late], eta$initiation[late], eta$outcome[late], graceEnd, settings, etaInitiationDay0)
+  drawnStartDay <- .drawGraceStartDay(u[late], eta$initiation[late], eta$outcome[late], graceEnd, settings, etaInitiationDay0, graceStart)
   latePath <- .regularPath(drawnStartDay, settings)
   path$switchDay[late] <- pmax(latePath$switchDay, graceEnd)
   path$startDay[late] <- drawnStartDay
@@ -550,7 +563,13 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #'   start day. After day G, the outcome hazard follows that start day. This is the regime the
 #'   binary-at-G censoring weight identifies.
 #' - `initiateWithin(G)` with `graceRegime = "naturalGrace"`: the natural course through day G - 1;
-#'   persons still untreated on day G start on day G.
+#'   persons still untreated on day G start on day G. This is the regime the natural-grace
+#'   (last-interval) weight identifies (`graceRegime = "naturalGrace"` in
+#'   [createFitCensoringModelsArgs()]).
+#' - `initiateWithin` with `graceStart = S > 0`: as above, but nobody starts before day S. A person who
+#'   would start before day S starts instead on a day drawn from the natural initiation hazard from day
+#'   S on (the start day given no start before day S), and the start days drawn under `"binaryAtG"` are
+#'   on days S to G.
 #'
 #' Under DGP `"a"`, with G equal to the DGP's `graceEnd`, the two grace regimes give the same truth.
 #' Under DGP `"b"`, the binary-at-G regime moves the start of persons who would not start by G to
@@ -577,9 +596,9 @@ simulateCloneCensorWeightData <- function(n = 5000,
 #' @param settings    The simulation settings: `metaData$simulationSettings` of an object created by
 #'                    [simulateCloneCensorWeightData()].
 #' @param strategies  A list of objects of type `TreatmentStrategy` as created using
-#'                    [createTreatmentStrategy()], all referring to the `"treatment"` role, with
-#'                    `graceStart = 0` and no `prohibitedTreatments`. Their position in the list is the
-#'                    `strategyId` of the result.
+#'                    [createTreatmentStrategy()], all referring to the `"treatment"` role, with no
+#'                    `prohibitedTreatments`. Their position in the list is the `strategyId` of the
+#'                    result.
 #' @param horizons    The days (since index) at which to compute the risks, from `riskStart` to
 #'                    `maxDays`. The risk at day h includes outcomes on day h.
 #' @param graceRegime How the `initiateWithin` strategies are defined: `"binaryAtG"` or `"naturalGrace"`
@@ -635,9 +654,6 @@ computeTrueRisks <- function(settings,
     ))
   }
   for (strategy in strategies) {
-    if (strategy$graceStart > 0) {
-      stop("Not yet supported in this version: graceStart > 0")
-    }
     if (length(strategy$prohibitedTreatments) > 0) {
       stop("Not yet supported in this version: prohibitedTreatments")
     }

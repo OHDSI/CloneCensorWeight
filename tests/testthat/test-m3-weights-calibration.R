@@ -33,7 +33,7 @@ test_that("computeCensoringModelCalibration equals a hand computation", {
     }
     models <- suppressMessages(fitCensoringModels(clones, data, m3Args(hazardModelType, postGraceModel = postGraceModel)))
     calibration <- computeCensoringModelCalibration(clones, models, numberOfGroups = 5)
-    expect_equal(colnames(calibration), c("strategyId", "model", "covariateTimeInteraction", "grouping", "covariateId", "group", "persons", "predicted", "observed"))
+    expect_equal(colnames(calibration), c("strategyId", "model", "covariateTimeInteraction", "graceRegime", "grouping", "covariateId", "group", "persons", "predicted", "observed"))
     expect_equal(attr(calibration, "strategyLabels"), c("initiateWithin 1", "notInitiateWithin 2"))
     expect_equal(attr(calibration, "graceEnds"), c(7L, 7L))
     expect_equal(unique(calibration$model[calibration$strategyId == 2]), if (postGraceModel == "binary") c("hazard", "binary") else "hazard")

@@ -17,11 +17,13 @@ on the same clones.}
 }
 \value{
 A tibble of class \code{CcwPositivity} with columns \code{strategyId}, \code{model} (\code{"binary"} or \code{"hazard"}),
+\code{graceRegime} (that of the models of an \code{"initiateWithin"} strategy, \code{NA} for the other strategies),
 \code{day} (the horizon of the prediction), \code{persons}, the \code{mean}, \code{min}, \code{p01}, \code{p05}, \code{p25}, \code{median},
 \code{p75}, \code{p95}, \code{p99} and \code{max} of the predicted probability of starting by \code{day}, \code{shareBelow} and
 \code{shareAbove} (the shares of predictions below \code{threshold} and above \code{1 - threshold}), and
 \code{shareExtreme}, the share whose probability of following the strategy is below \code{threshold}. The
-attribute \code{predictions} holds the predictions (\code{strategyId}, \code{model}, \code{rowId}, \code{probability}), and
+attribute \code{predictions} holds the predictions (\code{strategyId}, \code{model}, \code{graceRegime}, \code{day}, \code{rowId},
+\code{probability}), and
 \code{strategyLabels} the strategy labels.
 }
 \description{
@@ -40,6 +42,15 @@ persons at risk on day 0. The probability of following the strategy is \code{pi(
 for \code{"initiateWithin"} and \code{S(H | X)} (or \code{1 - pi(X)}) for the strategies of not initiating; its
 inverse is the weight, so persons with a probability below \code{threshold} get weights above
 \code{1 / threshold}.
+
+For an \code{"initiateWithin"} strategy with \code{graceStart = S > 0} the binary model at \code{G} is fit on the
+persons who have not started before day \code{S}, and the hazard model's prediction at \code{G} is
+\code{1 - S(G | X) / S(S - 1 | X)}, the probability of starting on days \code{S..G} of those persons; the
+result also has the probability of starting before day \code{S}, \code{1 - S(S - 1 | X)} (\code{day = S - 1}),
+from the hazard model of the days before \code{S} (or the hazard model through \code{G}), whose complement is
+the probability of following the strategy. With \code{graceRegime = "naturalGrace"} (see
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}) the prediction at \code{G} is the probability of starting on day \code{G} of
+the persons who reach it untreated (binary model fit on them, or \code{1 - S(G | X) / S(G - 1 | X)}).
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:

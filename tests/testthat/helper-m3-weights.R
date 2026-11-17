@@ -102,7 +102,7 @@ buildM3CloneTable <- function(persons, strategies, sameDayOrdering = "eventsFirs
       a <- if (strategy$treatment == "treatment") p$treatmentDay else p$comparatorTreatmentDay
       g <- strategy$graceEnd
       deviationDay <- switch(strategy$type,
-        initiateWithin = if (is.na(a) || a > g) g else NA,
+        initiateWithin = if (!is.na(a) && a < strategy$graceStart) a else if (is.na(a) || a > g) g else NA,
         notInitiateWithin = if (!is.na(a) && a <= g) a else NA,
         neverInitiate = a
       )

@@ -31,7 +31,8 @@ others.}
 \value{
 A tibble of class \code{CcwCensoringModelCalibration} with columns \code{strategyId}, \code{model} (\code{"binary"} or
 \code{"hazard"}), \code{covariateTimeInteraction} (the setting of the hazard model, \code{NA} for the binary
-model), \code{grouping} (\code{"prediction"}: groups of the prediction, \code{group} 1 holding the lowest
+model), \code{graceRegime} (that of the models of an \code{"initiateWithin"} strategy, \code{NA} for the other
+strategies), \code{grouping} (\code{"prediction"}: groups of the prediction, \code{group} 1 holding the lowest
 predictions; \code{"overall"}: all persons, the calibration in the large; \code{"covariate"}: by
 \code{covariateId}), \code{covariateId}, \code{group}, \code{persons}, \code{predicted} (the mean prediction in the group)
 and \code{observed} (the share who started by \code{G}). The attribute \code{strategyLabels} holds the strategy
@@ -47,7 +48,12 @@ period, by group (decile) of the prediction.
 The persons compared are those of the binary model's risk set at \code{G}: no outcome or death on or
 before day \code{G} (before day \code{G} with \code{sameDayOrdering = "deviationFirst"}) and \code{riskEnd >= G}. The
 observed value is the share of them who started the treatment on or before day \code{G} (a strategy
-with nobody under follow-up at \code{G} has no rows). The predictions are:
+with nobody under follow-up at \code{G} has no rows). For an \code{"initiateWithin"} strategy the risk set
+leaves out the persons who started before its \code{graceStart} \code{S} (they deviated), and, with
+\code{graceRegime = "naturalGrace"} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}), all persons who started before
+day \code{G}: the observed value is then the share who started on day \code{G} of the persons who reach it
+untreated, and the predictions are the probability of that (the last-interval weight). The
+predictions are:
 \itemize{
 \item \code{model = "binary"}: \code{pi(X)}, the probability of starting by \code{G} from the binary model at \code{G}
 (the model of an \code{"initiateWithin"} strategy, and of the weights after \code{G} of a
@@ -56,7 +62,10 @@ likelihood with an intercept, it reproduces the observed share overall.
 \item \code{model = "hazard"}: \code{1 - S(G | X)} from the initiation hazard model of a \code{"notInitiateWithin"}
 strategy, the probability of initiating on days \verb{0..G}, whose complement gives the weights with
 \code{postGraceModel = "hazard"}, or of an \code{"initiateWithin"} strategy fit with
-\code{initiateWithinModel = "hazard"}, which gives its weights after \code{G}.
+\code{initiateWithinModel = "hazard"}, which gives its weights after \code{G}. For an \code{"initiateWithin"}
+strategy it is \code{1 - S(G | X) / S(F - 1 | X)}, the probability of starting on days \code{F..G} of the
+persons who have not started before day \code{F}, where \code{F} is \code{S} (\code{F = 0}: \code{1 - S(G | X)}), or \code{G}
+with \code{graceRegime = "naturalGrace"}.
 }
 
 The persons are ranked by their prediction and split into \code{numberOfGroups} groups of about the same

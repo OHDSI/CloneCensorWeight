@@ -24,8 +24,9 @@ covariates of the persons in \code{clones}.}
 \item{.fixedPriorVariances}{For internal use (the bootstrap): \code{NULL}, or a list named by
 \code{strategyId} (\code{"1"}, \code{"2"}) of prior variances, and by
 \code{"<strategyId>.postGrace"} for the binary model of a
-\code{"notInitiateWithin"} strategy's weights after the grace period. For a
-model in the list, its covariate model is fit with that prior variance
+\code{"notInitiateWithin"} strategy's weights after the grace period, and
+\code{"<strategyId>.early"} for the hazard model of the days before the
+\code{graceStart} of an \code{"initiateWithin"} strategy. For a model in the list, its covariate model is fit with that prior variance
 and without cross-validation.}
 
 \item{.sourcePersonSeqIds}{For internal use (the bootstrap): \code{NULL}, or a data frame with the
@@ -63,6 +64,11 @@ interval \code{k} is \code{baseline + linearPredictor + sum(basis[k, ] * value)}
 model at \code{G} whose \code{1 - propensityScore} gives the weights after \code{G}, a list with the elements of
 a binary model above (\code{kind}, \code{horizon}, \code{modelType}, \code{coefficients}, \code{priorVariance},
 \code{predictions}, \code{numerator}, \code{diagnostics}).
+\item \code{"initiateWithin"} strategies only: \code{graceStart} and \code{graceRegime}; \code{firstDay} (binary models fit
+on the persons who have not started before a day \code{firstDay > 0}: \code{graceStart}, or \code{G} with
+\code{graceRegime = "naturalGrace"}); and \code{early} (with \code{graceStart > 0} and
+\code{initiateWithinModel = "binary"}), the initiation hazard model through \code{graceStart - 1}, a list
+with the elements of a hazard model above.
 }
 
 The \code{metaData} attribute holds the outcome ID, same-day ordering, competing events, strategies and
@@ -83,6 +89,16 @@ and regularization, and the AUC is computed with \code{\link[CohortMethod:comput
 through \code{G} described next, the same model as that of a \code{"notInitiateWithin(G)"} strategy of the
 same treatment (shared with such a strategy when the analysis has one), whose \code{1 - S(G | X)}
 gives the weights after \code{G} (see \code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}).
+\item \code{"initiateWithin"} with \code{graceStart = S > 0}: a start before day \code{S} is a deviation. The binary
+model at \code{G} is fit on the persons who have not started before day \code{S}, with the response
+"started on days \code{S..G}", and the weights of days up to \code{S} come from the initiation hazard model
+through day \code{S - 1} (element \code{early}; the model of a \code{"notInitiateWithin(S - 1)"} strategy, shared
+with one in the analysis). With \code{initiateWithinModel = "hazard"} the hazard model through \code{G}
+gives both.
+\item \code{"initiateWithin"} with \code{graceRegime = "naturalGrace"}: the binary model at \code{G} is fit on the
+persons who reach day \code{G} untreated (no start before day \code{G}), with the response "started on day
+\code{G}", the probability of the last-interval weight (with \code{initiateWithinModel = "hazard"}, the
+hazard model through \code{G} gives it).
 \item \code{"notInitiateWithin"} and \code{"neverInitiate"}: a model of the hazard of initiation. Each person is
 at risk of initiating from day 0 until the first of: initiation, the day before an outcome or
 death (that day with \code{"deviationFirst"}), \code{riskEnd}, and the strategy's horizon \code{H} (\code{G}, or the
