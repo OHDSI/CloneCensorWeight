@@ -610,8 +610,8 @@ few minutes:
   up front for every `count()` took about 15% of the test time. It too switches itself off once
   dbplyr is updated.
 - Tests that share an expensive fixture (the analyses of `test-integration-msmWeights.R`, the
-  diagnostics of `test-integration-designChoicesDiagnostics.R`) build it once per file and do not
-  change it.
+  diagnostics of `test-integration-designChoicesDiagnostics.R`, the pooled logistic analyses and fits
+  of `test-integration-warnings.R`) build it once per file and do not change it.
 
 The **full tier** also runs the heavy versions: every configuration of the loops that compare with
 reference implementations, the statistical checks at large sample sizes, the bootstrap shift warning
