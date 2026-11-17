@@ -17,8 +17,18 @@ shiftWarning <- "sit predominantly on one side"
 # Pooled logistic outcome model --------------------------------------------------------------------
 
 # Simulated data, clones (without competing events) and censoring models (without covariates) of
-# initiateWithin(7) vs notInitiateWithin(7). The caller closes `data` and `clones`.
+# initiateWithin(7) vs notInitiateWithin(7). Each analysis is built once and shared by the tests of this
+# file, which do not change or close it.
+pooledAnalyses <- new.env()
 pooledAnalysis <- function(riskStart = 0, sameDayOrdering = "eventsFirst") {
+  key <- paste(riskStart, sameDayOrdering)
+  if (is.null(pooledAnalyses[[key]])) {
+    pooledAnalyses[[key]] <- c(newPooledAnalysis(riskStart, sameDayOrdering), key = key)
+  }
+  return(pooledAnalyses[[key]])
+}
+
+newPooledAnalysis <- function(riskStart, sameDayOrdering) {
   data <- simulateCloneCensorWeightData(n = 300, maxDays = 30, graceEnd = 7, seed = 1)
   population <- suppressMessages(createStudyPopulation(
     cloneCensorWeightData = data,
@@ -34,14 +44,19 @@ pooledAnalysis <- function(riskStart = 0, sameDayOrdering = "eventsFirst") {
   return(list(data = data, clones = clones, models = models, riskStart = riskStart))
 }
 
-closeAnalysis <- function(analysis) {
-  close(analysis$clones)
-  close(analysis$data)
+# The warnings of the pooled logistic outcome model with `timeBasis`, at a horizon that ends an interval
+# (so that the model does not warn about the horizon). Each fit runs once; the tests that ask for the same
+# analysis and time basis again share its warnings.
+pooledFitWarnings <- new.env()
+pooledWarnings <- function(analysis, timeBasis) {
+  key <- paste(analysis$key, timeBasis$toJson())
+  if (is.null(pooledFitWarnings[[key]])) {
+    pooledFitWarnings[[key]] <- list(newPooledWarnings(analysis, timeBasis))
+  }
+  return(pooledFitWarnings[[key]][[1]])
 }
 
-# The warnings of the pooled logistic outcome model with `timeBasis`, at a horizon that ends an interval
-# (so that the model does not warn about the horizon).
-pooledWarnings <- function(analysis, timeBasis) {
+newPooledWarnings <- function(analysis, timeBasis) {
   weighted <- suppressMessages(computeCensoringWeights(analysis$clones, analysis$models, createComputeWeightsArgs(), outcomeTimeBasis = timeBasis))
   on.exit(close(weighted))
   intervalLength <- timeBasis$intervalLength
@@ -57,7 +72,6 @@ withoutInside <- function(warnings) {
 
 test_that("The pooled logistic outcome model warns when no interval ends at the end of the grace period", {
   analysis <- pooledAnalysis()
-  on.exit(closeAnalysis(analysis))
   # The grace period of both strategies ends at the end of day 7, t = 8:
   warnings <- withoutInside(pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = 3)))
   expect_length(warnings, 1)
@@ -72,7 +86,6 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
 
   # The end of day 7 is at t = 6 with riskStart = 2:
   later <- pooledAnalysis(riskStart = 2)
-  on.exit(closeAnalysis(later), add = TRUE)
   expect_length(withoutInside(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 3))), 0)
   warnings <- withoutInside(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 4)))
   expect_length(warnings, 1)
@@ -80,7 +93,6 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
 
   # With deviationFirst, the clones that deviate on day 7 end on day 6, t = 7:
   deviationFirst <- pooledAnalysis(sameDayOrdering = "deviationFirst")
-  on.exit(closeAnalysis(deviationFirst), add = TRUE)
   expect_length(withoutInside(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 7))), 0)
   warnings <- withoutInside(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 8)))
   expect_length(warnings, 1)
@@ -88,7 +100,6 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
 
   # A grace period that ends before riskStart does not censor clones during follow-up:
   afterGrace <- pooledAnalysis(riskStart = 9)
-  on.exit(closeAnalysis(afterGrace), add = TRUE)
   expect_length(withoutInside(pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3))), 0)
   # (The odds ratio of this fit is not identified, no target outcome falling in its reference interval, and
   # its variance can come out negative, with an "NaNs produced" warning, depending on the weights.)
@@ -98,7 +109,6 @@ test_that("The pooled logistic outcome model warns when no interval ends at the 
 
 test_that("The pooled logistic outcome model warns about a smooth time basis with a grace period", {
   analysis <- pooledAnalysis()
-  on.exit(closeAnalysis(analysis))
   smoothBases <- list(
     naturalSpline = createTimeBasis("naturalSpline", intervalLength = 1, df = 4),
     polynomial = createTimeBasis("polynomial", intervalLength = 1, degree = 2),
@@ -124,7 +134,6 @@ test_that("The pooled logistic outcome model warns when clones are censored at s
   # longer than a day can follow: the weighted risk set of an interval counts the censored clones and the
   # weights that make up for them.
   analysis <- pooledAnalysis()
-  on.exit(closeAnalysis(analysis))
   for (intervalLength in c(2, 4, 8)) {
     warnings <- pooledWarnings(analysis, createTimeBasis("indicator", intervalLength = intervalLength))
     expect_length(warnings, 1)
@@ -141,15 +150,12 @@ test_that("The pooled logistic outcome model warns when clones are censored at s
   # With deviationFirst, a clone that deviates on day d is last under follow-up on day d - 1, so a start on
   # day 0 ends its clone before follow-up starts:
   deviationFirst <- pooledAnalysis(sameDayOrdering = "deviationFirst")
-  on.exit(closeAnalysis(deviationFirst), add = TRUE)
   expect_match(pooledWarnings(deviationFirst, createTimeBasis("indicator", intervalLength = 7)), "at a start on day(s) 1 to 7 (t = 1 to 7)", fixed = TRUE)
   # With riskStart = 2, a start on day 0 or 1 ends its clone before follow-up starts:
   later <- pooledAnalysis(riskStart = 2)
-  on.exit(closeAnalysis(later), add = TRUE)
   expect_match(pooledWarnings(later, createTimeBasis("indicator", intervalLength = 3)), "at a start on day(s) 2 to 7 (t = 1 to 6)", fixed = TRUE)
   # No start censors a clone during follow-up when the grace period ends before riskStart:
   afterGrace <- pooledAnalysis(riskStart = 9)
-  on.exit(closeAnalysis(afterGrace), add = TRUE)
   expect_false(any(grepl(insideWarning, pooledWarnings(afterGrace, createTimeBasis("indicator", intervalLength = 3)))))
 })
 
@@ -179,8 +185,15 @@ windowClones <- function(data, comparatorType = "notInitiateWithin", firstType =
   return(suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies))))
 }
 
-windowWarnings <- function(clones, data, ...) {
+# The warnings of fitCensoringModels(), or with fit = FALSE only those of its check of the covariate
+# windows (.warnDay0CovariateWindows(), with the arguments fitCensoringModels() passes it), which runs
+# before any model is fitted. The default tier fits the models of the first two cases of the test below;
+# the full tier fits them in every case.
+windowWarnings <- function(clones, data, ..., fit = isFullTestRun()) {
   args <- createFitCensoringModelsArgs(prior = Cyclops::createPrior("none"), errorOnHighCorrelation = FALSE, ...)
+  if (!fit) {
+    return(capture_warnings(.warnDay0CovariateWindows(attr(clones, "metaData")$strategies, data, args)))
+  }
   return(capture_warnings(suppressMessages(fitCensoringModels(clones, data, args))))
 }
 
@@ -191,13 +204,13 @@ test_that("fitCensoringModels warns once when initiation on day 0 meets covariat
   expect_equal(dplyr::pull(data$analysisRef, "endDay"), c(-1, -1))
   clones <- windowClones(data)
   on.exit(close(clones), add = TRUE)
-  expect_length(windowWarnings(clones, data), 0)
+  expect_length(windowWarnings(clones, data, fit = TRUE), 0)
 
   # Windows that end on day 0, as with FeatureExtraction's default endDays = 0. The models of both
   # strategies predict initiation on day 0; one warning, although three models are fitted:
   day0 <- windowData(c(0, 0))
   on.exit(close(day0), add = TRUE)
-  warnings <- windowWarnings(clones, day0)
+  warnings <- windowWarnings(clones, day0, fit = TRUE)
   expect_length(warnings, 1)
   expect_match(warnings, "The censoring models of strategies 1 (First) and 2 (Second) model initiation on day 0, but the covariate windows of analyses SimulatedBinary (endDay = 0), SimulatedNormal (endDay = 0) end on day 0 or later", fixed = TRUE)
   expect_match(warnings, "endDays = -1", fixed = TRUE)
