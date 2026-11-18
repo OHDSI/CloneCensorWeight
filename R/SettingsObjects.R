@@ -979,12 +979,25 @@ ComputeWeightsArgs <- R6Class(
 #' The bootstrap ([bootstrapCcwAnalysis()]) resamples persons (so all clones of a person stay
 #' together) and re-estimates the censoring models and weights in every replicate.
 #'
+#' With `method = "reweight"` (the default), a replicate gives each person a frequency weight, the
+#' number of times it was drawn, and refits the censoring models of the full data with these weights
+#' (reusing their Cyclops data where it can), then the outcome model with each clone's weight times its
+#' person's frequency weight. With `method = "copy"`, a replicate copies each drawn person as many times
+#' as drawn into new data and repeats the whole analysis on it. With the same counts and
+#' `fixHyperparameters = TRUE`, the two give the same replicates (see [bootstrapCcwAnalysis()] for
+#' when they differ).
+#'
 #' @param replicates         The number of bootstrap replicates.
 #' @param seed               The random seed.
 #' @param ci                 How to compute confidence intervals: `"percentile"` or `"normal"`
 #'                           (bias-corrected), as the `"perc"` and `"norm"` types of [boot::boot.ci()].
 #' @param fixHyperparameters Reuse the prior variances selected by cross-validation on the full data
 #'                           in every replicate?
+#' @param method             How a replicate is analyzed: `"reweight"` (frequency weights on the full
+#'                           data) or `"copy"` (copies of the drawn persons).
+#' @param warmStart          With `method = "reweight"`: start the refits of the censoring models from
+#'                           the coefficients of the full-data models? With `FALSE`, they start as new
+#'                           fits do.
 #'
 #' @return
 #' An object of type `BootstrapArgs`.
@@ -996,7 +1009,9 @@ ComputeWeightsArgs <- R6Class(
 createBootstrapArgs <- function(replicates = 200,
                                 seed = 1,
                                 ci = "percentile",
-                                fixHyperparameters = TRUE) {
+                                fixHyperparameters = TRUE,
+                                method = "reweight",
+                                warmStart = TRUE) {
   args <- list()
   for (name in names(formals())) {
     args[[name]] <- get(name)
@@ -1012,12 +1027,17 @@ BootstrapArgs <- R6Class(
     seed = NULL,
     ci = NULL,
     fixHyperparameters = NULL,
+    # Defaults, so settings saved before these fields existed load:
+    method = "reweight",
+    warmStart = TRUE,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
       checkmate::assertInt(self$replicates, lower = 1, add = errorMessages)
       checkmate::assertInt(self$seed, add = errorMessages)
       checkmate::assertChoice(self$ci, c("percentile", "normal"), add = errorMessages)
       checkmate::assertFlag(self$fixHyperparameters, add = errorMessages)
+      checkmate::assertChoice(self$method, c("reweight", "copy"), add = errorMessages)
+      checkmate::assertFlag(self$warmStart, add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
     }
   )

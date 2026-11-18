@@ -8,7 +8,9 @@ createBootstrapArgs(
   replicates = 200,
   seed = 1,
   ci = "percentile",
-  fixHyperparameters = TRUE
+  fixHyperparameters = TRUE,
+  method = "reweight",
+  warmStart = TRUE
 )
 }
 \arguments{
@@ -21,6 +23,13 @@ createBootstrapArgs(
 
 \item{fixHyperparameters}{Reuse the prior variances selected by cross-validation on the full data
 in every replicate?}
+
+\item{method}{How a replicate is analyzed: \code{"reweight"} (frequency weights on the full
+data) or \code{"copy"} (copies of the drawn persons).}
+
+\item{warmStart}{With \code{method = "reweight"}: start the refits of the censoring models from
+the coefficients of the full-data models? With \code{FALSE}, they start as new
+fits do.}
 }
 \value{
 An object of type \code{BootstrapArgs}.
@@ -31,6 +40,14 @@ Create a parameter object for the bootstrap
 \details{
 The bootstrap (\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}) resamples persons (so all clones of a person stay
 together) and re-estimates the censoring models and weights in every replicate.
+
+With \code{method = "reweight"} (the default), a replicate gives each person a frequency weight, the
+number of times it was drawn, and refits the censoring models of the full data with these weights
+(reusing their Cyclops data where it can), then the outcome model with each clone's weight times its
+person's frequency weight. With \code{method = "copy"}, a replicate copies each drawn person as many times
+as drawn into new data and repeats the whole analysis on it. With the same counts and
+\code{fixHyperparameters = TRUE}, the two give the same replicates (see \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}} for
+when they differ).
 }
 \examples{
 args <- createBootstrapArgs(replicates = 500)

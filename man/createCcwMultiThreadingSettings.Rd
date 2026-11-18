@@ -12,6 +12,7 @@ createCcwMultiThreadingSettings(
   computeBalanceThreads = 1,
   fitOutcomeModelThreads = 1,
   outcomeCvThreads = 1,
+  bootstrapThreads = 1,
   calibrationThreads = 1
 )
 }
@@ -38,6 +39,12 @@ models.}
 \item{outcomeCvThreads}{The number of threads Cyclops uses in each outcome model fit. The
 total number of threads at one time can be
 \code{fitOutcomeModelThreads * outcomeCvThreads}.}
+
+\item{bootstrapThreads}{The number of parallel workers of each bootstrap
+(\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}), for outcome models with
+\code{varianceEstimator = "bootstrap"}. Each worker holds its own copy of
+the data and of the censoring models' Cyclops data. The total number
+of threads at one time can be \code{fitOutcomeModelThreads * bootstrapThreads * censoringModelCvThreads}.}
 
 \item{calibrationThreads}{The number of parallel threads to use for empirical calibration.}
 }

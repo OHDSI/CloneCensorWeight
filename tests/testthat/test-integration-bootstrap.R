@@ -20,7 +20,8 @@ bootstrapSettings <- function(modelType = "km",
                               seed = 1,
                               ci = "percentile",
                               fixHyperparameters = TRUE,
-                              postGraceModel = "hazard") {
+                              postGraceModel = "hazard",
+                              method = "reweight") {
   return(list(
     createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowEnd = 15, endAnchor = "cohort start"),
     createClonesArgs = createCreateClonesArgs(
@@ -40,7 +41,7 @@ bootstrapSettings <- function(modelType = "km",
     fitOutcomeModelArgs = createFitOutcomeModelArgs(
       modelType = modelType,
       horizons = c(8, 15),
-      bootstrapArgs = createBootstrapArgs(replicates = replicates, seed = seed, ci = ci, fixHyperparameters = fixHyperparameters)
+      bootstrapArgs = createBootstrapArgs(replicates = replicates, seed = seed, ci = ci, fixHyperparameters = fixHyperparameters, method = method)
     )
   ))
 }
@@ -330,7 +331,9 @@ test_that("A cox replicate without outcomes keeps its Kaplan-Meier rows and leav
 test_that("With fixHyperparameters, replicates use the full-data prior variances without cross-validation", {
   data <- bootstrapData(seed = 4, initiationCoefficient = 0.8)
   on.exit(close(data))
+  # (The copy bootstrap, whose replicates call fitCensoringModels().)
   settings <- bootstrapSettings(
+    method = "copy",
     modelType = "km",
     useCovariates = TRUE,
     prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
@@ -367,7 +370,7 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
   }
 
   calls <- list()
-  settings$fitOutcomeModelArgs$bootstrapArgs <- createBootstrapArgs(replicates = 1, fixHyperparameters = FALSE)
+  settings$fitOutcomeModelArgs$bootstrapArgs <- createBootstrapArgs(replicates = 1, fixHyperparameters = FALSE, method = "copy")
   # The copies of a person are one cross-validation unit, and a replicate of 120 persons holds fewer
   # distinct persons than Cyclops' default minimum for cross-validation (minCVData = 100):
   settings$fitCensoringModelsArgs$control$minCVData <- 10
@@ -431,7 +434,7 @@ test_that("With graceStart > 0, replicates fix the prior variance of the early h
 test_that("Replicates give the censoring models the person each copy was drawn from", {
   data <- bootstrapData(n = 60, seed = 3)
   on.exit(close(data))
-  settings <- bootstrapSettings(replicates = 2)
+  settings <- bootstrapSettings(replicates = 2, method = "copy")
   persons <- dplyr::collect(data$cohorts) |>
     dplyr::distinct(personSeqId, personId) |>
     dplyr::arrange(personSeqId)
@@ -544,7 +547,8 @@ test_that("Replicates fit the censoring models without the high-correlation chec
   on.exit(close(data))
   # (Two replicates in the full tier, one in the default tier.)
   replicates <- testConfigurations(2, 1)
-  settings <- bootstrapSettings(useCovariates = TRUE, replicates = replicates)
+  # (The copy bootstrap, whose replicates call fitCensoringModels().)
+  settings <- bootstrapSettings(useCovariates = TRUE, replicates = replicates, method = "copy")
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
   realFitCensoringModels <- fitCensoringModels
   checks <- logical(0)
@@ -557,3 +561,65 @@ test_that("Replicates fit the censoring models without the high-correlation chec
   expect_equal(checks, c(TRUE, rep(FALSE, replicates)))
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
 })
+
+# The setup of the replicates of bootstrapCcwAnalysis() (R/Bootstrap.R) for `settings`, without the
+# full-data fit: no warm starts (the full-data models give them), and the estimands of a Cox outcome
+# model with the horizons of bootstrapSettings().
+replicateSetup <- function(data, settings, method) {
+  args <- settings$fitCensoringModelsArgs$clone()
+  args$errorOnHighCorrelation <- FALSE
+  return(list(
+    method = method, warmStart = FALSE, outcomeId = 3,
+    createStudyPopulationArgs = settings$createStudyPopulationArgs, createClonesArgs = settings$createClonesArgs,
+    fitCensoringModelsArgs = args, computeWeightsArgs = settings$computeWeightsArgs,
+    fitOutcomeModelArgs = settings$fitOutcomeModelArgs, fixedPriorVariances = NULL, censoringWithoutOutcome = FALSE,
+    personSeqIds = sort(unique(dplyr::pull(data$cohorts, personSeqId))), nReplicates = 2,
+    estimands = c("hr", "rd_8", "rd_15"), fullWarnings = character(0),
+    startingFits = list(), subsampleSeed = 1L
+  ))
+}
+
+# Fewer, and faster, than bootstrapSettings(): the hazard model for both strategies (no createPs()), with
+# covariates and a fixed prior variance.
+reweightSettings <- function() {
+  settings <- bootstrapSettings(modelType = "cox", useCovariates = TRUE, prior = Cyclops::createPrior("laplace", variance = 1))
+  settings$fitCensoringModelsArgs$initiateWithinModel <- "hazard"
+  return(settings)
+}
+
+replicateEstimates <- function(results) {
+  return(do.call(rbind, lapply(results, function(result) result$estimates)))
+}
+
+test_that("Reweight replicates equal copy replicates (fixed hyperparameters, cold starts), with 1 and 2 workers", {
+  data <- bootstrapData(n = 60, seed = 3)
+  on.exit(close(data))
+  settings <- reweightSettings()
+  set.seed(1)
+  counts <- stats::rmultinom(2, size = 60, prob = rep(1, 60))
+  copy <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "copy"), counts, threads = 1))
+  reweight <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "reweight"), counts, threads = 1))
+  expect_true(all(is.finite(replicateEstimates(copy))))
+  expect_equal(replicateEstimates(reweight), replicateEstimates(copy), tolerance = 1e-6)
+  # Each replicate depends only on its counts. (Equal, not identical: DuckDB's sums are not reproducible
+  # to the last bit from run to run.)
+  twoWorkers <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "reweight"), counts, threads = 2))
+  expect_equal(replicateEstimates(twoWorkers), replicateEstimates(reweight), tolerance = 1e-6)
+})
+
+test_that("Reweight replicates leave out persons drawn 0 times", {
+  data <- bootstrapData(n = 60, seed = 3)
+  on.exit(close(data))
+  settings <- reweightSettings()
+  setup <- replicateSetup(data, settings, "reweight")
+  context <- suppressMessages(.reweightContext(data, setup))
+  on.exit(.closeReweightContext(context), add = TRUE)
+  counts <- data.frame(personSeqId = setup$personSeqIds, count = c(0L, 2L, rep(1L, 58)))
+  models <- suppressMessages(.fitCensoringModelsWithFits(context$clones, data, setup$fitCensoringModelsArgs, refit = list(counts = counts, cache = new.env())))$models
+  weighted <- computeCensoringWeights(context$clones, models, settings$computeWeightsArgs, .personCounts = counts)
+  on.exit(close(weighted), add = TRUE)
+  rowId1 <- dplyr::pull(dplyr::filter(data$cohorts, personSeqId == 1), rowId)
+  expect_false(rowId1 %in% models[[2]]$predictions$rowId)
+  expect_false(1 %in% dplyr::pull(dplyr::distinct(weighted$segments, personSeqId)))
+})
+

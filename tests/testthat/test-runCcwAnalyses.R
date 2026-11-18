@@ -27,6 +27,7 @@ test_that("createCcwMultiThreadingSettings and the defaults", {
     computeBalanceThreads = 5,
     fitOutcomeModelThreads = 5,
     outcomeCvThreads = 4,
+    bootstrapThreads = 1,
     calibrationThreads = 4
   ))
   expect_true(all(unlist(createDefaultCcwMultiThreadingSettings(1)) == 1))

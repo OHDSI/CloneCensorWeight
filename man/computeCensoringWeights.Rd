@@ -8,7 +8,8 @@ computeCensoringWeights(
   clones,
   censoringModels,
   computeWeightsArgs = createComputeWeightsArgs(),
-  outcomeTimeBasis = NULL
+  outcomeTimeBasis = NULL,
+  .personCounts = NULL
 )
 }
 \arguments{
@@ -27,6 +28,11 @@ Stops when the clones are followed past the horizon of a
 \item{outcomeTimeBasis}{\code{NULL}, or the object of type \code{TimeBasis} (as created using
 \code{\link[=createTimeBasis]{createTimeBasis()}}) of the pooled logistic outcome model to be fitted to
 these clones: the clones are then also split on its interval grid.}
+
+\item{.personCounts}{For internal use (the reweight bootstrap): \code{NULL}, or a data frame with
+the \code{personSeqId} and \code{count} (frequency weight) of persons. Only the clones
+of persons with a positive count are weighted, and the percentile caps count
+each clone \code{count} times, as copies of the persons would be counted.}
 }
 \value{
 A new \link{CcwClones} object, in its own Andromeda (close it when done), with copies of the tables and

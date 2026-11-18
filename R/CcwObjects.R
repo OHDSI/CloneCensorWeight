@@ -158,6 +158,19 @@ setClass("CcwClones", contains = "Andromeda")
   return(copy)
 }
 
+# A copy of a CcwClones object (without weights) with only the persons of `personCounts` (personSeqId,
+# count) whose count is positive: the persons a replicate of the reweight bootstrap drew. The caller must
+# close it.
+.drawnClones <- function(clones, personCounts) {
+  copy <- .copyCcwClones(clones)
+  copy$drawnPersons <- tibble(personSeqId = personCounts$personSeqId[personCounts$count > 0])
+  for (table in c("persons", "clones")) {
+    .andromedaExecute(copy, sprintf("DELETE FROM %s WHERE personSeqId NOT IN (SELECT personSeqId FROM drawnPersons);", table))
+  }
+  copy$drawnPersons <- NULL
+  return(copy)
+}
+
 # Adds the `segments` and `personWeights` tables (data frames or Andromeda tables) to a CcwClones
 # object, after checking their columns, types and rules, and stores `weightsMetaData` as
 # `metaData$weights`. The tables are added in place (the caller's object shares the connection), but

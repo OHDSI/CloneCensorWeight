@@ -237,7 +237,8 @@ fitCensoringModels <- function(clones,
                                         subsampleSeed = NULL,
                                         fits = list(),
                                         warnDay0CovariateWindows = TRUE,
-                                        warnNaturalGrace = TRUE) {
+                                        warnNaturalGrace = TRUE,
+                                        refit = NULL) {
   metaData <- attr(clones, "metaData")
   strategies <- metaData$strategies
   for (strategy in strategies) {
@@ -261,6 +262,17 @@ fitCensoringModels <- function(clones,
   persons$subjectId <- persons$personSeqId
   if (!is.null(sourcePersonSeqIds)) {
     persons$subjectId <- sourcePersonSeqIds$sourcePersonSeqId[match(persons$personSeqId, sourcePersonSeqIds$personSeqId)]
+  }
+  # The reweight bootstrap (.reweightReplicate()): each person's frequency weight, the number of times
+  # the replicate drew them. Persons not drawn are left out, as they are from the copies of the copy
+  # bootstrap; `allPersons` (frequency 1) builds the full-data Cyclops data that replicates refit.
+  allPersons <- NULL
+  if (!is.null(refit)) {
+    persons[["frequency"]] <- rep(1, nrow(persons))
+    allPersons <- persons
+    persons[["frequency"]] <- refit$counts$count[match(persons$personSeqId, refit$counts$personSeqId)]
+    persons[["frequency"]][is.na(persons[["frequency"]])] <- 0
+    persons <- persons[persons[["frequency"]] > 0, , drop = FALSE]
   }
   if (warnNaturalGrace && fitCensoringModelsArgs$graceRegime == "naturalGrace") {
     .warnNoNaturalGraceStarts(strategies, persons, sameDayOrdering)
@@ -286,12 +298,12 @@ fitCensoringModels <- function(clones,
     } else if (key %in% names(fits)) {
       message("Reusing the fitted ", description)
     } else {
-      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description, firstDay)
+      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description, firstDay, key)
     }
     used <<- c(used, key)
     return(fits[[key]])
   }
-  fitModel <- function(kind, treatment, horizon, fixedVariance, description, firstDay) {
+  fitModel <- function(kind, treatment, horizon, fixedVariance, description, firstDay, key) {
     treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
     prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
     message("Fitting ", description)
@@ -301,14 +313,34 @@ fitCensoringModels <- function(clones,
       {
         if (kind == "binary") {
           riskSet <- .getBinaryRiskSet(persons, treatmentDay, horizon, sameDayOrdering, firstDay)
-          .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+          if (is.null(refit)) {
+            .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+          } else {
+            .fitWeightedBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, subsampleSeed)
+          }
         } else {
           riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
-          fitSet <- .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
-          if (fitCensoringModelsArgs$hazardModelType == "cox") {
-            .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet)
+          fitHazard <- if (fitCensoringModelsArgs$hazardModelType == "cox") {
+            function(riskSet, fitSet, modelRefit) .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet, modelRefit)
           } else {
-            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description, fitSet)
+            function(riskSet, fitSet, modelRefit) .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description, fitSet, modelRefit)
+          }
+          if (is.null(refit)) {
+            fitSet <- .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
+            fitHazard(riskSet, fitSet, NULL)
+          } else {
+            fitSet <- .sampleWeightedRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
+            entry <- .refitEntry(refit, key, function() {
+              allTreatmentDay <- if (treatment == "treatment") allPersons$treatmentDay else allPersons$comparatorTreatmentDay
+              fullRiskSet <- .getHazardRiskSet(allPersons, allTreatmentDay, horizon, sameDayOrdering)
+              maxSize <- fitCensoringModelsArgs$maxCohortSizeForFitting
+              # A full risk set that the full-data fit samples is not kept: every replicate fits its own sample.
+              if (maxSize > 0 && nrow(fullRiskSet) > maxSize) {
+                return(list())
+              }
+              return(fitHazard(fullRiskSet, fullRiskSet, list(buildOnly = TRUE)))
+            })
+            fitHazard(riskSet, fitSet, c(refit[c("warmStart", "startingFits")], list(entry = entry, startingKey = .startingFitKey(key))))
           }
         }
       },
@@ -480,7 +512,7 @@ fitCensoringModels <- function(clones,
 
 # Persons under follow-up at day G who have not started before day `firstDay` (graceStart, or G with
 # graceRegime = "naturalGrace"), with their subject (the unit of cross-validation folds, when `persons`
-# has one) and y = started on or before day G.
+# has one), y = started on or before day G, and their `frequency` (when `persons` has one).
 .getBinaryRiskSet <- function(persons, treatmentDay, graceEnd, sameDayOrdering, firstDay = 0L) {
   eventDay <- pmin(persons$outcomeDay, persons$deathDay, na.rm = TRUE)
   if (sameDayOrdering == "eventsFirst") {
@@ -493,7 +525,8 @@ fitCensoringModels <- function(clones,
     rowId = persons$rowId[inRiskSet],
     personSeqId = persons$personSeqId[inRiskSet],
     subjectId = persons[["subjectId"]][inRiskSet], # NULL (no column) for persons without subjects
-    y = as.integer(!is.na(treatmentDay[inRiskSet]) & treatmentDay[inRiskSet] <= graceEnd)
+    y = as.integer(!is.na(treatmentDay[inRiskSet]) & treatmentDay[inRiskSet] <= graceEnd),
+    frequency = persons[["frequency"]][inRiskSet] # the reweight bootstrap's frequency weights, or NULL
   ))
 }
 
@@ -512,7 +545,8 @@ fitCensoringModels <- function(clones,
     personSeqId = persons$personSeqId[inRiskSet],
     subjectId = persons$subjectId[inRiskSet],
     lastDay = as.integer(lastDay[inRiskSet]),
-    y = as.integer(initiated[inRiskSet])
+    y = as.integer(initiated[inRiskSet]),
+    frequency = persons[["frequency"]][inRiskSet] # the reweight bootstrap's frequency weights, or NULL
   ))
 }
 
@@ -556,7 +590,179 @@ fitCensoringModels <- function(clones,
 
 # The sample diagnostics of a model fit on `fitSet`, the risk set or a sample of it.
 .sampleDiagnostics <- function(riskSet, fitSet) {
-  return(list(sampled = nrow(fitSet) < nrow(riskSet), sampleSize = nrow(fitSet), sampleEvents = sum(fitSet$y)))
+  return(list(sampled = .count(fitSet) < .count(riskSet), sampleSize = .count(fitSet), sampleEvents = .countEvents(fitSet)))
+}
+
+# The reweight bootstrap ------------------------------------------------------------------------------
+# Its replicates (R/Bootstrap.R, .reweightReplicate()) give each risk set a `frequency` column, the number
+# of times the replicate drew the person (persons not drawn are left out). Every quantity a copy of a
+# person would count is counted `frequency` times, so that the models equal those of the copy bootstrap.
+
+# The number of persons (with frequency weights, of copies) and of events of a risk set.
+.count <- function(riskSet) {
+  return(if (is.null(riskSet[["frequency"]])) nrow(riskSet) else sum(riskSet[["frequency"]]))
+}
+
+.countEvents <- function(riskSet) {
+  return(if (is.null(riskSet[["frequency"]])) sum(riskSet$y) else sum(riskSet$y * riskSet[["frequency"]]))
+}
+
+.frequency <- function(riskSet) {
+  return(if (is.null(riskSet[["frequency"]])) rep(1, nrow(riskSet)) else riskSet[["frequency"]])
+}
+
+# tabulate(bin, nbins), each element counted `frequency` times (NULL: once).
+.tabulateFrequency <- function(bin, frequency, nbins) {
+  if (is.null(frequency)) {
+    return(tabulate(bin, nbins = nbins))
+  }
+  counts <- numeric(nbins)
+  sums <- rowsum(frequency, bin)
+  counts[as.integer(rownames(sums))] <- sums[, 1]
+  return(counts)
+}
+
+# The rows of the copies of a risk set with frequency weights, in the order of the copy bootstrap's
+# copies (.resampleCloneCensorWeightData(): by personSeqId, then copy, then rowId): `rows` indexes
+# `sorted` (the risk set ordered by personSeqId and rowId), and `copy` numbers the copies of persons.
+.copyRows <- function(riskSet) {
+  sorted <- riskSet[order(riskSet$personSeqId, riskSet$rowId), , drop = FALSE]
+  person <- match(sorted$personSeqId, unique(sorted$personSeqId))
+  n <- tabulate(person)
+  start <- cumsum(n) - n + 1L
+  count <- sorted[["frequency"]][start]
+  return(list(
+    sorted = sorted,
+    rows = sequence(rep(n, count), from = rep(start, count)),
+    copy = rep(seq_len(sum(count)), rep(n, count))
+  ))
+}
+
+# .sampleRiskSet() for a risk set with frequency weights. The copy bootstrap samples the copies of the
+# replicate's persons, so this samples the same copies, with the same seed and in the copies' order
+# (.copyRows()), and gives each person its number of sampled copies as `frequency`.
+.sampleWeightedRiskSet <- function(riskSet, maxCohortSizeForFitting, seed, description) {
+  nCopies <- sum(riskSet[["frequency"]])
+  if (maxCohortSizeForFitting == 0 || nCopies <= maxCohortSizeForFitting) {
+    return(riskSet)
+  }
+  copies <- .copyRows(riskSet)
+  index <- withr::with_seed(
+    seed,
+    sample.int(nCopies, maxCohortSizeForFitting),
+    .rng_kind = "Mersenne-Twister",
+    .rng_normal_kind = "Inversion",
+    .rng_sample_kind = "Rejection"
+  )
+  sampled <- tabulate(copies$rows[index], nbins = nrow(copies$sorted))
+  fitSet <- riskSet
+  fitSet[["frequency"]] <- sampled[match(riskSet$rowId, copies$sorted$rowId)]
+  fitSet <- fitSet[fitSet[["frequency"]] > 0, , drop = FALSE]
+  if (.countEvents(fitSet) == 0 && .countEvents(riskSet) > 0) {
+    message(sprintf(
+      "Fitting the %s on all its %d persons: the sample of %d (maxCohortSizeForFitting) has no initiations",
+      description, as.integer(nCopies), as.integer(maxCohortSizeForFitting)
+    ))
+    return(riskSet)
+  }
+  message(sprintf(
+    "Fitting the %s on a uniform sample of %d of its %d persons (maxCohortSizeForFitting)",
+    description, as.integer(maxCohortSizeForFitting), as.integer(nCopies)
+  ))
+  return(fitSet)
+}
+
+# The cached full-data Cyclops data of a hazard model (named by its .censoringFitKey()), built by
+# `build()` (without messages) the first time a replicate of this process needs it.
+.refitEntry <- function(refit, key, build) {
+  if (!exists(key, envir = refit$cache, inherits = FALSE)) {
+    assign(key, suppressMessages(build()), envir = refit$cache)
+  }
+  return(get(key, envir = refit$cache, inherits = FALSE))
+}
+
+# The key of a fit's full-data model among the starting fits (.startingFitsFromModels()): its component,
+# treatment and horizon, the first three parts of its .censoringFitKey().
+.startingFitKey <- function(key) {
+  return(paste(strsplit(key, " ", fixed = TRUE)[[1]][1:3], collapse = " "))
+}
+
+# The full-data fits of CcwCensoringModels named by .startingFitKey(), for warm starts.
+.startingFitsFromModels <- function(censoringModels) {
+  fits <- list()
+  add <- function(component, treatment, model) {
+    fits[[paste(component, treatment, as.integer(model$horizon))]] <<- model
+  }
+  for (model in censoringModels) {
+    firstDay <- if (is.null(model$firstDay)) 0L else model$firstDay
+    add(.censoringFitComponent(model$kind, model$type, firstDay), model$treatment, model)
+    if (!is.null(model$postGrace)) {
+      add("binary", model$treatment, model$postGrace)
+    }
+    if (!is.null(model$early)) {
+      add("hazard", model$treatment, model$early)
+    }
+  }
+  return(fits)
+}
+
+# The starting coefficients of a refit of Cyclops data with covariate IDs `ids`: those of the full-data
+# model (`coefficients`, by name; `names` gives the name of each ID) with warm starts, and otherwise
+# NULL (Cyclops's own start, as in a new fit). Coefficients the full-data model does not have start at 0.
+.startingCoefficients <- function(refit, coefficients, ids, names) {
+  if (!isTRUE(refit$warmStart) || is.null(coefficients)) {
+    return(NULL)
+  }
+  start <- as.numeric(coefficients[names])
+  start[!is.finite(start)] <- 0
+  return(start)
+}
+
+# The full data's Cyclops data of a model (built by .refitEntry()) holds all covariates of its risk set,
+# normalized (divided by their largest value) but not tidied otherwise. A replicate tidies the covariates
+# of the persons it drew as FeatureExtraction would tidy their copies (.getRiskSetCovariateData()), so a
+# covariate it deletes (as redundant or infrequent) is fixed at 0, and a covariate it keeps has the full
+# data's values times scale = (largest value in the full data) / (largest value among the drawn persons).
+# This returns the scale of each kept covariate (named by covariate ID) from the "tidySignature"s of the
+# full data (`base`) and of the replicate, or NULL when a kept covariate is not in the full data's.
+.covariateScale <- function(base, replicate) {
+  kept <- setdiff(replicate$present, replicate$deleted)
+  scale <- base$maxValue[match(kept, base$present)] / replicate$maxValue[match(kept, replicate$present)]
+  if (any(!is.finite(scale)) || any(scale <= 0)) {
+    return(NULL)
+  }
+  return(stats::setNames(scale, as.character(kept)))
+}
+
+# The prior of a refit of the full data's Cyclops data (covariate IDs `ids`) in which a covariate (or
+# interaction) with `scale` s has the full data's values times s: its coefficient is s times that of the
+# replicate's covariate, so its prior variance is s^2 times as large (for the normal and the Laplace
+# prior). One prior per covariate: `unpenalizedIds` (the intercept and the time basis) and the prior's
+# excluded covariates get none.
+.scaledPrior <- function(prior, ids, scale, unpenalizedIds) {
+  if (prior$priorType == "none") {
+    return(prior)
+  }
+  unpenalized <- ids %in% c(prior$exclude, unpenalizedIds)
+  prior$priorType <- ifelse(unpenalized, "none", prior$priorType)
+  prior$variance <- prior$variance * scale^2
+  prior$exclude <- c()
+  return(prior)
+}
+
+# Per covariate of `covariateData` (with rows of the persons of `fitSet` only), the largest lastInterval
+# (hazard models with intervals) or 0 (Cox) of the persons of `fitSet` that have it: a named vector.
+.covariateReach <- function(covariateData, fitSet) {
+  covariateData$reachPersons <- tibble(rowId = fitSet$rowId, lastInterval = if (is.null(fitSet$lastInterval)) 0L else fitSet$lastInterval)
+  reach <- .andromedaSql(covariateData, "
+    SELECT covariates.covariateId,
+      MAX(reachPersons.lastInterval) AS lastInterval
+    FROM covariates
+    INNER JOIN reachPersons
+      ON covariates.rowId = reachPersons.rowId
+    GROUP BY covariates.covariateId;")
+  covariateData$reachPersons <- NULL
+  return(stats::setNames(reach$lastInterval, as.character(reach$covariateId)))
 }
 
 # The first day of the binary model at G of an initiateWithin strategy: its risk set holds the persons
@@ -710,8 +916,9 @@ fitCensoringModels <- function(clones,
 
 # Returns a CovariateData (Andromeda) with the tidied (normalized, without redundant or infrequent
 # covariates) baseline covariates of the risk set, as CohortMethod::createPs does, or NULL when
-# covariates are not used. The caller closes it.
-.getRiskSetCovariateData <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs) {
+# covariates are not used. The caller closes it. With `tidy = FALSE`, they are normalized only (the full
+# data's Cyclops data of the reweight bootstrap, see .covariateScale()).
+.getRiskSetCovariateData <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, tidy = TRUE) {
   if (!fitCensoringModelsArgs$useCovariates || nrow(riskSet) == 0) {
     return(NULL)
   }
@@ -734,11 +941,58 @@ fitCensoringModels <- function(clones,
     covariateRef = view$covariateRef,
     analysisRef = view$analysisRef
   )
-  attr(covariateData, "metaData") <- list(populationSize = nrow(riskSet))
+  populationSize <- nrow(riskSet)
+  signature <- NULL
+  if (!is.null(riskSet[["frequency"]])) {
+    # The reweight bootstrap: FeatureExtraction tidies the covariates of the copies of the persons, as
+    # in the copy bootstrap, and the result keeps one row per person (copies have the same values). The
+    # signature tells how that differs from the tidying of the full data (.covariateScale()).
+    raw <- .andromedaSql(covariateData, "SELECT covariateId, MAX(covariateValue) AS maxValue FROM covariates GROUP BY covariateId ORDER BY covariateId;")
+    populationSize <- sum(riskSet[["frequency"]])
+    if (any(riskSet[["frequency"]] != 1)) {
+      covariateData$frequencies <- tibble(rowId = riskSet$rowId, frequency = as.integer(riskSet[["frequency"]]))
+      .andromedaExecute(covariateData, "
+        CREATE TABLE copiedCovariates AS
+        SELECT rowId, covariateId, covariateValue
+        FROM (
+          SELECT covariates.rowId,
+            covariates.covariateId,
+            covariates.covariateValue,
+            UNNEST(range(frequencies.frequency)) AS copy
+          FROM covariates
+          INNER JOIN frequencies
+            ON covariates.rowId = frequencies.rowId
+        );")
+      covariateData$covariates <- NULL
+      covariateData$frequencies <- NULL
+      .andromedaExecute(covariateData, "ALTER TABLE copiedCovariates RENAME TO covariates;")
+    }
+  }
+  attr(covariateData, "metaData") <- list(populationSize = populationSize)
   class(covariateData) <- "CovariateData"
   attr(class(covariateData), "package") <- "FeatureExtraction"
-  tidyCovariateData <- FeatureExtraction::tidyCovariateData(covariateData)
+  tidyCovariateData <- if (tidy) {
+    FeatureExtraction::tidyCovariateData(covariateData)
+  } else {
+    FeatureExtraction::tidyCovariateData(covariateData, minFraction = 0, removeRedundancy = FALSE)
+  }
   close(covariateData)
+  if (!is.null(riskSet[["frequency"]])) {
+    if (any(riskSet[["frequency"]] != 1)) {
+      .andromedaExecute(tidyCovariateData, "
+        CREATE TABLE personCovariates AS
+        SELECT DISTINCT rowId, covariateId, covariateValue
+        FROM covariates;")
+      tidyCovariateData$covariates <- NULL
+      .andromedaExecute(tidyCovariateData, "ALTER TABLE personCovariates RENAME TO covariates;")
+    }
+    tidyMetaData <- attr(tidyCovariateData, "metaData")
+    attr(tidyCovariateData, "tidySignature") <- list(
+      present = as.numeric(raw$covariateId),
+      maxValue = as.numeric(raw$maxValue),
+      deleted = as.numeric(c(tidyMetaData$deletedRedundantCovariateIds, tidyMetaData$deletedInfrequentCovariateIds))
+    )
+  }
   return(tidyCovariateData)
 }
 
@@ -770,10 +1024,23 @@ fitCensoringModels <- function(clones,
   return(error)
 }
 
-# Fits a Cyclops model, returning the fit, or an error message when stopOnError = FALSE.
-.fitCyclops <- function(cyclopsData, prior, control, stopOnError, fixedCoefficients = NULL) {
+# Fits a Cyclops model, returning the fit, or an error message when stopOnError = FALSE. `refit`
+# (the reweight bootstrap): a list with the frequency `weights` of the rows (as Cyclops::updateWeights()
+# takes them) and the `startingCoefficients` (NULL: Cyclops's own); the fit starts from a new Cyclops
+# model, so that it does not depend on earlier fits on the same data.
+.fitCyclops <- function(cyclopsData, prior, control, stopOnError, fixedCoefficients = NULL, refit = NULL) {
+  if (!is.null(refit)) {
+    Cyclops::updateWeights(cyclopsData, refit$weights)
+  }
   cyclopsFit <- tryCatch(
-    Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control, fixedCoefficients = fixedCoefficients),
+    Cyclops::fitCyclopsModel(
+      cyclopsData,
+      prior = prior,
+      control = control,
+      fixedCoefficients = fixedCoefficients,
+      startingCoefficients = refit$startingCoefficients,
+      forceNewObject = !is.null(refit)
+    ),
     error = function(e) conditionMessage(e)
   )
   if (!is.character(cyclopsFit) && cyclopsFit$return_flag != "SUCCESS") {
@@ -809,7 +1076,9 @@ fitCensoringModels <- function(clones,
 
 # Binary model at G --------------------------------------------------------------------------------
 
-.fitBinaryCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior) {
+# `rowIdMap` (columns newRowId and rowId, see .createCmDataView()): the risk set's rowIds are new row
+# IDs of copies of the source rows (.fitWeightedBinaryCensoringModel()).
+.fitBinaryCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, rowIdMap = NULL) {
   marginal <- if (nrow(riskSet) == 0) NA_real_ else mean(riskSet$y)
   coefficients <- c("(Intercept)" = stats::qlogis(marginal))
   priorVariance <- NA_real_
@@ -821,7 +1090,8 @@ fitCensoringModels <- function(clones,
   if (fitCensoringModelsArgs$useCovariates && length(unique(riskSet$y)) == 2) {
     view <- .createCmDataView(
       cloneCensorWeightData,
-      cohorts = tibble(rowId = riskSet$rowId, personSeqId = riskSet$personSeqId, treatment = riskSet$y)
+      cohorts = tibble(rowId = riskSet$rowId, personSeqId = riskSet$personSeqId, treatment = riskSet$y),
+      rowIdMap = rowIdMap
     )
     on.exit(close(view))
     hasCovariates <- (view$covariates |> count() |> pull()) > 0
@@ -890,6 +1160,38 @@ fitCensoringModels <- function(clones,
   ))
 }
 
+# The binary model of the reweight bootstrap, for a risk set with frequency weights. CohortMethod::createPs()
+# takes no case weights, so the model is fit, as in the copy bootstrap, on copies of the drawn persons: each
+# person `frequency` times, in the order of the copy bootstrap's copies (.copyRows()), with the drawn person
+# as the subject of its copies. Each person gets the propensity score of its copies. createPs() samples
+# (maxCohortSizeForFitting) with R's random number generator, which `seed` seeds, so that a replicate does
+# not depend on the replicates before it.
+.fitWeightedBinaryCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, seed) {
+  if (all(riskSet[["frequency"]] == 1)) {
+    riskSet[["frequency"]] <- NULL
+    return(.fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior))
+  }
+  copies <- .copyRows(riskSet)
+  rows <- copies$rows
+  copied <- tibble(
+    rowId = seq_along(rows),
+    personSeqId = copies$copy,
+    subjectId = copies$sorted$personSeqId[rows],
+    y = copies$sorted$y[rows]
+  )
+  rowIdMap <- tibble(newRowId = copied$rowId, rowId = copies$sorted$rowId[rows])
+  model <- withr::with_seed(
+    seed,
+    .fitBinaryCensoringModel(copied, cloneCensorWeightData, fitCensoringModelsArgs, prior, rowIdMap = rowIdMap),
+    .rng_kind = "Mersenne-Twister",
+    .rng_normal_kind = "Inversion",
+    .rng_sample_kind = "Rejection"
+  )
+  first <- match(riskSet$rowId, rowIdMap$rowId)
+  model$predictions <- tibble(rowId = riskSet$rowId, propensityScore = model$predictions$propensityScore[first])
+  return(model)
+}
+
 # Cox initiation hazard ----------------------------------------------------------------------------
 
 # Breslow cumulative baseline hazard at the event times, with row weights:
@@ -908,18 +1210,25 @@ fitCensoringModels <- function(clones,
 }
 
 # Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
-# of the risk set.
-.fitCoxCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet = riskSet) {
+# of the risk set. `refit` (the reweight bootstrap, whose risk sets have frequency weights):
+# `list(buildOnly = TRUE)` returns the Cyclops data of the full data (`fitSet` the risk set) for
+# replicates to refit, with its persons and covariate tidying; otherwise a list with that `entry`,
+# `warmStart`, `startingFits` and `startingKey` (.startingFitKey()). A replicate whose drawn persons
+# have the full data's tidying refits the full data's Cyclops data with frequency weights (persons not
+# drawn get weight 0, so they are left out, and covariates only they have are fixed at 0); otherwise it
+# builds Cyclops data of its own.
+.fitCoxCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet = riskSet, refit = NULL) {
   riskSet$time <- riskSet$lastDay + 1
   fitSet$time <- fitSet$lastDay + 1
-  numeratorHazard <- .computeBreslowHazard(fitSet$time, fitSet$y)
+  numeratorHazard <- .computeBreslowHazard(fitSet$time, fitSet$y, weights = .frequency(fitSet))
   coefficients <- numeric(0)
   priorVariance <- NA_real_
   error <- "OK"
   linearPredictor <- rep(0, nrow(riskSet))
   covariateData <- NULL
+  buildOnly <- isTRUE(refit$buildOnly)
   if (sum(fitSet$y) > 0) {
-    covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs)
+    covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, tidy = !buildOnly)
   }
   if (!is.null(covariateData)) {
     on.exit(close(covariateData))
@@ -930,29 +1239,70 @@ fitCensoringModels <- function(clones,
       error <- .checkHighCorrelation(covariateData, fitSet, fitCensoringModelsArgs)
       if (is.null(error)) {
         error <- "OK"
-        # One row per person, so subjects matter only when persons share one (copies in a bootstrap
-        # replicate); without them each row is its own fold unit. Cyclops leaves out the covariates of
-        # persons outside the sample.
-        outcomeColumns <- c("rowId", "y", "time", if (anyDuplicated(fitSet$subjectId) > 0) "subjectId")
-        covariateData$outcomes <- fitSet |>
-          select(dplyr::all_of(outcomeColumns))
-        cyclopsData <- Cyclops::convertToCyclopsData(
-          covariateData$outcomes,
-          covariateData$covariates,
-          modelType = "cox",
-          quiet = TRUE
-        )
-        prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c())
-        cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError)
+        entry <- refit$entry
+        scale <- NULL
+        if (!buildOnly && !is.null(entry$cyclopsData) && !isTRUE(prior$useCrossValidation) && all(fitSet$rowId %in% entry$persons)) {
+          scale <- .covariateScale(entry$tidySignature, attr(covariateData, "tidySignature"))
+        }
+        fixed <- NULL
+        idScale <- 1
+        # The prior variance of the replicate's covariates (without cross-validation):
+        refitPriorVariance <- if (prior$priorType == "none") NA_real_ else prior$variance
+        if (!is.null(scale)) {
+          cyclopsData <- entry$cyclopsData
+          ids <- as.numeric(Cyclops::getCovariateIds(cyclopsData))
+          # Covariates the replicate deleted, or that no person of the fit has, are fixed at 0:
+          fixed <- !(as.character(ids) %in% names(.covariateReach(covariateData, fitSet)))
+          idScale <- scale[as.character(ids)]
+          idScale[is.na(idScale)] <- 1
+          prior <- .scaledPrior(.restrictPrior(prior, entry$covariateIds, unpenalizedIds = c()), ids, idScale, unpenalizedIds = c())
+          weights <- tibble(rowId = entry$persons, weights = .frequency(fitSet)[match(entry$persons, fitSet$rowId)])
+          weights$weights[is.na(weights$weights)] <- 0
+        } else {
+          # One row per person, so subjects matter only when persons share one (copies in a bootstrap
+          # replicate); without them each row is its own fold unit. Cyclops leaves out the covariates of
+          # persons outside the sample.
+          outcomeColumns <- c("rowId", "y", "time", if (anyDuplicated(fitSet$subjectId) > 0) "subjectId")
+          covariateData$outcomes <- fitSet |>
+            select(dplyr::all_of(outcomeColumns))
+          cyclopsData <- Cyclops::convertToCyclopsData(
+            covariateData$outcomes,
+            covariateData$covariates,
+            modelType = "cox",
+            quiet = TRUE
+          )
+          if (buildOnly) {
+            return(list(cyclopsData = cyclopsData, persons = fitSet$rowId, covariateIds = covariateIds, tidySignature = attr(covariateData, "tidySignature")))
+          }
+          prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c())
+          ids <- as.numeric(Cyclops::getCovariateIds(cyclopsData))
+          weights <- tibble(rowId = fitSet$rowId, weights = .frequency(fitSet))
+        }
+        cyclopsRefit <- NULL
+        if (!is.null(refit)) {
+          cyclopsRefit <- list(
+            weights = weights,
+            startingCoefficients = .startingCoefficients(refit, refit$startingFits[[refit$startingKey]]$coefficients, ids, as.character(ids))
+          )
+        }
+        cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError,
+                                  fixedCoefficients = if (any(fixed)) fixed, refit = cyclopsRefit)
         if (is.character(cyclopsFit)) {
           error <- cyclopsFit
         } else {
-          coefficients <- stats::coef(cyclopsFit)
-          priorVariance <- .getPriorVariance(prior, cyclopsFit)
+          # In the scale of the replicate's covariates:
+          coefficients <- stats::coef(cyclopsFit) / idScale
+          if (any(fixed)) {
+            coefficients <- coefficients[!fixed]
+          }
+          priorVariance <- if (is.null(scale)) .getPriorVariance(prior, cyclopsFit) else refitPriorVariance
           linearPredictor <- .computeLinearPredictor(covariateData, riskSet, coefficients)
         }
       }
     }
+  }
+  if (buildOnly) {
+    return(list())
   }
   if (error != "OK") {
     message("Using the censoring model without covariates: ", error)
@@ -960,7 +1310,7 @@ fitCensoringModels <- function(clones,
   baselineHazard <- if (length(coefficients) == 0) {
     numeratorHazard
   } else {
-    .computeBreslowHazard(fitSet$time, fitSet$y, linearPredictor[match(fitSet$rowId, riskSet$rowId)])
+    .computeBreslowHazard(fitSet$time, fitSet$y, linearPredictor[match(fitSet$rowId, riskSet$rowId)], weights = .frequency(fitSet))
   }
   return(list(
     modelType = "cox",
@@ -971,9 +1321,9 @@ fitCensoringModels <- function(clones,
     numerator = list(baselineHazard = numeratorHazard),
     diagnostics = c(
       list(
-        riskSetSize = nrow(riskSet),
-        rows = nrow(fitSet),
-        events = sum(riskSet$y),
+        riskSetSize = .count(riskSet),
+        rows = .count(fitSet),
+        events = .countEvents(riskSet),
         auc = NA_real_,
         status = error
       ),
@@ -1050,8 +1400,38 @@ fitCensoringModels <- function(clones,
 # model is that of the "lr" engine, and an interaction without rows (no person with the covariate reaches
 # an interval where its column is not 0) is left out, as the "lr" engine has no column for it. Returns
 # the fit and its coefficients (the intercept, then by id, as Cyclops orders those of "lr"), or the error
-# message.
-.fitPooledRows <- function(pooled, covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs) {
+# message. The reweight bootstrap: with `buildOnly`, returns the Cyclops data (`cyclopsData`) and the IDs
+# of those extra columns (`extraIds`) instead; given them, fits that data, with the coefficients of
+# `fixedIds` also fixed at 0 (and left out of the coefficients), and `refit` (.fitCyclops(), with
+# `start`, a function of the covariate IDs that gives the starting coefficients).
+.fitPooledRows <- function(pooled, covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs,
+                           cyclopsData = NULL, extraIds = NULL, buildOnly = FALSE, fixedIds = NULL, refit = NULL) {
+  if (is.null(cyclopsData)) {
+    built <- .pooledRowsData(pooled, covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals)
+    cyclopsData <- built$cyclopsData
+    extraIds <- built$extraIds
+  }
+  if (buildOnly) {
+    return(list(cyclopsData = cyclopsData, extraIds = extraIds))
+  }
+  ids <- as.numeric(Cyclops::getCovariateIds(cyclopsData))
+  fixed <- ids %in% c(extraIds, fixedIds)
+  if (!is.null(refit$start)) {
+    refit$startingCoefficients <- refit$start(ids)
+  }
+  cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError, fixedCoefficients = if (any(fixed)) fixed, refit = refit)
+  if (is.character(cyclopsFit)) {
+    return(cyclopsFit)
+  }
+  coefficients <- stats::coef(cyclopsFit)
+  coefficients <- coefficients[!names(coefficients) %in% as.character(c(extraIds, fixedIds))]
+  others <- setdiff(names(coefficients), "(Intercept)")
+  coefficients <- coefficients[c("(Intercept)", others[order(as.numeric(others))])]
+  return(list(fit = cyclopsFit, coefficients = coefficients))
+}
+
+# The Cyclops data of .fitPooledRows() and the IDs of its extra (fixed) basis columns.
+.pooledRowsData <- function(pooled, covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals) {
   outcomes <- pooled$outcomes
   if (is.null(covariates)) {
     covariates <- tibble(rowId = numeric(0), covariateId = numeric(0), covariateValue = numeric(0))
@@ -1087,21 +1467,15 @@ fitCensoringModels <- function(clones,
     timeEffectMap = if (nrow(timeEffectMap) > 0) timeEffectMap,
     quiet = TRUE
   )
-  fixed <- as.numeric(Cyclops::getCovariateIds(cyclopsData)) %in% columnIds[extra]
-  cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError, fixedCoefficients = if (any(fixed)) fixed)
-  if (is.character(cyclopsFit)) {
-    return(cyclopsFit)
-  }
-  coefficients <- stats::coef(cyclopsFit)
-  coefficients <- coefficients[!names(coefficients) %in% as.character(columnIds[extra])]
-  others <- setdiff(names(coefficients), "(Intercept)")
-  coefficients <- coefficients[c("(Intercept)", others[order(as.numeric(others))])]
-  return(list(fit = cyclopsFit, coefficients = coefficients))
+  return(list(cyclopsData = cyclopsData, extraIds = columnIds[extra]))
 }
 
 # Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
-# of the risk set.
-.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet) {
+# of the risk set. `refit`: as for .fitCoxCensoringModel(). A replicate refits the full data's Cyclops data
+# when its drawn persons have the full data's tidying and the same intervals in the fit and interaction
+# columns; the covariates, interactions and time-basis columns without rows of positive weight are then
+# fixed at 0.
+.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet, refit = NULL) {
   intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
   nIntervals <- horizon %/% intervalLength + 1L
   k <- seq_len(nIntervals) - 1L
@@ -1117,11 +1491,12 @@ fitCensoringModels <- function(clones,
   # likelihood). The rows of these intervals carry no information on the other coefficients. So they
   # are left out of the fit, and the first remaining interval is the reference. This is the exact
   # limit of the fit, which would otherwise not converge.
+  buildOnly <- isTRUE(refit$buildOnly)
   fitIntervals <- k
   fullIntervals <- integer(0)
   if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(fitSet$y) > 0) {
-    initiations <- tabulate(fitSet$lastInterval[fitSet$y == 1] + 1L, nbins = nIntervals)
-    atRisk <- rev(cumsum(rev(tabulate(fitSet$lastInterval + 1L, nbins = nIntervals))))
+    initiations <- .tabulateFrequency(fitSet$lastInterval[fitSet$y == 1] + 1L, fitSet[["frequency"]][fitSet$y == 1], nIntervals)
+    atRisk <- rev(cumsum(rev(.tabulateFrequency(fitSet$lastInterval + 1L, fitSet[["frequency"]], nIntervals))))
     fullIntervals <- k[initiations > 0 & initiations == atRisk]
     fitIntervals <- k[initiations > 0 & initiations < atRisk]
   }
@@ -1129,7 +1504,7 @@ fitCensoringModels <- function(clones,
   basis <- .createTimeBasisMatrix(fitCensoringModelsArgs$timeBasis, nIntervals, fitIntervals)
   basisIds <- -seq_len(ncol(basis))
 
-  covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs)
+  covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, tidy = !buildOnly)
   if (is.null(covariateData)) {
     covariateData <- Andromeda::andromeda(covariates = tibble(rowId = integer(0), covariateId = numeric(0), covariateValue = numeric(0)))
   }
@@ -1148,7 +1523,117 @@ fitCensoringModels <- function(clones,
   # The engine: "lr" expands the rows (person x interval) with their covariates in Andromeda; "plr" keeps
   # the covariates one row per person and gives Cyclops the intervals (.createPooledRows()).
   engine <- fitCensoringModelsArgs$pooledLogisticEngine
-  if (engine == "lr") {
+  events <- sum(fitSet$y)
+  # The reweight bootstrap: whether this replicate refits the full data's Cyclops data (`entry`).
+  entry <- refit$entry
+  signature <- list(engine = engine, nIntervals = nIntervals, fitIntervals = fitIntervals, fullIntervals = fullIntervals, interactionColumns = colnames(interactionBasis))
+  scale <- NULL
+  if (!is.null(refit) && !buildOnly && !is.null(entry$signature) && identical(entry$signature, signature) &&
+    !isTRUE(prior$useCrossValidation) && all(fitSet$rowId %in% entry$persons)) {
+    scale <- if (is.null(entry$tidySignature)) numeric(0) else .covariateScale(entry$tidySignature, attr(covariateData, "tidySignature"))
+  }
+  reuse <- !is.null(scale)
+  rowWeights <- NULL
+  if (reuse) {
+    presentBasisIds <- entry$presentBasisIds
+    interactionRef <- entry$interactionRef
+    # The scale (.covariateScale()) of each Cyclops covariate ID: of the covariate, or of the covariate
+    # of an interaction:
+    idScale <- function(ids) {
+      interactionIndex <- match(ids, interactionRef$interactionId)
+      covariateIds <- ifelse(is.na(interactionIndex), ids, interactionRef$covariateId[interactionIndex])
+      result <- scale[as.character(covariateIds)]
+      result[is.na(result)] <- 1
+      return(as.vector(result))
+    }
+    nRows <- sum(fitSet[["frequency"]] * findInterval(fitSet$lastInterval, fitIntervals))
+    # Covariates, interactions and time-basis columns without rows of positive weight:
+    reach <- .covariateReach(covariateData, fitSet)
+    maxLastInterval <- max(c(-1L, fitSet$lastInterval))
+    firstRow <- function(columns) {
+      vapply(seq_len(ncol(columns)), function(column) min(c(Inf, fitIntervals[columns[fitIntervals + 1L, column] != 0])), numeric(1))
+    }
+    basisFirst <- firstRow(basis)
+    interactionFirst <- firstRow(interactionBasis)
+    absentIds <- function(ids) {
+      basisIndex <- match(ids, basisIds)
+      interactionIndex <- match(ids, interactionRef$interactionId)
+      interactionReach <- reach[as.character(interactionRef$covariateId[interactionIndex])]
+      present <- ifelse(
+        ids == 0,
+        TRUE,
+        ifelse(
+          !is.na(basisIndex),
+          basisFirst[basisIndex] <= maxLastInterval,
+          ifelse(
+            !is.na(interactionIndex),
+            !is.na(interactionReach) & interactionReach >= interactionFirst[interactionRef$columnIndex[interactionIndex]],
+            as.character(ids) %in% names(reach)
+          )
+        )
+      )
+      return(ids[!present])
+    }
+    # The rows of the Cyclops data: one per person and interval ("lr"), or per person with rows ("plr"):
+    frequency <- fitSet[["frequency"]][match(entry$rowPersons, fitSet$rowId)]
+    frequency[is.na(frequency)] <- 0
+    rowWeights <- if (engine == "lr") frequency else tibble(rowId = entry$rowPersons, weights = frequency)
+  }
+  # The name of the coefficient of each Cyclops covariate ID in the model's coefficients (for warm starts):
+  coefficientNames <- function(ids) {
+    names <- as.character(ids)
+    names[ids == 0] <- "(Intercept)"
+    basisIndex <- match(ids, basisIds)
+    names[!is.na(basisIndex)] <- colnames(basis)[basisIndex[!is.na(basisIndex)]]
+    interactionIndex <- match(ids, interactionRef$interactionId)
+    names[!is.na(interactionIndex)] <- sprintf(
+      "%s:%s",
+      as.character(interactionRef$covariateId[interactionIndex[!is.na(interactionIndex)]]),
+      colnames(interactionBasis)[interactionRef$columnIndex[interactionIndex[!is.na(interactionIndex)]]]
+    )
+    return(names)
+  }
+  startingModel <- refit$startingFits[[refit$startingKey]]
+  cyclopsRefit <- function(numerator) {
+    if (is.null(refit)) {
+      return(NULL)
+    }
+    startingCoefficients <- if (numerator) startingModel$numerator$coefficients else startingModel$coefficients
+    return(list(weights = rowWeights, start = function(ids) .startingCoefficients(refit, startingCoefficients, ids, coefficientNames(ids))))
+  }
+  if (reuse) {
+    # Fits the full data's Cyclops data with the replicate's frequency weights, prior variances scaled to
+    # the replicate's normalization, and the absent covariates, interactions and basis columns fixed at 0;
+    # returns the coefficients of the replicate's covariates (divided by their scale).
+    fitReused <- function(cyclopsData, prior, numerator) {
+      fitRefit <- cyclopsRefit(numerator)
+      ids <- as.numeric(Cyclops::getCovariateIds(cyclopsData))
+      absent <- absentIds(ids)
+      prior <- .scaledPrior(prior, ids, idScale(ids), unpenalizedIds = c(0, presentBasisIds))
+      if (engine == "plr") {
+        fit <- .fitPooledRows(NULL, NULL, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs,
+                              cyclopsData = cyclopsData, extraIds = entry$extraIds[[if (numerator) "numerator" else "denominator"]], fixedIds = absent, refit = fitRefit)
+      } else {
+        fixed <- ids %in% absent
+        fitRefit$startingCoefficients <- fitRefit$start(ids)
+        cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError, fixedCoefficients = if (any(fixed)) fixed, refit = fitRefit)
+        if (is.character(cyclopsFit)) {
+          return(cyclopsFit)
+        }
+        coefficients <- stats::coef(cyclopsFit)
+        fit <- list(fit = cyclopsFit, coefficients = coefficients[!names(coefficients) %in% as.character(absent)])
+      }
+      if (is.character(fit)) {
+        return(fit)
+      }
+      coefficientIds <- suppressWarnings(as.numeric(names(fit$coefficients)))
+      coefficientIds[names(fit$coefficients) == "(Intercept)"] <- 0
+      fit$coefficients <- fit$coefficients / idScale(coefficientIds)
+      return(fit)
+    }
+    fitNumerator <- function() fitReused(entry$numeratorData, Cyclops::createPrior("none"), TRUE)
+    fitDenominator <- function(prior) fitReused(entry$denominatorData, prior, FALSE)
+  } else if (engine == "lr") {
     covariateData$interactionRef <- interactionRef
     covariateData$interactionBasis <- tibble(
       k = rep(k, ncol(interactionBasis)),
@@ -1218,36 +1703,83 @@ fitCensoringModels <- function(clones,
     presentBasisIds <- covariateData$hazardBasis |>
       dplyr::distinct(.data$covariateId) |>
       pull()
+    if (!is.null(refit)) {
+      # The person of each row, in the order of the rows (their rowIds), for the frequency weights:
+      rowPersons <- .andromedaSql(covariateData, "SELECT personRowId FROM hazardRows ORDER BY rowId;")$personRowId
+      rowWeights <- fitSet[["frequency"]][match(rowPersons, fitSet$rowId)]
+    }
 
-    fitLr <- function(covariates, prior) {
-      cyclopsData <- Cyclops::convertToCyclopsData(covariateData$hazardOutcomes, covariates, modelType = "lr", quiet = TRUE)
-      cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError)
+    lrData <- function(covariates) Cyclops::convertToCyclopsData(covariateData$hazardOutcomes, covariates, modelType = "lr", quiet = TRUE)
+    fitLr <- function(cyclopsData, prior, numerator) {
+      fitRefit <- cyclopsRefit(numerator)
+      if (!is.null(fitRefit)) {
+        fitRefit$startingCoefficients <- fitRefit$start(as.numeric(Cyclops::getCovariateIds(cyclopsData)))
+      }
+      cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError, refit = fitRefit)
       if (is.character(cyclopsFit)) {
         return(cyclopsFit)
       }
       return(list(fit = cyclopsFit, coefficients = stats::coef(cyclopsFit)))
     }
-    fitNumerator <- function() fitLr(covariateData$hazardBasis, Cyclops::createPrior("none"))
-    fitDenominator <- function(prior) fitLr(covariateData$hazardCovariates, prior)
+    numeratorData <- function() lrData(covariateData$hazardBasis)
+    denominatorData <- function() lrData(covariateData$hazardCovariates)
+    fitNumerator <- function() fitLr(numeratorData(), Cyclops::createPrior("none"), TRUE)
+    fitDenominator <- function(prior) fitLr(denominatorData(), prior, FALSE)
     interceptOnly <- function() .fitInterceptOnly(covariateData)
   } else {
     pooled <- .createPooledRows(fitSet, fitIntervals)
     nRows <- pooled$nRows
     presentBasisIds <- basisIds[colSums(basis[rowIntervals + 1L, , drop = FALSE] != 0) > 0]
-    interceptOnly <- function() c("(Intercept)" = stats::qlogis(sum(pooled$outcomes$y) / nRows))
-    fitNumerator <- function() {
-      .fitPooledRows(pooled, NULL, basis, basisIds, presentBasisIds, interactionRef[0, ], interactionBasis[, 0, drop = FALSE], rowIntervals, Cyclops::createPrior("none"), fitCensoringModelsArgs)
+    if (!is.null(refit)) {
+      rowWeights <- tibble(rowId = pooled$persons$rowId, weights = fitSet[["frequency"]][match(pooled$persons$rowId, fitSet$rowId)])
     }
+    interceptOnly <- function() c("(Intercept)" = stats::qlogis(sum(pooled$outcomes$y) / nRows))
+    numeratorArgs <- list(pooled, NULL, basis, basisIds, presentBasisIds, interactionRef[0, ], interactionBasis[, 0, drop = FALSE], rowIntervals, Cyclops::createPrior("none"), fitCensoringModelsArgs)
+    numeratorData <- function() do.call(.fitPooledRows, c(numeratorArgs, list(buildOnly = TRUE)))
+    fitNumerator <- function() do.call(.fitPooledRows, c(numeratorArgs, list(refit = cyclopsRefit(TRUE))))
     # Only the covariates of the persons with rows (the fit sample) leave Andromeda:
     covariateData$pooledPersons <- pooled$persons |>
       select("rowId")
     fitCovariates <- covariateData$covariates |>
       dplyr::inner_join(covariateData$pooledPersons, by = "rowId")
+    denominatorData <- function() {
+      .fitPooledRows(pooled, fitCovariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs, buildOnly = TRUE)
+    }
     fitDenominator <- function(prior) {
-      .fitPooledRows(pooled, fitCovariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs)
+      .fitPooledRows(pooled, fitCovariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs, refit = cyclopsRefit(FALSE))
     }
   }
-  events <- sum(fitSet$y)
+  if (!is.null(refit)) {
+    # With frequency weights, the intercept-only model is the log-odds of the weighted rows:
+    nRows <- sum(fitSet[["frequency"]] * findInterval(fitSet$lastInterval, fitIntervals))
+    rowEvents <- sum(fitSet[["frequency"]][fitSet$y == 1 & fitSet$lastInterval %in% fitIntervals])
+    interceptOnly <- function() c("(Intercept)" = stats::qlogis(rowEvents / nRows))
+  }
+  if (buildOnly) {
+    # The full data's Cyclops data of the numerator (when a model with a time basis fits it) and of the
+    # model with covariates, for replicates to refit:
+    built <- list(
+      signature = signature,
+      tidySignature = attr(covariateData, "tidySignature"),
+      persons = fitSet$rowId,
+      rowPersons = if (engine == "lr") rowPersons else pooled$persons$rowId,
+      presentBasisIds = presentBasisIds,
+      covariateIds = covariateIds,
+      interactionRef = interactionRef,
+      extraIds = list()
+    )
+    if (nRows > 0 && events > 0 && length(presentBasisIds) > 0 && fitCensoringModelsArgs$timeBasis$type != "indicator") {
+      data <- numeratorData()
+      built$numeratorData <- if (engine == "lr") data else data$cyclopsData
+      built$extraIds$numerator <- data$extraIds
+    }
+    if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
+      data <- denominatorData()
+      built$denominatorData <- if (engine == "lr") data else data$cyclopsData
+      built$extraIds$denominator <- data$extraIds
+    }
+    return(built)
+  }
   if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
     requested <- if (fitCensoringModelsArgs$covariateTimeInteraction == "day0") "day0" else colnames(basis)
     .messageDroppedInteractions(fitCensoringModelsArgs$covariateTimeInteraction, requested, colnames(interactionBasis), rowIntervals, nIntervals, intervalLength, description)
@@ -1290,7 +1822,12 @@ fitCensoringModels <- function(clones,
     if (is.null(error)) {
       error <- "OK"
       # The interaction columns are not excluded, so they are penalized like the covariates:
-      prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c(0, presentBasisIds))
+      if (!reuse) {
+        prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c(0, presentBasisIds))
+      }
+      if (reuse) {
+        prior <- .restrictPrior(prior, entry$covariateIds, unpenalizedIds = c(0, presentBasisIds))
+      }
       cyclopsFit <- fitDenominator(prior)
       if (is.character(cyclopsFit)) {
         error <- cyclopsFit
@@ -1309,20 +1846,26 @@ fitCensoringModels <- function(clones,
   }
   baseline <- .computeBaseline(coefficients, basis, basisIds, emptyIntervals, fullIntervals)
   numeratorBaseline <- .computeBaseline(numeratorCoefficients, basis, basisIds, emptyIntervals, fullIntervals)
-  if (nrow(fitSet) < nrow(riskSet) && fitCensoringModelsArgs$timeBasis$type == "indicator") {
+  if (.count(fitSet) < .count(riskSet) && fitCensoringModelsArgs$timeBasis$type == "indicator") {
     # An interval with a hazard of 0 or 1 in the sample but not in the whole risk set gets the observed
     # hazard of the whole risk set (shifted by the mean linear predictor of its persons in the model
     # with covariates), so that persons outside the sample keep finite weights:
-    allInitiations <- tabulate(riskSet$lastInterval[riskSet$y == 1] + 1L, nbins = nIntervals)
-    allAtRisk <- rev(cumsum(rev(tabulate(riskSet$lastInterval + 1L, nbins = nIntervals))))
-    refit <- k[k %in% c(emptyIntervals, fullIntervals) & allInitiations > 0 & allInitiations < allAtRisk]
-    for (interval in refit) {
+    allInitiations <- .tabulateFrequency(riskSet$lastInterval[riskSet$y == 1] + 1L, riskSet[["frequency"]][riskSet$y == 1], nIntervals)
+    allAtRisk <- rev(cumsum(rev(.tabulateFrequency(riskSet$lastInterval + 1L, riskSet[["frequency"]], nIntervals))))
+    observed <- k[k %in% c(emptyIntervals, fullIntervals) & allInitiations > 0 & allInitiations < allAtRisk]
+    for (interval in observed) {
       logOdds <- stats::qlogis(allInitiations[interval + 1L] / allAtRisk[interval + 1L])
       numeratorBaseline[interval + 1L] <- logOdds
-      baseline[interval + 1L] <- logOdds - mean(linearPredictor[riskSet$lastInterval >= interval])
+      atRiskThen <- riskSet$lastInterval >= interval
+      meanLinearPredictor <- if (is.null(riskSet[["frequency"]])) {
+        mean(linearPredictor[atRiskThen])
+      } else {
+        sum(linearPredictor[atRiskThen] * riskSet[["frequency"]][atRiskThen]) / sum(riskSet[["frequency"]][atRiskThen])
+      }
+      baseline[interval + 1L] <- logOdds - meanLinearPredictor
     }
-    emptyIntervals <- setdiff(emptyIntervals, refit)
-    fullIntervals <- setdiff(fullIntervals, refit)
+    emptyIntervals <- setdiff(emptyIntervals, observed)
+    fullIntervals <- setdiff(fullIntervals, observed)
   }
   # Interaction coefficients are named covariateId:column, for example "1001:day0":
   idx <- match(names(coefficients), as.character(interactionRef$interactionId))
@@ -1356,9 +1899,9 @@ fitCensoringModels <- function(clones,
     ),
     diagnostics = c(
       list(
-        riskSetSize = nrow(riskSet),
+        riskSetSize = .count(riskSet),
         rows = as.integer(nRows),
-        events = sum(riskSet$y),
+        events = .countEvents(riskSet),
         auc = NA_real_,
         status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; "),
         engine = engine

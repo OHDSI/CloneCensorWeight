@@ -99,6 +99,10 @@
 #' @param outcomeTimeBasis   `NULL`, or the object of type `TimeBasis` (as created using
 #'                           [createTimeBasis()]) of the pooled logistic outcome model to be fitted to
 #'                           these clones: the clones are then also split on its interval grid.
+#' @param .personCounts      For internal use (the reweight bootstrap): `NULL`, or a data frame with
+#'                           the `personSeqId` and `count` (frequency weight) of persons. Only the clones
+#'                           of persons with a positive count are weighted, and the percentile caps count
+#'                           each clone `count` times, as copies of the persons would be counted.
 #'
 #' @return
 #' A new [CcwClones] object, in its own Andromeda (close it when done), with copies of the tables and
@@ -148,15 +152,21 @@
 computeCensoringWeights <- function(clones,
                                     censoringModels,
                                     computeWeightsArgs = createComputeWeightsArgs(),
-                                    outcomeTimeBasis = NULL) {
+                                    outcomeTimeBasis = NULL,
+                                    .personCounts = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   checkmate::assertClass(censoringModels, "CcwCensoringModels", add = errorMessages)
   checkmate::assertR6(computeWeightsArgs, "ComputeWeightsArgs", add = errorMessages)
   checkmate::assertR6(outcomeTimeBasis, "TimeBasis", null.ok = TRUE, add = errorMessages)
+  checkmate::assertDataFrame(.personCounts, null.ok = TRUE, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   metaData <- attr(clones, "metaData")
   .checkModelsMatchClones(censoringModels, metaData)
+  if (!is.null(.personCounts)) {
+    clones <- .drawnClones(clones, .personCounts)
+    on.exit(close(clones))
+  }
   .checkNeverInitiateHorizon(clones, censoringModels)
   graceEnds <- unlist(lapply(metaData$strategies, function(strategy) strategy$graceEnd))
   # The day after the grace periods, whose weight computeCovariateBalance() reads (NA: no grace period):
@@ -167,7 +177,7 @@ computeCensoringWeights <- function(clones,
   # The weights are computed on a copy of the clones, so the input is not changed:
   weightedClones <- .copyCcwClones(clones)
   completed <- FALSE
-  on.exit(if (completed) .dropTables(weightedClones, "ccwW") else close(weightedClones))
+  on.exit(if (completed) .dropTables(weightedClones, "ccwW") else close(weightedClones), add = TRUE)
   .writeModelTables(weightedClones, censoringModels)
   deviationFirst <- metaData$sameDayOrdering == "deviationFirst"
   offset <- if (deviationFirst) 0L else 1L
@@ -296,14 +306,14 @@ computeCensoringWeights <- function(clones,
     GROUP BY cloneRowId,
       strategyId;")
 
-  caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay)
+  caps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay, personCounts = .personCounts)
   weightedClones$ccwWCaps <- caps |>
     filter(!is.na(.data$cap))
   caps$truncatedShare <- .computeTruncatedShares(weightedClones, caps$strategyId, "ccwWCaps", "maxWeight")
   # The weights on the other scale: truncated on their own scale (Phase1Contracts section 12.2), or
   # formed from the truncated weights (section 11.1):
   if (computeWeightsArgs$truncateMsmWeights) {
-    otherCaps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay, "maxOtherScaleWeight")
+    otherCaps <- .computeCaps(weightedClones, computeWeightsArgs$truncation, balanceDay, "maxOtherScaleWeight", personCounts = .personCounts)
     caps$otherScaleCap <- otherCaps$cap[match(caps$strategyId, otherCaps$strategyId)]
     weightedClones$ccwWOtherCaps <- otherCaps |>
       filter(!is.na(.data$cap))
@@ -771,8 +781,9 @@ computeCensoringWeights <- function(clones,
 # (maxWeight, or maxOtherScaleWeight for the other scale). A percentile with basis = "varying" is taken
 # over the clones under follow-up on day `balanceDay` (or riskStart, if later), falling back to all
 # clones without a grace period (balanceDay NA) or for a strategy with no such clone; with
-# basis = "allClones", over all clones.
-.computeCaps <- function(clones, truncation, balanceDay, column = "maxWeight") {
+# basis = "allClones", over all clones. With `personCounts` (personSeqId, count), each clone counts as
+# many times as its person (.weightedQuantileCont()).
+.computeCaps <- function(clones, truncation, balanceDay, column = "maxWeight", personCounts = NULL) {
   strategyIds <- .andromedaSql(clones, "SELECT DISTINCT strategyId FROM ccwWPersonWeights ORDER BY strategyId;")$strategyId
   if (truncation$type == "none") {
     return(tibble(strategyId = as.integer(strategyIds), cap = NA_real_))
@@ -780,6 +791,27 @@ computeCensoringWeights <- function(clones,
   if (truncation$type == "fixed") {
     cap <- if (column == "maxOtherScaleWeight" && !is.null(truncation$otherScaleUpper)) truncation$otherScaleUpper else truncation$upper
     return(tibble(strategyId = as.integer(strategyIds), cap = as.numeric(cap)))
+  }
+  if (!is.null(personCounts)) {
+    values <- .andromedaSql(clones, sprintf("
+      SELECT ccwWPersonWeights.strategyId,
+        ccwWPersonWeights.%s AS value,
+        ccwWClones.personSeqId,
+        GREATEST(%d, ccwWClones.riskStart) - ccwWClones.riskStart + 1 <= ccwWClones.survivalTime AS followed
+      FROM ccwWPersonWeights
+      INNER JOIN ccwWClones
+        ON ccwWPersonWeights.cloneRowId = ccwWClones.cloneRowId;", column, if (is.na(balanceDay)) 0L else balanceDay))
+    values$count <- personCounts$count[match(values$personSeqId, personCounts$personSeqId)]
+    cap <- function(strategyId, followed) {
+      rows <- values$strategyId == strategyId & (!followed | values$followed)
+      return(if (any(rows)) .weightedQuantileCont(values$value[rows], values$count[rows], truncation$upper) else NA_real_)
+    }
+    caps <- vapply(strategyIds, function(strategyId) cap(strategyId, FALSE), numeric(1))
+    if (truncation$basis == "varying" && !is.na(balanceDay)) {
+      varyingCaps <- vapply(strategyIds, function(strategyId) cap(strategyId, TRUE), numeric(1))
+      caps[!is.na(varyingCaps)] <- varyingCaps[!is.na(varyingCaps)]
+    }
+    return(tibble(strategyId = as.integer(strategyIds), cap = as.numeric(caps)))
   }
   caps <- .andromedaSql(clones, sprintf("
     SELECT strategyId,
@@ -801,6 +833,19 @@ computeCensoringWeights <- function(clones,
     caps$cap[!is.na(idx)] <- as.numeric(varyingCaps$cap[idx[!is.na(idx)]])
   }
   return(caps)
+}
+
+# quantile_cont(values, p) (type 7) of the values with each counted `counts` times: positions
+# 0..N - 1 of the sorted copies, interpolated at (N - 1) p.
+.weightedQuantileCont <- function(values, counts, p) {
+  order <- order(values)
+  values <- values[order]
+  ends <- cumsum(counts[order])
+  position <- (ends[length(ends)] - 1) * p
+  below <- floor(position)
+  lower <- values[findInterval(below, ends) + 1L]
+  upper <- values[findInterval(ceiling(position), ends) + 1L]
+  return(lower + (position - below) * (upper - lower))
 }
 
 # Per strategy (in the order of `strategyIds`), the share of clones whose `column` in ccwWPersonWeights

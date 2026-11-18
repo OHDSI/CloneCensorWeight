@@ -18,18 +18,49 @@
 #'
 #' @description
 #' Estimates the outcome model's estimates with a person-level nonparametric bootstrap that repeats the
-#' whole analysis in every replicate: the study population, the clones, the censoring models, the
-#' weights and the outcome model. The bootstrap standard errors and confidence intervals therefore
-#' include the estimation of the censoring weights, which the robust variance of [fitOutcomeModel()]
-#' ignores.
+#' analysis in every replicate: the censoring models, the weights and the outcome model. The bootstrap
+#' standard errors and confidence intervals therefore include the estimation of the censoring weights,
+#' which the robust variance of [fitOutcomeModel()] ignores.
 #'
 #' @details
 #' The persons (`personSeqId`) of the `cohorts` table of `cloneCensorWeightData` are resampled with
 #' replacement: each replicate draws multinomial counts (`n` draws among the `n` persons). All counts
-#' are drawn with the seed of `fitOutcomeModelArgs$bootstrapArgs` before any model is fitted. In each
-#' replicate a new [CloneCensorWeightData] holds each drawn person as many times as drawn, every copy
-#' with its own row IDs and `personSeqId`, so copies are distinct persons in every step of the
-#' analysis. With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
+#' are drawn with the seed of `fitOutcomeModelArgs$bootstrapArgs` before any model is fitted.
+#'
+#' `bootstrapArgs$method` sets how a replicate is analyzed:
+#'
+#' - `"reweight"` (the default): each person's count is its frequency weight, and persons with count 0
+#'   are left out. The study population and clones of the full data are built once. The censoring
+#'   models are refit with the counts as case weights, on the Cyclops data of the full data
+#'   (built once per worker, with [Cyclops::updateWeights()]), the weights of the drawn persons' clones
+#'   are computed from them, and the outcome model is fit with each clone's weight times its person's
+#'   count. With `bootstrapArgs$warmStart = TRUE` (the default) the refits start from the coefficients
+#'   of the full-data censoring models.
+#' - `"copy"`: a new [CloneCensorWeightData] holds each drawn person as many times as drawn, every copy
+#'   with its own row IDs and `personSeqId`, so copies are distinct persons in every step of the
+#'   analysis, which is repeated from the study population on.
+#'
+#' Every step of the reweight bootstrap counts a person as many times as its copies would count, so the
+#' two give the same replicates (to the convergence tolerance of the fits) with the same counts,
+#' `fixHyperparameters = TRUE` and `warmStart = FALSE`. In particular the covariates of the censoring
+#' models are tidied as FeatureExtraction tidies those of the copies (a covariate the copies would
+#' drop as redundant or infrequent is fixed at 0, and covariates are normalized by their largest value
+#' among the drawn persons, through scaled prior variances); a hazard model whose risk set holds more
+#' copies than `maxCohortSizeForFitting` is fit on the persons of the sample of copies the copy
+#' bootstrap would draw, each weighted by its number of sampled copies; and the percentile caps of the
+#' weights count each clone as many times as its person was drawn. A replicate refits the full data's
+#' Cyclops data only when its fit has the same structure (with the indicator time basis, the same
+#' intervals with initiations, and the same interaction columns) and, under sampling, persons the
+#' full-data fit has; otherwise it builds Cyclops data of its own. The binary models are fit by
+#' [CohortMethod::createPs()], which takes no case weights, on copies of the drawn persons in both
+#' methods (their sampling is seeded per replicate in the reweight bootstrap). The two methods differ
+#' (beyond the tolerance) when the hyperparameters are not fixed: with `fixHyperparameters = FALSE`
+#' the reweight bootstrap cross-validates on the weighted persons, whose folds differ from those of the
+#' copies. They also differ when the study population depends on which persons are in the data (for
+#' example with `restrictToCommonPeriod = TRUE` in `createStudyPopulationArgs`): the reweight bootstrap
+#' keeps the full data's.
+#'
+#' With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
 #' models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
 #' every replicate, without cross-validation. With `FALSE`, the cross-validation of every censoring
 #' model (binary, Cox and pooled logistic) keeps the copies of a person in one fold, so that no copy is
@@ -46,7 +77,8 @@
 #' replicates are not shown; those of a failed replicate are reported with its failure, except those
 #' that the analysis of the full data has already given (such as warnings about the design). The
 #' progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are
-#' shown; wrap the call in [suppressMessages()] to hide them.
+#' shown; wrap the call in [suppressMessages()] to hide them. With `threads > 1`, the workers' messages
+#' are not shown.
 #'
 #' A replicate fails when the analysis stops with an error (for example because a censoring model
 #' cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome
@@ -108,13 +140,24 @@
 #'                                  column per replicate, used instead of drawing counts. It sets the
 #'                                  number of replicates.
 #' @param returnCounts              Return the counts of the replicates?
+#' @param threads                   The number of parallel workers for the replicates. Each worker loads
+#'                                  its own copy of `cloneCensorWeightData` (and, with the reweight
+#'                                  bootstrap, builds the Cyclops data of the censoring models once), so
+#'                                  memory grows with the number of workers. Each replicate depends only
+#'                                  on its counts, so the results do not depend on the number of
+#'                                  workers. The Cyclops threads of each fit are set by the `control` of
+#'                                  the censoring and outcome model arguments.
 #'
 #' @return
 #' An object of class `CcwOutcomeModel` (see [fitOutcomeModel()]) with `varianceEstimator =
 #' "bootstrap"`: the full-data estimates with their bootstrap standard errors, limits and p-values,
 #' the full-data coefficients with their bootstrap covariance (`vcov`), the counts of the full-data
 #' clones, and `metaData$bootstrap` (the settings, the number of replicates, the number of failed
-#' replicates, the number of finite replicates of each estimate, the fixed prior variances, and
+#' replicates, the number of finite replicates of each estimate, the fixed prior variances,
+#' `replicateStatus`, a tibble with, per `replicate`, its `status` (`"OK"` or `"failed"`), the `reason`
+#' it failed, and `censoringStatus`, the statuses of its censoring model fits other than `"OK"` (such
+#' as Cyclops's return flag of a fit that did not converge, after which the model without covariates
+#' was used) or `"OK"`, and
 #' `replicateShift`, a tibble with, for the hazard ratio and each risk difference, `estimand`, the number
 #' of finite `replicates`, the numbers `above` and `below` the estimate, the sign test p-value
 #' `signTestP`, `medianShift` (the median replicate minus the estimate, in bootstrap standard deviations,
@@ -168,7 +211,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
                                  fitOutcomeModelArgs,
                                  censoringModels = NULL,
                                  counts = NULL,
-                                 returnCounts = FALSE) {
+                                 returnCounts = FALSE,
+                                 threads = 1) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
   checkmate::assertNumber(outcomeId, add = errorMessages)
@@ -184,6 +228,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     checkmate::assertIntegerish(counts, lower = 0, any.missing = FALSE, add = errorMessages)
   }
   checkmate::assertFlag(returnCounts, add = errorMessages)
+  checkmate::assertInt(threads, lower = 1, add = errorMessages)
   checkmate::reportAssertions(collection = errorMessages)
   bootstrapArgs <- fitOutcomeModelArgs$bootstrapArgs
 
@@ -255,55 +300,45 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   # Censoring models fit without an outcome (shared across outcomes by runCcwAnalyses()) are refit
   # without an outcome in every replicate, as the full-data models were:
   censoringWithoutOutcome <- !is.null(censoringModels) && isTRUE(is.na(attr(censoringModels, "metaData")$outcomeId))
+  setup <- list(
+    method = bootstrapArgs$method,
+    warmStart = bootstrapArgs$warmStart,
+    outcomeId = outcomeId,
+    createStudyPopulationArgs = createStudyPopulationArgs,
+    createClonesArgs = createClonesArgs,
+    fitCensoringModelsArgs = replicateCensoringModelsArgs,
+    computeWeightsArgs = computeWeightsArgs,
+    fitOutcomeModelArgs = fitOutcomeModelArgs,
+    fixedPriorVariances = fixedPriorVariances,
+    censoringWithoutOutcome = censoringWithoutOutcome,
+    personSeqIds = personSeqIds,
+    nReplicates = nReplicates,
+    estimands = estimands,
+    fullWarnings = fullWarnings,
+    # Warm starts of the reweight bootstrap's refits:
+    startingFits = .startingFitsFromModels(full$censoringModels),
+    # Each replicate draws its own samples of the hazard models' risk sets (maxCohortSizeForFitting):
+    subsampleSeed = .defaultSubsampleSeed(fitCensoringModelsArgs)
+  )
+  replicateResults <- .runBootstrapReplicates(cloneCensorWeightData, setup, counts, threads)
   failures <- character(0)
   for (replicate in seq_len(nReplicates)) {
-    message(sprintf("Bootstrap replicate %d of %d", replicate, nReplicates))
-    resampled <- .resampleCloneCensorWeightData(cloneCensorWeightData, personSeqIds, counts[, replicate])
-    replicateWarnings <- character(0)
-    result <- withCallingHandlers(
-      tryCatch(
-        suppressMessages(.runBootstrapAnalysis(
-          cloneCensorWeightData = resampled,
-          outcomeId = outcomeId,
-          createStudyPopulationArgs = createStudyPopulationArgs,
-          createClonesArgs = createClonesArgs,
-          fitCensoringModelsArgs = replicateCensoringModelsArgs,
-          computeWeightsArgs = computeWeightsArgs,
-          fitOutcomeModelArgs = fitOutcomeModelArgs,
-          fixedPriorVariances = fixedPriorVariances,
-          sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate]),
-          censoringWithoutOutcome = censoringWithoutOutcome,
-          # Each replicate draws its own samples of the hazard models' risk sets (maxCohortSizeForFitting):
-          subsampleSeed = as.integer((as.numeric(.defaultSubsampleSeed(fitCensoringModelsArgs)) + replicate) %% .Machine$integer.max)
-        )),
-        error = function(e) conditionMessage(e)
-      ),
-      warning = function(w) {
-        if (!conditionMessage(w) %in% fullWarnings) {
-          replicateWarnings <<- c(replicateWarnings, conditionMessage(w))
-        }
-        invokeRestart("muffleWarning")
-      }
-    )
-    close(resampled)
-    if (is.character(result)) {
-      failures <- c(failures, sprintf("replicate %d: %s", replicate, result))
+    replicateResult <- replicateResults[[replicate]]
+    if (!is.null(replicateResult$failure)) {
+      failures <- c(failures, sprintf("replicate %d: %s", replicate, replicateResult$failure))
       next
     }
-    estimates <- result$estimates$estimate[match(estimands, result$estimates$estimand)]
-    if (!any(is.finite(estimates))) {
-      # The outcome model could not be fitted (it warns why):
-      failures <- c(failures, sprintf(
-        "replicate %d: no finite estimate%s", replicate,
-        if (length(replicateWarnings) == 0) "" else sprintf(" (%s)", paste(unique(replicateWarnings), collapse = "; "))
-      ))
-      next
-    }
-    replicates[replicate, ] <- estimates
+    replicates[replicate, ] <- replicateResult$estimates
     if (!is.null(coefficientReplicates)) {
-      coefficientReplicates[replicate, ] <- result$coefficients[colnames(coefficientReplicates)]
+      coefficientReplicates[replicate, ] <- replicateResult$coefficients[colnames(coefficientReplicates)]
     }
   }
+  replicateStatus <- tibble(
+    replicate = seq_len(nReplicates),
+    status = vapply(replicateResults, function(result) if (is.null(result$failure)) "OK" else "failed", character(1)),
+    reason = vapply(replicateResults, function(result) if (is.null(result$failure)) NA_character_ else result$failure, character(1)),
+    censoringStatus = vapply(replicateResults, function(result) result$censoringStatus, character(1))
+  )
   if (length(failures) > 0) {
     warning(sprintf(
       "The analysis failed in %d of %d bootstrap replicates, which are left out: %s",
@@ -366,8 +401,11 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
         seed = bootstrapArgs$seed,
         ci = bootstrapArgs$ci,
         fixHyperparameters = bootstrapArgs$fixHyperparameters,
+        method = bootstrapArgs$method,
+        warmStart = bootstrapArgs$warmStart,
         fixedPriorVariances = fixedPriorVariances,
-        replicateShift = replicateShift
+        replicateShift = replicateShift,
+        replicateStatus = replicateStatus
       )
     ),
     replicates = replicates
@@ -428,6 +466,197 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     metaData = attr(weightedClones, "metaData"),
     riskStart = createStudyPopulationArgs$riskWindowStart
   ))
+}
+
+# Replicates ---------------------------------------------------------------------------------------
+
+# Runs the replicates (`counts`: one column per replicate) of `setup` (see bootstrapCcwAnalysis()) on
+# `threads` parallel workers, each with its own copy of the data, and returns one result per replicate
+# (.bootstrapReplicate()). Every replicate is a function of its counts only (the warm starts are the
+# full-data coefficients in `setup`), so the results do not depend on the number of workers.
+.runBootstrapReplicates <- function(cloneCensorWeightData, setup, counts, threads) {
+  replicateIds <- seq_len(ncol(counts))
+  threads <- min(threads, length(replicateIds))
+  if (threads == 1) {
+    return(.bootstrapReplicates(cloneCensorWeightData, setup, counts, replicateIds))
+  }
+  dataFile <- tempfile(fileext = ".zip")
+  on.exit(unlink(dataFile))
+  Andromeda::saveAndromeda(cloneCensorWeightData, dataFile, maintainConnection = TRUE)
+  # Contiguous blocks of replicates, one per worker:
+  blocks <- split(replicateIds, cut(replicateIds, threads, labels = FALSE))
+  tasks <- lapply(blocks, function(ids) list(dataFile = dataFile, setup = setup, counts = counts[, ids, drop = FALSE], replicateIds = ids))
+  cluster <- ParallelLogger::makeCluster(threads)
+  on.exit(ParallelLogger::stopCluster(cluster), add = TRUE)
+  .requirePackageOnCluster(cluster)
+  results <- ParallelLogger::clusterApply(cluster, tasks, .bootstrapReplicatesTask)
+  return(do.call(c, unname(results)))
+}
+
+# A worker's task of .runBootstrapReplicates().
+.bootstrapReplicatesTask <- function(task) {
+  data <- loadCloneCensorWeightData(task$dataFile)
+  on.exit(close(data))
+  counts <- matrix(0L, nrow(task$counts), max(task$replicateIds))
+  counts[, task$replicateIds] <- task$counts
+  return(.bootstrapReplicates(data, task$setup, counts, task$replicateIds))
+}
+
+# Loads this package on the workers of a cluster: the installed package, or, when this process loaded
+# it from its source folder (pkgload::load_all(), as in the tests), that folder.
+.requirePackageOnCluster <- function(cluster) {
+  path <- getNamespaceInfo("CloneCensorWeight", "path")
+  if (isNamespaceLoaded("pkgload") && pkgload::is_dev_package("CloneCensorWeight")) {
+    loadSource <- function(i, path) {
+      suppressMessages(pkgload::load_all(path, quiet = TRUE, export_all = FALSE))
+      NULL
+    }
+    # Sent without this namespace as its environment, which the workers do not have yet:
+    environment(loadSource) <- globalenv()
+    ParallelLogger::clusterApply(cluster, seq_along(cluster), loadSource, path = path)
+  } else {
+    ParallelLogger::clusterRequire(cluster, "CloneCensorWeight")
+  }
+  invisible(NULL)
+}
+
+# The replicates `replicateIds` (columns of `counts`) in this process. The reweight bootstrap builds the
+# study population and clones of the full data once, and keeps the Cyclops data of the censoring models
+# for the replicates after the first.
+.bootstrapReplicates <- function(cloneCensorWeightData, setup, counts, replicateIds) {
+  context <- NULL
+  if (setup$method == "reweight") {
+    context <- suppressMessages(.reweightContext(cloneCensorWeightData, setup))
+    on.exit(.closeReweightContext(context))
+  }
+  return(lapply(replicateIds, function(replicate) {
+    .bootstrapReplicate(cloneCensorWeightData, setup, context, counts[, replicate], replicate)
+  }))
+}
+
+# One replicate: a list with `estimates` (one per estimand of the full data), `coefficients`, `failure`
+# (NULL, or why the replicate failed) and `censoringStatus` (the statuses of the censoring models other
+# than "OK", or "OK"). The replicate's warnings are not shown; those of a failed replicate are its
+# failure, except those that the full-data analysis has already given.
+.bootstrapReplicate <- function(cloneCensorWeightData, setup, context, counts, replicate) {
+  message(sprintf("Bootstrap replicate %d of %d", replicate, setup$nReplicates))
+  subsampleSeed <- as.integer((as.numeric(setup$subsampleSeed) + replicate) %% .Machine$integer.max)
+  replicateWarnings <- character(0)
+  result <- withCallingHandlers(
+    tryCatch(
+      suppressMessages(if (setup$method == "reweight") {
+        .reweightReplicate(cloneCensorWeightData, setup, context, counts, subsampleSeed)
+      } else {
+        .copyReplicate(cloneCensorWeightData, setup, counts, subsampleSeed)
+      }),
+      error = function(e) conditionMessage(e)
+    ),
+    warning = function(w) {
+      if (!conditionMessage(w) %in% setup$fullWarnings) {
+        replicateWarnings <<- c(replicateWarnings, conditionMessage(w))
+      }
+      invokeRestart("muffleWarning")
+    }
+  )
+  if (is.character(result)) {
+    return(list(failure = result, censoringStatus = NA_character_))
+  }
+  censoringStatus <- .censoringModelStatus(result$censoringModels)
+  estimates <- result$estimates$estimate[match(setup$estimands, result$estimates$estimand)]
+  if (!any(is.finite(estimates))) {
+    # The outcome model could not be fitted (it warns why):
+    return(list(
+      failure = sprintf(
+        "no finite estimate%s",
+        if (length(replicateWarnings) == 0) "" else sprintf(" (%s)", paste(unique(replicateWarnings), collapse = "; "))
+      ),
+      censoringStatus = censoringStatus
+    ))
+  }
+  return(list(estimates = estimates, coefficients = result$coefficients, censoringStatus = censoringStatus))
+}
+
+# A replicate of the copy bootstrap: the analysis of new data with each drawn person copied as many
+# times as drawn.
+.copyReplicate <- function(cloneCensorWeightData, setup, counts, subsampleSeed) {
+  resampled <- .resampleCloneCensorWeightData(cloneCensorWeightData, setup$personSeqIds, counts)
+  on.exit(close(resampled))
+  return(.runBootstrapAnalysis(
+    cloneCensorWeightData = resampled,
+    outcomeId = setup$outcomeId,
+    createStudyPopulationArgs = setup$createStudyPopulationArgs,
+    createClonesArgs = setup$createClonesArgs,
+    fitCensoringModelsArgs = setup$fitCensoringModelsArgs,
+    computeWeightsArgs = setup$computeWeightsArgs,
+    fitOutcomeModelArgs = setup$fitOutcomeModelArgs,
+    fixedPriorVariances = setup$fixedPriorVariances,
+    sourcePersonSeqIds = .copySourcePersonSeqIds(setup$personSeqIds, counts),
+    censoringWithoutOutcome = setup$censoringWithoutOutcome,
+    subsampleSeed = subsampleSeed
+  ))
+}
+
+# The statuses of the censoring models (and of their postGrace and early models) other than "OK", or
+# "OK": a model that could not be fit with covariates has its error or Cyclops's return flag.
+.censoringModelStatus <- function(censoringModels) {
+  statuses <- unlist(lapply(censoringModels, function(model) {
+    c(model$diagnostics$status, model$postGrace$diagnostics$status, model$early$diagnostics$status)
+  }))
+  statuses <- unique(statuses[!is.na(statuses) & statuses != "OK"])
+  return(if (length(statuses) == 0) "OK" else paste(statuses, collapse = "; "))
+}
+
+# The study population and clones of the full data (and the clones without an outcome the censoring
+# models are fit on, with `censoringWithoutOutcome`), and the cache of the censoring models' Cyclops
+# data, for the replicates of the reweight bootstrap.
+.reweightContext <- function(cloneCensorWeightData, setup) {
+  population <- createStudyPopulation(
+    cloneCensorWeightData = cloneCensorWeightData,
+    outcomeId = setup$outcomeId,
+    createStudyPopulationArgs = setup$createStudyPopulationArgs
+  )
+  context <- new.env(parent = emptyenv())
+  context$clones <- createClones(population, cloneCensorWeightData, setup$createClonesArgs)
+  context$censoringClones <- context$clones
+  context$separateCensoringClones <- setup$censoringWithoutOutcome
+  if (setup$censoringWithoutOutcome) {
+    context$censoringClones <- createClones(
+      .createStudyPopulationWithoutOutcome(cloneCensorWeightData, setup$createStudyPopulationArgs),
+      cloneCensorWeightData,
+      setup$createClonesArgs
+    )
+  }
+  context$cache <- new.env(parent = emptyenv())
+  return(context)
+}
+
+.closeReweightContext <- function(context) {
+  close(context$clones)
+  if (context$separateCensoringClones) {
+    close(context$censoringClones)
+  }
+  invisible(NULL)
+}
+
+# A replicate of the reweight bootstrap: the censoring models refit with each person's count as its
+# frequency weight (persons with count 0 left out), the weights of the clones of the drawn persons, and
+# the outcome model with each clone's weight times its person's count.
+.reweightReplicate <- function(cloneCensorWeightData, setup, context, counts, subsampleSeed) {
+  personCounts <- tibble(personSeqId = setup$personSeqIds, count = as.integer(counts))
+  censoringModels <- .fitCensoringModelsWithFits(
+    clones = context$censoringClones,
+    cloneCensorWeightData = cloneCensorWeightData,
+    fitCensoringModelsArgs = setup$fitCensoringModelsArgs,
+    fixedPriorVariances = setup$fixedPriorVariances,
+    subsampleSeed = subsampleSeed,
+    refit = list(counts = personCounts, cache = context$cache, warmStart = setup$warmStart, startingFits = setup$startingFits)
+  )$models
+  fitOutcomeModelArgs <- setup$fitOutcomeModelArgs
+  outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
+  weightedClones <- computeCensoringWeights(context$clones, censoringModels, setup$computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis, .personCounts = personCounts)
+  on.exit(close(weightedClones))
+  point <- .fitOutcomeModelPoint(weightedClones, fitOutcomeModelArgs, personCounts = personCounts)
+  return(list(estimates = point$estimates, coefficients = point$coefficients, censoringModels = censoringModels))
 }
 
 # The coefficients (of `coefficientNames`) that mean the same in every replicate. The time basis of the

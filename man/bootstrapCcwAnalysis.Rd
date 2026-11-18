@@ -14,7 +14,8 @@ bootstrapCcwAnalysis(
   fitOutcomeModelArgs,
   censoringModels = NULL,
   counts = NULL,
-  returnCounts = FALSE
+  returnCounts = FALSE,
+  threads = 1
 )
 }
 \arguments{
@@ -54,12 +55,24 @@ column per replicate, used instead of drawing counts. It sets the
 number of replicates.}
 
 \item{returnCounts}{Return the counts of the replicates?}
+
+\item{threads}{The number of parallel workers for the replicates. Each worker loads
+its own copy of \code{cloneCensorWeightData} (and, with the reweight
+bootstrap, builds the Cyclops data of the censoring models once), so
+memory grows with the number of workers. Each replicate depends only
+on its counts, so the results do not depend on the number of
+workers. The Cyclops threads of each fit are set by the \code{control} of
+the censoring and outcome model arguments.}
 }
 \value{
 An object of class \code{CcwOutcomeModel} (see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}) with \code{varianceEstimator = "bootstrap"}: the full-data estimates with their bootstrap standard errors, limits and p-values,
 the full-data coefficients with their bootstrap covariance (\code{vcov}), the counts of the full-data
 clones, and \code{metaData$bootstrap} (the settings, the number of replicates, the number of failed
-replicates, the number of finite replicates of each estimate, the fixed prior variances, and
+replicates, the number of finite replicates of each estimate, the fixed prior variances,
+\code{replicateStatus}, a tibble with, per \code{replicate}, its \code{status} (\code{"OK"} or \code{"failed"}), the \code{reason}
+it failed, and \code{censoringStatus}, the statuses of its censoring model fits other than \code{"OK"} (such
+as Cyclops's return flag of a fit that did not converge, after which the model without covariates
+was used) or \code{"OK"}, and
 \code{replicateShift}, a tibble with, for the hazard ratio and each risk difference, \code{estimand}, the number
 of finite \code{replicates}, the numbers \code{above} and \code{below} the estimate, the sign test p-value
 \code{signTestP}, \code{medianShift} (the median replicate minus the estimate, in bootstrap standard deviations,
@@ -75,18 +88,50 @@ replicate and one column per estimand of the estimates, and, with \code{returnCo
 }
 \description{
 Estimates the outcome model's estimates with a person-level nonparametric bootstrap that repeats the
-whole analysis in every replicate: the study population, the clones, the censoring models, the
-weights and the outcome model. The bootstrap standard errors and confidence intervals therefore
-include the estimation of the censoring weights, which the robust variance of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}
-ignores.
+analysis in every replicate: the censoring models, the weights and the outcome model. The bootstrap
+standard errors and confidence intervals therefore include the estimation of the censoring weights,
+which the robust variance of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} ignores.
 }
 \details{
 The persons (\code{personSeqId}) of the \code{cohorts} table of \code{cloneCensorWeightData} are resampled with
 replacement: each replicate draws multinomial counts (\code{n} draws among the \code{n} persons). All counts
-are drawn with the seed of \code{fitOutcomeModelArgs$bootstrapArgs} before any model is fitted. In each
-replicate a new \link{CloneCensorWeightData} holds each drawn person as many times as drawn, every copy
+are drawn with the seed of \code{fitOutcomeModelArgs$bootstrapArgs} before any model is fitted.
+
+\code{bootstrapArgs$method} sets how a replicate is analyzed:
+\itemize{
+\item \code{"reweight"} (the default): each person's count is its frequency weight, and persons with count 0
+are left out. The study population and clones of the full data are built once. The censoring
+models are refit with the counts as case weights, on the Cyclops data of the full data
+(built once per worker, with \code{\link[Cyclops:updateWeights]{Cyclops::updateWeights()}}), the weights of the drawn persons' clones
+are computed from them, and the outcome model is fit with each clone's weight times its person's
+count. With \code{bootstrapArgs$warmStart = TRUE} (the default) the refits start from the coefficients
+of the full-data censoring models.
+\item \code{"copy"}: a new \link{CloneCensorWeightData} holds each drawn person as many times as drawn, every copy
 with its own row IDs and \code{personSeqId}, so copies are distinct persons in every step of the
-analysis. With \code{bootstrapArgs$fixHyperparameters = TRUE}, the covariate models of the censoring
+analysis, which is repeated from the study population on.
+}
+
+Every step of the reweight bootstrap counts a person as many times as its copies would count, so the
+two give the same replicates (to the convergence tolerance of the fits) with the same counts,
+\code{fixHyperparameters = TRUE} and \code{warmStart = FALSE}. In particular the covariates of the censoring
+models are tidied as FeatureExtraction tidies those of the copies (a covariate the copies would
+drop as redundant or infrequent is fixed at 0, and covariates are normalized by their largest value
+among the drawn persons, through scaled prior variances); a hazard model whose risk set holds more
+copies than \code{maxCohortSizeForFitting} is fit on the persons of the sample of copies the copy
+bootstrap would draw, each weighted by its number of sampled copies; and the percentile caps of the
+weights count each clone as many times as its person was drawn. A replicate refits the full data's
+Cyclops data only when its fit has the same structure (with the indicator time basis, the same
+intervals with initiations, and the same interaction columns) and, under sampling, persons the
+full-data fit has; otherwise it builds Cyclops data of its own. The binary models are fit by
+\code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}, which takes no case weights, on copies of the drawn persons in both
+methods (their sampling is seeded per replicate in the reweight bootstrap). The two methods differ
+(beyond the tolerance) when the hyperparameters are not fixed: with \code{fixHyperparameters = FALSE}
+the reweight bootstrap cross-validates on the weighted persons, whose folds differ from those of the
+copies. They also differ when the study population depends on which persons are in the data (for
+example with \code{restrictToCommonPeriod = TRUE} in \code{createStudyPopulationArgs}): the reweight bootstrap
+keeps the full data's.
+
+With \code{bootstrapArgs$fixHyperparameters = TRUE}, the covariate models of the censoring
 models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
 every replicate, without cross-validation. With \code{FALSE}, the cross-validation of every censoring
 model (binary, Cox and pooled logistic) keeps the copies of a person in one fold, so that no copy is
@@ -103,7 +148,8 @@ censoring models' \code{control} plus the replicate number, so the replicates st
 replicates are not shown; those of a failed replicate are reported with its failure, except those
 that the analysis of the full data has already given (such as warnings about the design). The
 progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are
-shown; wrap the call in \code{\link[=suppressMessages]{suppressMessages()}} to hide them.
+shown; wrap the call in \code{\link[=suppressMessages]{suppressMessages()}} to hide them. With \code{threads > 1}, the workers' messages
+are not shown.
 
 A replicate fails when the analysis stops with an error (for example because a censoring model
 cannot be fitted) or gives no finite estimate (for example because the pooled logistic outcome

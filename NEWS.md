@@ -124,8 +124,30 @@ new defaults):
   it, which biases the risks and the first-interval odds ratio. Daily intervals reproduce the weighted
   Kaplan-Meier risks; the warning about a grid that ends no interval at the end of a grace period no
   longer says that any grid with such an interval does.
+* `bootstrapCcwAnalysis()` analyzes each replicate with frequency weights by default
+  (`createBootstrapArgs(method = "reweight")`, plan section 4.4) instead of copying the drawn persons
+  into new data: the study population and clones of the full data are built once, the censoring models
+  are refit with each person's count as its case weight (persons drawn 0 times are left out), on the
+  full data's Cyclops data where the fit's structure allows (`Cyclops::updateWeights()`), and the
+  outcome model is fit with each clone's weight times its person's count. Every step counts a person as
+  often as its copies would (covariate tidying, the samples of `maxCohortSizeForFitting`, the percentile
+  caps of the weights), so with `fixHyperparameters = TRUE` and cold starts the replicates equal those
+  of the copy bootstrap to the convergence tolerance of the fits (1e-6 or closer in the tests, for
+  pooled logistic and Cox censoring models, binary models, and Kaplan-Meier, Cox and pooled logistic
+  outcome models). By default the refits start from the full-data coefficients
+  (`createBootstrapArgs(warmStart = TRUE)`), which moves the replicates within that tolerance.
+  `method = "copy"` gives the earlier bootstrap. With `fixHyperparameters = FALSE` the two methods
+  differ, because cross-validation on weighted persons draws other folds than on copies. In the
+  reweight bootstrap the binary models' sampling (`maxCohortSizeForFitting`) is seeded per replicate.
 
 New features:
+
+* `bootstrapCcwAnalysis(threads = )` runs the replicates on parallel workers (and
+  `createCcwMultiThreadingSettings(bootstrapThreads = )` in `runCcwAnalyses()`, default 1). Each
+  replicate depends only on its counts, so the results do not depend on the number of workers (up to
+  the last bits of DuckDB's sums, which also vary from run to run). `metaData$bootstrap$replicateStatus`
+  gives each replicate's status, the reason it failed, and the statuses of its censoring model fits
+  that did not succeed (`censoringStatus`); failed replicates are counted and reported, as before.
 
 * `createFitCensoringModelsArgs(pooledLogisticEngine = "plr")` fits the pooled logistic initiation
   hazard model with Cyclops's pooled logistic regression (`modelType = "plr"`), which keeps the

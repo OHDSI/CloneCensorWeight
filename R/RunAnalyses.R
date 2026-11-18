@@ -42,6 +42,12 @@ cache <- new.env(parent = emptyenv())
 #' @param outcomeCvThreads         The number of threads Cyclops uses in each outcome model fit. The
 #'                                 total number of threads at one time can be
 #'                                 `fitOutcomeModelThreads * outcomeCvThreads`.
+#' @param bootstrapThreads         The number of parallel workers of each bootstrap
+#'                                 ([bootstrapCcwAnalysis()]), for outcome models with
+#'                                 `varianceEstimator = "bootstrap"`. Each worker holds its own copy of
+#'                                 the data and of the censoring models' Cyclops data. The total number
+#'                                 of threads at one time can be `fitOutcomeModelThreads *
+#'                                 bootstrapThreads * censoringModelCvThreads`.
 #' @param calibrationThreads       The number of parallel threads to use for empirical calibration.
 #'
 #' @return
@@ -60,6 +66,7 @@ createCcwMultiThreadingSettings <- function(getDbCcwDataThreads = 1,
                                             computeBalanceThreads = 1,
                                             fitOutcomeModelThreads = 1,
                                             outcomeCvThreads = 1,
+                                            bootstrapThreads = 1,
                                             calibrationThreads = 1) {
   settings <- list()
   for (name in names(formals(createCcwMultiThreadingSettings))) {
@@ -103,6 +110,8 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
     computeBalanceThreads = min(5, maxCores),
     fitOutcomeModelThreads = max(1, floor(maxCores / 4)),
     outcomeCvThreads = min(4, maxCores),
+    # Each bootstrap worker holds its own copy of the data, so the default stays at 1:
+    bootstrapThreads = 1,
     calibrationThreads = min(4, maxCores)
   ))
 }
@@ -469,6 +478,7 @@ runCcwAnalyses <- function(connectionDetails = NULL,
         censoringModelFile = path(refRow$censoringModelFile),
         computeWeightsArgs = analysis$computeWeightsArgs,
         fitOutcomeModelArgs = fitOutcomeModelArgs,
+        bootstrapThreads = multiThreadingSettings$bootstrapThreads,
         positivityThreshold = specifications$ccwDiagnosticThresholds$positivityThreshold,
         outcomeModelFile = path(refRow$outcomeModelFile)
       )
@@ -834,7 +844,8 @@ runCcwAnalyses <- function(connectionDetails = NULL,
       fitCensoringModelsArgs = params$fitCensoringModelsArgs,
       computeWeightsArgs = params$computeWeightsArgs,
       fitOutcomeModelArgs = fitOutcomeModelArgs,
-      censoringModels = censoringModels
+      censoringModels = censoringModels,
+      threads = if (is.null(params$bootstrapThreads)) 1 else params$bootstrapThreads
     )
   } else {
     outcomeModel <- fitOutcomeModel(weightedClones, fitOutcomeModelArgs)
