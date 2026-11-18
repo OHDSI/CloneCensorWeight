@@ -132,9 +132,10 @@ new defaults):
   outcome model is fit with each clone's weight times its person's count. Every step counts a person as
   often as its copies would (covariate tidying, the samples of `maxCohortSizeForFitting`, the percentile
   caps of the weights), so with `fixHyperparameters = TRUE` and cold starts the replicates equal those
-  of the copy bootstrap to the convergence tolerance of the fits (1e-6 or closer in the tests, for
-  pooled logistic and Cox censoring models, binary models, and Kaplan-Meier, Cox and pooled logistic
-  outcome models). By default the refits start from the full-data coefficients
+  of the copy bootstrap to the convergence tolerance of the fits (1e-6 or closer on the designs
+  checked: pooled logistic (both engines) and Cox censoring models, binary models, samples of
+  `maxCohortSizeForFitting`, `graceStart > 0`, `"neverInitiate"`, competing death, censoring models
+  shared across outcomes, and Kaplan-Meier, Cox and pooled logistic outcome models). By default the refits start from the full-data coefficients
   (`createBootstrapArgs(warmStart = TRUE)`), which moves the replicates within that tolerance.
   `method = "copy"` gives the earlier bootstrap. With `fixHyperparameters = FALSE` the two methods
   differ, because cross-validation on weighted persons draws other folds than on copies. In the
