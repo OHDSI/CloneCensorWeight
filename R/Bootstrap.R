@@ -274,7 +274,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
           sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate]),
           censoringWithoutOutcome = censoringWithoutOutcome,
           # Each replicate draws its own samples of the hazard models' risk sets (maxCohortSizeForFitting):
-          subsampleSeed = (.defaultSubsampleSeed(fitCensoringModelsArgs) + replicate) %% .Machine$integer.max
+          subsampleSeed = as.integer((as.numeric(.defaultSubsampleSeed(fitCensoringModelsArgs)) + replicate) %% .Machine$integer.max)
         )),
         error = function(e) conditionMessage(e)
       ),

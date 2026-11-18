@@ -746,7 +746,8 @@ TimeBasis <- R6Class(
 #' @param useCovariates            Use the baseline covariates in the censoring models?
 #' @param excludeCovariateIds      Exclude these covariates from the censoring models.
 #' @param includeCovariateIds      Include only these covariates in the censoring models.
-#' @param maxCohortSizeForFitting  The largest number of persons a censoring model is fit on. The
+#' @param maxCohortSizeForFitting  The largest number of persons (for the binary model: of starters
+#'                                 and of non-starters each) a censoring model is fit on. The
 #'                                 binary model at the end of the grace period samples its starters
 #'                                 and its non-starters to at most this many each (through
 #'                                 [CohortMethod::createPs()]). A hazard model (pooled logistic or Cox)

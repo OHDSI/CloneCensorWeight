@@ -11,7 +11,8 @@ new defaults):
   drawn with the seed of `control` without changing the caller's random number stream, and then
   predicts the linear predictor of every person. The numerator and denominator models, the
   cross-validation of the prior and the high-correlation check use the sample; a uniform sample of
-  persons needs no correction of the intercept. Each bootstrap replicate draws its own sample. The
+  persons needs no correction of the intercept. A sample with no initiations is not used (the model
+  is fit on the whole risk set). Each bootstrap replicate draws its own sample. The
   diagnostics of every censoring model record `sampled`, `sampleSize` and `sampleEvents`, and the
   fitting message says when a hazard model is sampled. `maxCohortSizeForFitting = 0` fits the hazard
   models to their whole risk set, as before; risk sets of at most 250,000 persons are not affected.

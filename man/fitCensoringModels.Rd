@@ -166,8 +166,9 @@ predictor is then computed for every person of the risk set. A uniform sample of
 correction of the intercept. With the indicator time basis, an interval in which no sampled person,
 or every one, at risk initiates, but not so in the whole risk set, gets the observed hazard of the
 whole risk set (shifted by the mean linear predictor of its persons in the model with covariates),
-so that persons outside the sample keep finite weights. The diagnostics of each model record whether
-it was sampled.
+so that persons outside the sample keep finite weights. A sample with no initiations, from a risk
+set with some, is not used: the model is then fit on the whole risk set. The diagnostics of each
+model record whether it was sampled.
 
 With \code{useCovariates = FALSE} the models have only an intercept and time, so they equal their
 numerator models.

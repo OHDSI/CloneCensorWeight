@@ -100,8 +100,9 @@
 #' correction of the intercept. With the indicator time basis, an interval in which no sampled person,
 #' or every one, at risk initiates, but not so in the whole risk set, gets the observed hazard of the
 #' whole risk set (shifted by the mean linear predictor of its persons in the model with covariates),
-#' so that persons outside the sample keep finite weights. The diagnostics of each model record whether
-#' it was sampled.
+#' so that persons outside the sample keep finite weights. A sample with no initiations, from a risk
+#' set with some, is not used: the model is then fit on the whole risk set. The diagnostics of each
+#' model record whether it was sampled.
 #'
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
@@ -505,23 +506,22 @@ fitCensoringModels <- function(clones,
   ))
 }
 
-# The seed of the samples of the hazard models' risk sets: that of control, or 1 when it has none.
+# The seed of the samples of the hazard models' risk sets: that of control (modulo
+# .Machine$integer.max), or 1 when it has none.
 .defaultSubsampleSeed <- function(fitCensoringModelsArgs) {
   seed <- fitCensoringModelsArgs$control$seed
-  return(if (is.null(seed)) 1L else as.integer(seed))
+  return(if (is.null(seed)) 1L else as.integer(as.numeric(seed) %% .Machine$integer.max))
 }
 
 # The persons a hazard model is fit on: its whole risk set or, when that holds more than
 # maxCohortSizeForFitting (> 0) persons, a uniform sample of that many persons (with all their rows),
-# drawn with `seed` and R's default random number kinds, leaving the caller's stream as it was.
+# drawn with `seed` and R's default random number kinds, leaving the caller's stream as it was. A
+# sample without initiations, from a risk set with some, would give a hazard of 0 to everyone, so the
+# whole risk set is used instead.
 .sampleRiskSet <- function(riskSet, maxCohortSizeForFitting, seed, description) {
   if (maxCohortSizeForFitting == 0 || nrow(riskSet) <= maxCohortSizeForFitting) {
     return(riskSet)
   }
-  message(sprintf(
-    "Fitting the %s on a uniform sample of %d of its %d persons (maxCohortSizeForFitting)",
-    description, as.integer(maxCohortSizeForFitting), nrow(riskSet)
-  ))
   index <- withr::with_seed(
     seed,
     sample.int(nrow(riskSet), maxCohortSizeForFitting),
@@ -529,7 +529,19 @@ fitCensoringModels <- function(clones,
     .rng_normal_kind = "Inversion",
     .rng_sample_kind = "Rejection"
   )
-  return(riskSet[sort(index), ])
+  fitSet <- riskSet[sort(index), , drop = FALSE]
+  if (sum(fitSet$y) == 0 && sum(riskSet$y) > 0) {
+    message(sprintf(
+      "Fitting the %s on all its %d persons: the sample of %d (maxCohortSizeForFitting) has no initiations",
+      description, nrow(riskSet), as.integer(maxCohortSizeForFitting)
+    ))
+    return(riskSet)
+  }
+  message(sprintf(
+    "Fitting the %s on a uniform sample of %d of its %d persons (maxCohortSizeForFitting)",
+    description, as.integer(maxCohortSizeForFitting), nrow(riskSet)
+  ))
+  return(fitSet)
 }
 
 # The sample diagnostics of a model fit on `fitSet`, the risk set or a sample of it.
@@ -822,9 +834,10 @@ fitCensoringModels <- function(clones,
       population$subjectId <- NULL
     }
     ps <- CohortMethod::createPs(cohortMethodData = view, population = population, createPsArgs = createPsArgs)
-    # createPs() samples the starters and the non-starters to at most maxCohortSizeForFitting each:
+    # createPs() samples the starters and the non-starters to at most maxCohortSizeForFitting each
+    # (only when it reaches the fit, not on its "..., so cannot fit model" paths):
     maxSize <- fitCensoringModelsArgs$maxCohortSizeForFitting
-    if (maxSize > 0) {
+    if (maxSize > 0 && !grepl("so cannot fit model$", attr(ps, "metaData")$psError)) {
       sampleEvents <- as.integer(min(sum(riskSet$y), maxSize))
       sample <- list(
         sampled = max(sum(riskSet$y), sum(1 - riskSet$y)) > maxSize,

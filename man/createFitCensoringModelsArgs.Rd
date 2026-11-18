@@ -70,7 +70,8 @@ observed until death but survivors only until their last record.}
 
 \item{includeCovariateIds}{Include only these covariates in the censoring models.}
 
-\item{maxCohortSizeForFitting}{The largest number of persons a censoring model is fit on. The
+\item{maxCohortSizeForFitting}{The largest number of persons (for the binary model: of starters
+and of non-starters each) a censoring model is fit on. The
 binary model at the end of the grace period samples its starters
 and its non-starters to at most this many each (through
 \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). A hazard model (pooled logistic or Cox)
