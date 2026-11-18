@@ -246,6 +246,10 @@ fitCensoringModels <- function(clones,
     }
   }
   .checkInitiateWithinHazardGrid(strategies, fitCensoringModelsArgs)
+  # Before any fit, so that a long run does not stop late:
+  if (fitCensoringModelsArgs$hazardModelType == "logistic" && fitCensoringModelsArgs$pooledLogisticEngine == "plr" && !.cyclopsHasPooledLogistic()) {
+    stop(sprintf("pooledLogisticEngine = \"plr\" needs a Cyclops with pooled logistic regression (modelType = \"plr\"), which the loaded Cyclops %s does not have. Install one that has it, or use pooledLogisticEngine = \"lr\" (the default), which gives the same fit with more memory", utils::packageVersion("Cyclops")))
+  }
   if (warnDay0CovariateWindows) {
     .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
   }
@@ -422,6 +426,10 @@ fitCensoringModels <- function(clones,
     argsList$hazardModelType <- NULL
     argsList$timeBasis <- NULL
     argsList$covariateTimeInteraction <- NULL
+    argsList$pooledLogisticEngine <- NULL
+  }
+  # The default engine is left out, so that the keys of models saved before the setting existed match:
+  if (identical(argsList$pooledLogisticEngine, "lr")) {
     argsList$pooledLogisticEngine <- NULL
   }
   return(paste(
@@ -1048,7 +1056,6 @@ fitCensoringModels <- function(clones,
     covariates <- tibble(rowId = numeric(0), covariateId = numeric(0), covariateValue = numeric(0))
   } else {
     covariates <- collect(covariates)
-    covariates <- covariates[covariates$rowId %in% outcomes$rowId, , drop = FALSE]
   }
   columnIds <- basisIds[match(colnames(interactionBasis), colnames(basis))]
   extra <- is.na(columnIds)
@@ -1140,9 +1147,6 @@ fitCensoringModels <- function(clones,
   # The engine: "lr" expands the rows (person x interval) with their covariates in Andromeda; "plr" keeps
   # the covariates one row per person and gives Cyclops the intervals (.createPooledRows()).
   engine <- fitCensoringModelsArgs$pooledLogisticEngine
-  if (engine == "plr" && !.cyclopsHasPooledLogistic()) {
-    stop(sprintf("pooledLogisticEngine = \"plr\" needs a Cyclops with pooled logistic regression (modelType = \"plr\"), which the loaded Cyclops %s does not have. Install one that has it, or use pooledLogisticEngine = \"lr\" (the default), which gives the same fit with more memory", utils::packageVersion("Cyclops")))
-  }
   if (engine == "lr") {
     covariateData$interactionRef <- interactionRef
     covariateData$interactionBasis <- tibble(
@@ -1233,8 +1237,13 @@ fitCensoringModels <- function(clones,
     fitNumerator <- function() {
       .fitPooledRows(pooled, NULL, basis, basisIds, presentBasisIds, interactionRef[0, ], interactionBasis[, 0, drop = FALSE], rowIntervals, Cyclops::createPrior("none"), fitCensoringModelsArgs)
     }
+    # Only the covariates of the persons with rows (the fit sample) leave Andromeda:
+    covariateData$pooledPersons <- pooled$persons |>
+      select("rowId")
+    fitCovariates <- covariateData$covariates |>
+      dplyr::inner_join(covariateData$pooledPersons, by = "rowId")
     fitDenominator <- function(prior) {
-      .fitPooledRows(pooled, covariateData$covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs)
+      .fitPooledRows(pooled, fitCovariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs)
     }
   }
   events <- sum(fitSet$y)

@@ -578,7 +578,8 @@ TimeBasis <- R6Class(
 #' interval, or as a list when the indicator basis leaves out an interval), the time basis per interval
 #' and the interactions as covariate-by-basis products, so its memory stays near that of one row per
 #' person. A `"day0"` interaction column that is not a basis column enters with its main effect fixed
-#' at 0. With a fixed prior variance (or no prior) the two engines agree to about 1e-7 in the
+#' at 0. With a fixed prior variance (or no prior, when the maximum likelihood estimate exists) the two
+#' engines agree to about 1e-6 in the
 #' coefficients and weights. With cross-validation they can choose different variances: the
 #' Cyclops version with plr can pick a much smaller variance than `"lr"` on the same data (for
 #' example with `fold = 5`, or on a sample of the risk set), and when its data-driven
