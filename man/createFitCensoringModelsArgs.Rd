@@ -133,12 +133,13 @@ and the interactions as covariate-by-basis products, so its memory stays near th
 person. A \code{"day0"} interaction column that is not a basis column enters with its main effect fixed
 at 0. With a fixed prior variance (or no prior, when the maximum likelihood estimate exists) the two
 engines agree to about 1e-6 in the
-coefficients and weights. With cross-validation they can choose different variances: the
-Cyclops version with plr can pick a much smaller variance than \code{"lr"} on the same data (for
-example with \code{fold = 5}, or on a sample of the risk set), and when its data-driven
-\code{startingVariance} (the default \code{-1}) is left to it, it starts from a value set by the number of
-persons rather than person-intervals. \code{"plr"} also does not flag separation in the interaction
-columns, which \code{"lr"} reports as a failed fit. So \code{"lr"} stays the default.
+coefficients and weights. With cross-validation, the plr Cyclops (local branch \code{ccw-plr} at
+\verb{2b211c6a} or later) flags separation in the time-basis and interaction columns as \code{"lr"} does,
+and starts its data-driven \code{startingVariance} (the default \code{-1}) from the person-interval rows, so
+on a test case it selected the variance \code{"lr"} selects; with a \code{"day0"} interaction its start
+differs slightly from \code{"lr"}'s (about 1e-4 relative), because the fixed main effect counts as a
+column. Earlier plr builds could pick a much smaller variance (for example with \code{fold = 5}). plr
+is not yet in a released Cyclops, so \code{"lr"} stays the default.
 
 \code{maxCohortSizeForFitting} applies to every censoring model: the binary models at the end of the
 grace period sample their starters and non-starters (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}), and a
