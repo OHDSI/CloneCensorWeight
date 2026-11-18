@@ -59,9 +59,11 @@ number of replicates.}
 \item{threads}{The number of parallel workers for the replicates. Each worker loads
 its own copy of \code{cloneCensorWeightData} (and, with the reweight
 bootstrap, builds the Cyclops data of the censoring models once), so
-memory grows with the number of workers. Each replicate depends only
-on its counts, so the results do not depend on the number of
-workers. The Cyclops threads of each fit are set by the \code{control} of
+memory grows with the number of workers. With the reweight bootstrap,
+each replicate depends only on its counts, so the results do not
+depend on the number of workers; with \code{method = "copy"}, a binary
+model sampled by \code{maxCohortSizeForFitting} draws from the random
+number generator of its worker, so they can. The Cyclops threads of each fit are set by the \code{control} of
 the censoring and outcome model arguments.}
 }
 \value{
@@ -127,9 +129,7 @@ full-data fit has; otherwise it builds Cyclops data of its own. The binary model
 methods (their sampling is seeded per replicate in the reweight bootstrap). The two methods differ
 (beyond the tolerance) when the hyperparameters are not fixed: with \code{fixHyperparameters = FALSE}
 the reweight bootstrap cross-validates on the weighted persons, whose folds differ from those of the
-copies. They also differ when the study population depends on which persons are in the data (for
-example with \code{restrictToCommonPeriod = TRUE} in \code{createStudyPopulationArgs}): the reweight bootstrap
-keeps the full data's.
+copies.
 
 With \code{bootstrapArgs$fixHyperparameters = TRUE}, the covariate models of the censoring
 models use the prior variances of the full-data fit (chosen by cross-validation, for example) in

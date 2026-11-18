@@ -56,9 +56,7 @@
 #' methods (their sampling is seeded per replicate in the reweight bootstrap). The two methods differ
 #' (beyond the tolerance) when the hyperparameters are not fixed: with `fixHyperparameters = FALSE`
 #' the reweight bootstrap cross-validates on the weighted persons, whose folds differ from those of the
-#' copies. They also differ when the study population depends on which persons are in the data (for
-#' example with `restrictToCommonPeriod = TRUE` in `createStudyPopulationArgs`): the reweight bootstrap
-#' keeps the full data's.
+#' copies.
 #'
 #' With `bootstrapArgs$fixHyperparameters = TRUE`, the covariate models of the censoring
 #' models use the prior variances of the full-data fit (chosen by cross-validation, for example) in
@@ -143,9 +141,11 @@
 #' @param threads                   The number of parallel workers for the replicates. Each worker loads
 #'                                  its own copy of `cloneCensorWeightData` (and, with the reweight
 #'                                  bootstrap, builds the Cyclops data of the censoring models once), so
-#'                                  memory grows with the number of workers. Each replicate depends only
-#'                                  on its counts, so the results do not depend on the number of
-#'                                  workers. The Cyclops threads of each fit are set by the `control` of
+#'                                  memory grows with the number of workers. With the reweight bootstrap,
+#'                                  each replicate depends only on its counts, so the results do not
+#'                                  depend on the number of workers; with `method = "copy"`, a binary
+#'                                  model sampled by `maxCohortSizeForFitting` draws from the random
+#'                                  number generator of its worker, so they can. The Cyclops threads of each fit are set by the `control` of
 #'                                  the censoring and outcome model arguments.
 #'
 #' @return
@@ -472,8 +472,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
 
 # Runs the replicates (`counts`: one column per replicate) of `setup` (see bootstrapCcwAnalysis()) on
 # `threads` parallel workers, each with its own copy of the data, and returns one result per replicate
-# (.bootstrapReplicate()). Every replicate is a function of its counts only (the warm starts are the
-# full-data coefficients in `setup`), so the results do not depend on the number of workers.
+# (.bootstrapReplicate()). Every reweight replicate is a function of its counts only (the warm starts
+# are the full-data coefficients in `setup`), so its results do not depend on the number of workers.
 .runBootstrapReplicates <- function(cloneCensorWeightData, setup, counts, threads) {
   replicateIds <- seq_len(ncol(counts))
   threads <- min(threads, length(replicateIds))

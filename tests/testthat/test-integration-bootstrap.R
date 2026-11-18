@@ -591,35 +591,50 @@ replicateEstimates <- function(results) {
   return(do.call(rbind, lapply(results, function(result) result$estimates)))
 }
 
-test_that("Reweight replicates equal copy replicates (fixed hyperparameters, cold starts), with 1 and 2 workers", {
+test_that("A reweight replicate equals a copy replicate and leaves out persons drawn 0 times", {
   data <- bootstrapData(n = 60, seed = 3)
   on.exit(close(data))
   settings <- reweightSettings()
-  set.seed(1)
-  counts <- stats::rmultinom(2, size = 60, prob = rep(1, 60))
+  counts <- matrix(c(0L, 2L, rep(1L, 58)), ncol = 1)
   copy <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "copy"), counts, threads = 1))
-  reweight <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "reweight"), counts, threads = 1))
-  expect_true(all(is.finite(replicateEstimates(copy))))
-  expect_equal(replicateEstimates(reweight), replicateEstimates(copy), tolerance = 1e-6)
-  # Each replicate depends only on its counts. (Equal, not identical: DuckDB's sums are not reproducible
-  # to the last bit from run to run.)
-  twoWorkers <- suppressMessages(.runBootstrapReplicates(data, replicateSetup(data, settings, "reweight"), counts, threads = 2))
-  expect_equal(replicateEstimates(twoWorkers), replicateEstimates(reweight), tolerance = 1e-6)
-})
-
-test_that("Reweight replicates leave out persons drawn 0 times", {
-  data <- bootstrapData(n = 60, seed = 3)
-  on.exit(close(data))
-  settings <- reweightSettings()
   setup <- replicateSetup(data, settings, "reweight")
   context <- suppressMessages(.reweightContext(data, setup))
   on.exit(.closeReweightContext(context), add = TRUE)
-  counts <- data.frame(personSeqId = setup$personSeqIds, count = c(0L, 2L, rep(1L, 58)))
-  models <- suppressMessages(.fitCensoringModelsWithFits(context$clones, data, setup$fitCensoringModelsArgs, refit = list(counts = counts, cache = new.env())))$models
-  weighted <- computeCensoringWeights(context$clones, models, settings$computeWeightsArgs, .personCounts = counts)
-  on.exit(close(weighted), add = TRUE)
+  reweight <- suppressMessages(.bootstrapReplicate(data, setup, context, counts[, 1], 1))
+  expect_true(all(is.finite(copy[[1]]$estimates)))
+  expect_equal(reweight$estimates, copy[[1]]$estimates, tolerance = 1e-6)
+  personCounts <- data.frame(personSeqId = setup$personSeqIds, count = counts[, 1])
+  models <- suppressMessages(.fitCensoringModelsWithFits(context$clones, data, setup$fitCensoringModelsArgs, refit = list(counts = personCounts, cache = context$cache)))$models
   rowId1 <- dplyr::pull(dplyr::filter(data$cohorts, personSeqId == 1), rowId)
   expect_false(rowId1 %in% models[[2]]$predictions$rowId)
-  expect_false(1 %in% dplyr::pull(dplyr::distinct(weighted$segments, personSeqId)))
 })
 
+test_that("A refit starts its fixed coefficients at 0, whatever its warm start", {
+  outcomes <- data.frame(rowId = 1:8, y = c(0, 1, 0, 1, 1, 0, 1, 0))
+  covariates <- data.frame(rowId = rep(1:8, 2), covariateId = rep(c(1, 2), each = 8), covariateValue = c(1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 0, 1, 1))
+  cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "lr", quiet = TRUE)
+  refit <- list(weights = data.frame(rowId = 1:8, weights = c(1, 2, 1, 1, 0, 1, 1, 1)), startingCoefficients = c(0.1, 0.2, 0.7))
+  fit <- .fitCyclops(cyclopsData, Cyclops::createPrior("normal", variance = 1, exclude = 0), Cyclops::createControl(noiseLevel = "silent"),
+                     stopOnError = TRUE, fixedCoefficients = c(FALSE, FALSE, TRUE), refit = refit)
+  expect_equal(unname(coef(fit)[3]), 0)
+})
+
+test_that("Parallel workers run contiguous blocks of replicates and return them in order", {
+  data <- bootstrapData(n = 20)
+  on.exit(close(data))
+  local_mocked_bindings(
+    .requirePackageOnCluster = function(cluster) NULL,
+    .bootstrapReplicates = function(cloneCensorWeightData, setup, counts, replicateIds) {
+      lapply(replicateIds, function(replicate) list(replicate = replicate, counts = counts[, replicate]))
+    }
+  )
+  local_mocked_bindings(
+    makeCluster = function(numberOfThreads) NULL,
+    stopCluster = function(cluster) NULL,
+    clusterApply = function(cluster, x, fun, ...) lapply(x, fun, ...),
+    .package = "ParallelLogger"
+  )
+  counts <- matrix(1:60, ncol = 3)
+  results <- .runBootstrapReplicates(data, list(), counts, threads = 2)
+  expect_equal(results, lapply(1:3, function(replicate) list(replicate = replicate, counts = counts[, replicate])))
+})

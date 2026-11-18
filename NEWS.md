@@ -136,7 +136,9 @@ new defaults):
   checked: pooled logistic (both engines) and Cox censoring models, binary models, samples of
   `maxCohortSizeForFitting`, `graceStart > 0`, `"neverInitiate"`, competing death, censoring models
   shared across outcomes, and Kaplan-Meier, Cox and pooled logistic outcome models). By default the refits start from the full-data coefficients
-  (`createBootstrapArgs(warmStart = TRUE)`), which moves the replicates within that tolerance.
+  (`createBootstrapArgs(warmStart = TRUE)`), which moves the replicates by about 1e-9 with pooled
+  logistic censoring models and up to about 5e-5 with Cox censoring models; covariates fixed at 0 in a
+  replicate start at 0.
   `method = "copy"` gives the earlier bootstrap. With `fixHyperparameters = FALSE` the two methods
   differ, because cross-validation on weighted persons draws other folds than on copies. In the
   reweight bootstrap the binary models' sampling (`maxCohortSizeForFitting`) is seeded per replicate.
@@ -145,8 +147,8 @@ New features:
 
 * `bootstrapCcwAnalysis(threads = )` runs the replicates on parallel workers (and
   `createCcwMultiThreadingSettings(bootstrapThreads = )` in `runCcwAnalyses()`, default 1). Each
-  replicate depends only on its counts, so the results do not depend on the number of workers (up to
-  the last bits of DuckDB's sums, which also vary from run to run). `metaData$bootstrap$replicateStatus`
+  reweight replicate depends only on its counts, so the results do not depend on the number of workers
+  (up to the last bits of DuckDB's sums, which also vary from run to run). `metaData$bootstrap$replicateStatus`
   gives each replicate's status, the reason it failed, and the statuses of its censoring model fits
   that did not succeed (`censoringStatus`); failed replicates are counted and reported, as before.
 

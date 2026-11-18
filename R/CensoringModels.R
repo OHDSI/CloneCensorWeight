@@ -687,11 +687,15 @@ fitCensoringModels <- function(clones,
   return(paste(strsplit(key, " ", fixed = TRUE)[[1]][1:3], collapse = " "))
 }
 
-# The full-data fits of CcwCensoringModels named by .startingFitKey(), for warm starts.
+# The coefficients (and numerator coefficients) of the full-data fits of CcwCensoringModels, named by
+# .startingFitKey(), for warm starts.
 .startingFitsFromModels <- function(censoringModels) {
   fits <- list()
   add <- function(component, treatment, model) {
-    fits[[paste(component, treatment, as.integer(model$horizon))]] <<- model
+    fits[[paste(component, treatment, as.integer(model$horizon))]] <<- list(
+      coefficients = model$coefficients,
+      numerator = list(coefficients = model$numerator$coefficients)
+    )
   }
   for (model in censoringModels) {
     firstDay <- if (is.null(model$firstDay)) 0L else model$firstDay
@@ -1031,6 +1035,10 @@ fitCensoringModels <- function(clones,
 .fitCyclops <- function(cyclopsData, prior, control, stopOnError, fixedCoefficients = NULL, refit = NULL) {
   if (!is.null(refit)) {
     Cyclops::updateWeights(cyclopsData, refit$weights)
+    # Cyclops holds a fixed coefficient at its start, and fixed covariates are fixed at 0:
+    if (!is.null(refit$startingCoefficients) && !is.null(fixedCoefficients)) {
+      refit$startingCoefficients[fixedCoefficients] <- 0
+    }
   }
   cyclopsFit <- tryCatch(
     Cyclops::fitCyclopsModel(
@@ -1167,9 +1175,12 @@ fitCensoringModels <- function(clones,
 # (maxCohortSizeForFitting) with R's random number generator, which `seed` seeds, so that a replicate does
 # not depend on the replicates before it.
 .fitWeightedBinaryCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, seed) {
+  withSeed <- function(code) {
+    withr::with_seed(seed, code, .rng_kind = "Mersenne-Twister", .rng_normal_kind = "Inversion", .rng_sample_kind = "Rejection")
+  }
   if (all(riskSet[["frequency"]] == 1)) {
     riskSet[["frequency"]] <- NULL
-    return(.fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior))
+    return(withSeed(.fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)))
   }
   copies <- .copyRows(riskSet)
   rows <- copies$rows
@@ -1180,13 +1191,7 @@ fitCensoringModels <- function(clones,
     y = copies$sorted$y[rows]
   )
   rowIdMap <- tibble(newRowId = copied$rowId, rowId = copies$sorted$rowId[rows])
-  model <- withr::with_seed(
-    seed,
-    .fitBinaryCensoringModel(copied, cloneCensorWeightData, fitCensoringModelsArgs, prior, rowIdMap = rowIdMap),
-    .rng_kind = "Mersenne-Twister",
-    .rng_normal_kind = "Inversion",
-    .rng_sample_kind = "Rejection"
-  )
+  model <- withSeed(.fitBinaryCensoringModel(copied, cloneCensorWeightData, fitCensoringModelsArgs, prior, rowIdMap = rowIdMap))
   first <- match(riskSet$rowId, rowIdMap$rowId)
   model$predictions <- tibble(rowId = riskSet$rowId, propensityScore = model$predictions$propensityScore[first])
   return(model)
