@@ -57,8 +57,9 @@ the design choices compared, including \code{graceRegime}), the models
 that depend on those
 settings are fit again. For example, the binary model at G is
 reused when only the hazard model's settings (\code{timeBasis} or
-\code{hazardModelType}) differ, and the hazard models when only
-\code{maxCohortSizeForFitting} differs.}
+\code{hazardModelType}) differ. Every model is fit again when
+\code{maxCohortSizeForFitting} differs, since it can sample both the
+binary and the hazard models.}
 }
 \value{
 An object of class \code{CcwDiagnostics}: a list with \code{variants} (a tibble with \code{variant},

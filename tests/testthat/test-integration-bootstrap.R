@@ -352,7 +352,7 @@ test_that("With fixHyperparameters, replicates use the full-data prior variances
 
   realFitCensoringModels <- fitCensoringModels
   calls <- list()
-  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL, .subsampleSeed = NULL) {
     models <- realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances, .sourcePersonSeqIds)
     calls[[length(calls) + 1]] <<- list(fixed = .fixedPriorVariances, fitted = lapply(models, function(model) model$priorVariance))
     return(models)
@@ -437,7 +437,7 @@ test_that("Replicates give the censoring models the person each copy was drawn f
     dplyr::arrange(personSeqId)
   realFitCensoringModels <- fitCensoringModels
   calls <- list()
-  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL, .subsampleSeed = NULL) {
     copies <- dplyr::collect(cloneCensorWeightData$cohorts) |>
       dplyr::distinct(personSeqId, personId)
     calls[[length(calls) + 1]] <<- list(copies = copies, sources = .sourcePersonSeqIds)
@@ -548,7 +548,7 @@ test_that("Replicates fit the censoring models without the high-correlation chec
   expect_true(settings$fitCensoringModelsArgs$errorOnHighCorrelation)
   realFitCensoringModels <- fitCensoringModels
   checks <- logical(0)
-  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL) {
+  local_mocked_bindings(fitCensoringModels = function(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances = NULL, .sourcePersonSeqIds = NULL, .subsampleSeed = NULL) {
     checks <<- c(checks, fitCensoringModelsArgs$errorOnHighCorrelation)
     return(realFitCensoringModels(clones, cloneCensorWeightData, fitCensoringModelsArgs, .fixedPriorVariances, .sourcePersonSeqIds))
   })

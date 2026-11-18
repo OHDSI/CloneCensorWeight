@@ -90,8 +90,18 @@
 #' confounded. For long horizons, prefer the pooled logistic model, with a longer `intervalLength` if
 #' daily intervals are too costly.
 #'
-#' `maxCohortSizeForFitting` applies only to the binary models (through [CohortMethod::createPs()]);
-#' in this version the hazard models are always fitted to their whole risk set.
+#' `maxCohortSizeForFitting` (`0`: no sampling) applies to every model. The binary models sample
+#' their starters and non-starters to at most that many each (through [CohortMethod::createPs()]). A
+#' hazard model whose risk set holds more persons than that is fit on a uniform sample of that many
+#' persons, with all their rows, drawn with the seed of `control` (1 when it has none) without
+#' changing the caller's random number stream: its numerator and denominator models, the
+#' cross-validation of the prior and the high-correlation check use the sample, and the linear
+#' predictor is then computed for every person of the risk set. A uniform sample of persons needs no
+#' correction of the intercept. With the indicator time basis, an interval in which no sampled person,
+#' or every one, at risk initiates, but not so in the whole risk set, gets the observed hazard of the
+#' whole risk set (shifted by the mean linear predictor of its persons in the model with covariates),
+#' so that persons outside the sample keep finite weights. The diagnostics of each model record whether
+#' it was sampled.
 #'
 #' With `useCovariates = FALSE` the models have only an intercept and time, so they equal their
 #' numerator models.
@@ -121,6 +131,9 @@
 #'                               `personSeqId` of each person and the `sourcePersonSeqId` of the person
 #'                               it is a copy of. Copies of one person stay in one cross-validation fold
 #'                               of every censoring model.
+#' @param .subsampleSeed         For internal use (the bootstrap): `NULL`, or the seed of the samples
+#'                               of the hazard models' risk sets (see `maxCohortSizeForFitting`), in
+#'                               place of the seed of `control`.
 #'
 #' @return
 #' An object of class `CcwCensoringModels`: a list with one element per strategy (in strategy order),
@@ -146,8 +159,10 @@
 #'   interval `k` is `baseline + linearPredictor + sum(basis[k, ] * value)`.
 #' - `numerator`: the model without covariates (`propensityScore`; `baselineHazard`; or
 #'   `coefficients` and `intervals`).
-#' - `diagnostics`: risk-set size, number of rows, events (initiations or starts by `G`), the AUC
-#'   (binary models), and the fitting status.
+#' - `diagnostics`: risk-set size, number of rows in the fit, events (initiations or starts by `G`),
+#'   the AUC (binary models), the fitting status, and the sample the model was fit on (see
+#'   `maxCohortSizeForFitting`): `sampled` (`TRUE` when it was fit on a sample of the risk set),
+#'   `sampleSize` (persons) and `sampleEvents`.
 #' - `postGrace` (`"notInitiateWithin"` strategies with `postGraceModel = "binary"` only): the binary
 #'   model at `G` whose `1 - propensityScore` gives the weights after `G`, a list with the elements of
 #'   a binary model above (`kind`, `horizon`, `modelType`, `coefficients`, `priorVariance`,
@@ -179,7 +194,8 @@ fitCensoringModels <- function(clones,
                                cloneCensorWeightData,
                                fitCensoringModelsArgs = createFitCensoringModelsArgs(),
                                .fixedPriorVariances = NULL,
-                               .sourcePersonSeqIds = NULL) {
+                               .sourcePersonSeqIds = NULL,
+                               .subsampleSeed = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
@@ -189,6 +205,7 @@ fitCensoringModels <- function(clones,
     checkmate::assertSubset(names(.fixedPriorVariances), c("1", "2", "1.postGrace", "2.postGrace", "1.early", "2.early"), empty.ok = FALSE, add = errorMessages)
   }
   checkmate::assertDataFrame(.sourcePersonSeqIds, null.ok = TRUE, add = errorMessages)
+  checkmate::assertInt(.subsampleSeed, null.ok = TRUE, add = errorMessages)
   if (!is.null(.sourcePersonSeqIds)) {
     checkmate::assertNames(names(.sourcePersonSeqIds), must.include = c("personSeqId", "sourcePersonSeqId"), add = errorMessages)
   }
@@ -199,7 +216,8 @@ fitCensoringModels <- function(clones,
     cloneCensorWeightData = cloneCensorWeightData,
     fitCensoringModelsArgs = fitCensoringModelsArgs,
     fixedPriorVariances = .fixedPriorVariances,
-    sourcePersonSeqIds = .sourcePersonSeqIds
+    sourcePersonSeqIds = .sourcePersonSeqIds,
+    subsampleSeed = .subsampleSeed
   )$models)
 }
 
@@ -214,6 +232,7 @@ fitCensoringModels <- function(clones,
                                         fitCensoringModelsArgs,
                                         fixedPriorVariances = NULL,
                                         sourcePersonSeqIds = NULL,
+                                        subsampleSeed = NULL,
                                         fits = list(),
                                         warnDay0CovariateWindows = TRUE,
                                         warnNaturalGrace = TRUE) {
@@ -242,6 +261,9 @@ fitCensoringModels <- function(clones,
   }
   maxRiskEnd <- if (nrow(persons) == 0) 0L else max(persons$riskEnd)
   argsList <- fitCensoringModelsArgs$toList()
+  if (is.null(subsampleSeed)) {
+    subsampleSeed <- .defaultSubsampleSeed(fitCensoringModelsArgs)
+  }
 
   models <- list()
   # The keys of the fits used by this call: a key used by an earlier strategy is shared with it.
@@ -276,10 +298,11 @@ fitCensoringModels <- function(clones,
           .fitBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
         } else {
           riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+          fitSet <- .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
           if (fitCensoringModelsArgs$hazardModelType == "cox") {
-            .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior)
+            .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet)
           } else {
-            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description)
+            .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description, fitSet)
           }
         }
       },
@@ -383,7 +406,9 @@ fitCensoringModels <- function(clones,
 # The key of a fitted model: its component (.censoringFitComponent()), treatment, horizon, fixed prior
 # variance ("cv": none) and the settings (`argsList`, from FitCensoringModelsArgs$toList()) the fit
 # depends on. The design choices postGraceModel and initiateWithinModel choose between fits, so they
-# are not part of it, and the binary model at G does not depend on the hazard model's settings.
+# are not part of it, and the binary model at G does not depend on the hazard model's settings. Every
+# model depends on maxCohortSizeForFitting (and the seed of control, which draws the hazard models'
+# samples).
 .censoringFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
   argsList$postGraceModel <- NULL
   argsList$initiateWithinModel <- NULL
@@ -395,8 +420,6 @@ fitCensoringModels <- function(clones,
     argsList$hazardModelType <- NULL
     argsList$timeBasis <- NULL
     argsList$covariateTimeInteraction <- NULL
-  } else {
-    argsList$maxCohortSizeForFitting <- NULL
   }
   return(paste(
     component,
@@ -480,6 +503,38 @@ fitCensoringModels <- function(clones,
     lastDay = as.integer(lastDay[inRiskSet]),
     y = as.integer(initiated[inRiskSet])
   ))
+}
+
+# The seed of the samples of the hazard models' risk sets: that of control, or 1 when it has none.
+.defaultSubsampleSeed <- function(fitCensoringModelsArgs) {
+  seed <- fitCensoringModelsArgs$control$seed
+  return(if (is.null(seed)) 1L else as.integer(seed))
+}
+
+# The persons a hazard model is fit on: its whole risk set or, when that holds more than
+# maxCohortSizeForFitting (> 0) persons, a uniform sample of that many persons (with all their rows),
+# drawn with `seed` and R's default random number kinds, leaving the caller's stream as it was.
+.sampleRiskSet <- function(riskSet, maxCohortSizeForFitting, seed, description) {
+  if (maxCohortSizeForFitting == 0 || nrow(riskSet) <= maxCohortSizeForFitting) {
+    return(riskSet)
+  }
+  message(sprintf(
+    "Fitting the %s on a uniform sample of %d of its %d persons (maxCohortSizeForFitting)",
+    description, as.integer(maxCohortSizeForFitting), nrow(riskSet)
+  ))
+  index <- withr::with_seed(
+    seed,
+    sample.int(nrow(riskSet), maxCohortSizeForFitting),
+    .rng_kind = "Mersenne-Twister",
+    .rng_normal_kind = "Inversion",
+    .rng_sample_kind = "Rejection"
+  )
+  return(riskSet[sort(index), ])
+}
+
+# The sample diagnostics of a model fit on `fitSet`, the risk set or a sample of it.
+.sampleDiagnostics <- function(riskSet, fitSet) {
+  return(list(sampled = nrow(fitSet) < nrow(riskSet), sampleSize = nrow(fitSet), sampleEvents = sum(fitSet$y)))
 }
 
 # The first day of the binary model at G of an initiateWithin strategy: its risk set holds the persons
@@ -739,6 +794,7 @@ fitCensoringModels <- function(clones,
   error <- "OK"
   auc <- NA_real_
   propensityScore <- rep(marginal, nrow(riskSet))
+  sample <- .sampleDiagnostics(riskSet, riskSet)
   hasCovariates <- FALSE
   if (fitCensoringModelsArgs$useCovariates && length(unique(riskSet$y)) == 2) {
     view <- .createCmDataView(
@@ -766,6 +822,16 @@ fitCensoringModels <- function(clones,
       population$subjectId <- NULL
     }
     ps <- CohortMethod::createPs(cohortMethodData = view, population = population, createPsArgs = createPsArgs)
+    # createPs() samples the starters and the non-starters to at most maxCohortSizeForFitting each:
+    maxSize <- fitCensoringModelsArgs$maxCohortSizeForFitting
+    if (maxSize > 0) {
+      sampleEvents <- as.integer(min(sum(riskSet$y), maxSize))
+      sample <- list(
+        sampled = max(sum(riskSet$y), sum(1 - riskSet$y)) > maxSize,
+        sampleSize = sampleEvents + as.integer(min(sum(1 - riskSet$y), maxSize)),
+        sampleEvents = sampleEvents
+      )
+    }
     psMetaData <- attr(ps, "metaData")
     error <- psMetaData$psError
     if (error == "OK") {
@@ -788,12 +854,15 @@ fitCensoringModels <- function(clones,
     priorVariance = priorVariance,
     predictions = tibble(rowId = riskSet$rowId, propensityScore = propensityScore),
     numerator = list(propensityScore = marginal),
-    diagnostics = list(
-      riskSetSize = nrow(riskSet),
-      rows = nrow(riskSet),
-      events = sum(riskSet$y),
-      auc = auc,
-      status = error
+    diagnostics = c(
+      list(
+        riskSetSize = nrow(riskSet),
+        rows = nrow(riskSet),
+        events = sum(riskSet$y),
+        auc = auc,
+        status = error
+      ),
+      sample
     )
   ))
 }
@@ -815,15 +884,18 @@ fitCensoringModels <- function(clones,
   return(tibble(time = as.numeric(times[isEventTime]), cumHazard = cumsum(events[isEventTime] / atRisk[isEventTime])))
 }
 
-.fitCoxCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior) {
+# Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
+# of the risk set.
+.fitCoxCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet = riskSet) {
   riskSet$time <- riskSet$lastDay + 1
-  numeratorHazard <- .computeBreslowHazard(riskSet$time, riskSet$y)
+  fitSet$time <- fitSet$lastDay + 1
+  numeratorHazard <- .computeBreslowHazard(fitSet$time, fitSet$y)
   coefficients <- numeric(0)
   priorVariance <- NA_real_
   error <- "OK"
   linearPredictor <- rep(0, nrow(riskSet))
   covariateData <- NULL
-  if (sum(riskSet$y) > 0) {
+  if (sum(fitSet$y) > 0) {
     covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs)
   }
   if (!is.null(covariateData)) {
@@ -832,13 +904,14 @@ fitCensoringModels <- function(clones,
       dplyr::distinct(.data$covariateId) |>
       pull()
     if (length(covariateIds) > 0) {
-      error <- .checkHighCorrelation(covariateData, riskSet, fitCensoringModelsArgs)
+      error <- .checkHighCorrelation(covariateData, fitSet, fitCensoringModelsArgs)
       if (is.null(error)) {
         error <- "OK"
         # One row per person, so subjects matter only when persons share one (copies in a bootstrap
-        # replicate); without them each row is its own fold unit.
-        outcomeColumns <- c("rowId", "y", "time", if (anyDuplicated(riskSet$subjectId) > 0) "subjectId")
-        covariateData$outcomes <- riskSet |>
+        # replicate); without them each row is its own fold unit. Cyclops leaves out the covariates of
+        # persons outside the sample.
+        outcomeColumns <- c("rowId", "y", "time", if (anyDuplicated(fitSet$subjectId) > 0) "subjectId")
+        covariateData$outcomes <- fitSet |>
           select(dplyr::all_of(outcomeColumns))
         cyclopsData <- Cyclops::convertToCyclopsData(
           covariateData$outcomes,
@@ -864,7 +937,7 @@ fitCensoringModels <- function(clones,
   baselineHazard <- if (length(coefficients) == 0) {
     numeratorHazard
   } else {
-    .computeBreslowHazard(riskSet$time, riskSet$y, linearPredictor)
+    .computeBreslowHazard(fitSet$time, fitSet$y, linearPredictor[match(fitSet$rowId, riskSet$rowId)])
   }
   return(list(
     modelType = "cox",
@@ -873,12 +946,15 @@ fitCensoringModels <- function(clones,
     predictions = tibble(rowId = riskSet$rowId, linearPredictor = linearPredictor),
     baselineHazard = baselineHazard,
     numerator = list(baselineHazard = numeratorHazard),
-    diagnostics = list(
-      riskSetSize = nrow(riskSet),
-      rows = nrow(riskSet),
-      events = sum(riskSet$y),
-      auc = NA_real_,
-      status = error
+    diagnostics = c(
+      list(
+        riskSetSize = nrow(riskSet),
+        rows = nrow(fitSet),
+        events = sum(riskSet$y),
+        auc = NA_real_,
+        status = error
+      ),
+      .sampleDiagnostics(riskSet, fitSet)
     )
   ))
 }
@@ -903,7 +979,9 @@ fitCensoringModels <- function(clones,
   return(c("(Intercept)" = stats::qlogis(meanY)))
 }
 
-.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model") {
+# Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
+# of the risk set.
+.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet) {
   intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
   nIntervals <- horizon %/% intervalLength + 1L
   k <- seq_len(nIntervals) - 1L
@@ -913,6 +991,7 @@ fitCensoringModels <- function(clones,
     endDay = pmin((k + 1L) * intervalLength - 1L, horizon)
   )
   riskSet$lastInterval <- riskSet$lastDay %/% intervalLength
+  fitSet$lastInterval <- fitSet$lastDay %/% intervalLength
   # With the indicator basis, the hazard of an interval without initiations is 0, and that of an
   # interval in which everyone at risk initiates is 1 (its coefficient is -Inf or Inf at the maximum
   # likelihood). The rows of these intervals carry no information on the other coefficients. So they
@@ -920,9 +999,9 @@ fitCensoringModels <- function(clones,
   # limit of the fit, which would otherwise not converge.
   fitIntervals <- k
   fullIntervals <- integer(0)
-  if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(riskSet$y) > 0) {
-    initiations <- tabulate(riskSet$lastInterval[riskSet$y == 1] + 1L, nbins = nIntervals)
-    atRisk <- rev(cumsum(rev(tabulate(riskSet$lastInterval + 1L, nbins = nIntervals))))
+  if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(fitSet$y) > 0) {
+    initiations <- tabulate(fitSet$lastInterval[fitSet$y == 1] + 1L, nbins = nIntervals)
+    atRisk <- rev(cumsum(rev(tabulate(fitSet$lastInterval + 1L, nbins = nIntervals))))
     fullIntervals <- k[initiations > 0 & initiations == atRisk]
     fitIntervals <- k[initiations > 0 & initiations < atRisk]
   }
@@ -939,7 +1018,7 @@ fitCensoringModels <- function(clones,
     dplyr::distinct(.data$covariateId) |>
     pull()
   # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
-  rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, riskSet$lastInterval))]
+  rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, fitSet$lastInterval))]
   interactionBasis <- .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
   interactionRef <- tibble(
     covariateId = rep(as.numeric(covariateIds), ncol(interactionBasis)),
@@ -953,7 +1032,7 @@ fitCensoringModels <- function(clones,
     zValue = as.vector(interactionBasis)
   ) |>
     filter(.data$zValue != 0)
-  covariateData$riskSet <- riskSet |>
+  covariateData$riskSet <- fitSet |>
     select("rowId", "subjectId", "lastInterval", "y")
   covariateData$intervals <- tibble(k = fitIntervals)
   covariateData$basis <- tibble(
@@ -1011,7 +1090,7 @@ fitCensoringModels <- function(clones,
   nRows <- covariateData$hazardRows |>
     count() |>
     pull()
-  events <- sum(riskSet$y)
+  events <- sum(fitSet$y)
   if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
     requested <- if (fitCensoringModelsArgs$covariateTimeInteraction == "day0") "day0" else colnames(basis)
     .messageDroppedInteractions(fitCensoringModelsArgs$covariateTimeInteraction, requested, colnames(interactionBasis), rowIntervals, nIntervals, intervalLength, description)
@@ -1059,7 +1138,7 @@ fitCensoringModels <- function(clones,
   linearPredictor <- rep(0, nrow(riskSet))
   interactionPredictions <- tibble(rowId = integer(0), columnIndex = integer(0), value = numeric(0))
   if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
-    error <- .checkHighCorrelation(covariateData, riskSet, fitCensoringModelsArgs)
+    error <- .checkHighCorrelation(covariateData, fitSet, fitCensoringModelsArgs)
     if (is.null(error)) {
       error <- "OK"
       # The interaction columns are not excluded, so they are penalized like the covariates:
@@ -1079,6 +1158,23 @@ fitCensoringModels <- function(clones,
     if (error != "OK") {
       message("Using the censoring model without covariates: ", error)
     }
+  }
+  baseline <- .computeBaseline(coefficients, basis, basisIds, emptyIntervals, fullIntervals)
+  numeratorBaseline <- .computeBaseline(numeratorCoefficients, basis, basisIds, emptyIntervals, fullIntervals)
+  if (nrow(fitSet) < nrow(riskSet) && fitCensoringModelsArgs$timeBasis$type == "indicator") {
+    # An interval with a hazard of 0 or 1 in the sample but not in the whole risk set gets the observed
+    # hazard of the whole risk set (shifted by the mean linear predictor of its persons in the model
+    # with covariates), so that persons outside the sample keep finite weights:
+    allInitiations <- tabulate(riskSet$lastInterval[riskSet$y == 1] + 1L, nbins = nIntervals)
+    allAtRisk <- rev(cumsum(rev(tabulate(riskSet$lastInterval + 1L, nbins = nIntervals))))
+    refit <- k[k %in% c(emptyIntervals, fullIntervals) & allInitiations > 0 & allInitiations < allAtRisk]
+    for (interval in refit) {
+      logOdds <- stats::qlogis(allInitiations[interval + 1L] / allAtRisk[interval + 1L])
+      numeratorBaseline[interval + 1L] <- logOdds
+      baseline[interval + 1L] <- logOdds - mean(linearPredictor[riskSet$lastInterval >= interval])
+    }
+    emptyIntervals <- setdiff(emptyIntervals, refit)
+    fullIntervals <- setdiff(fullIntervals, refit)
   }
   # Interaction coefficients are named covariateId:column, for example "1001:day0":
   idx <- match(names(coefficients), as.character(interactionRef$interactionId))
@@ -1105,17 +1201,20 @@ fitCensoringModels <- function(clones,
       basis = interactionBasis,
       predictions = interactionPredictions
     ),
-    intervals = dplyr::mutate(intervals, baseline = .computeBaseline(coefficients, basis, basisIds, emptyIntervals, fullIntervals)),
+    intervals = dplyr::mutate(intervals, baseline = baseline),
     numerator = list(
       coefficients = .renameBasisCoefficients(numeratorCoefficients, basisIds, colnames(basis)),
-      intervals = dplyr::mutate(intervals, baseline = .computeBaseline(numeratorCoefficients, basis, basisIds, emptyIntervals, fullIntervals))
+      intervals = dplyr::mutate(intervals, baseline = numeratorBaseline)
     ),
-    diagnostics = list(
-      riskSetSize = nrow(riskSet),
-      rows = as.integer(nRows),
-      events = events,
-      auc = NA_real_,
-      status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; ")
+    diagnostics = c(
+      list(
+        riskSetSize = nrow(riskSet),
+        rows = as.integer(nRows),
+        events = sum(riskSet$y),
+        auc = NA_real_,
+        status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; ")
+      ),
+      .sampleDiagnostics(riskSet, fitSet)
     )
   ))
 }

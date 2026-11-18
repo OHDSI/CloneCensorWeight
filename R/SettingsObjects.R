@@ -571,9 +571,10 @@ TimeBasis <- R6Class(
 #' largest for `"neverInitiate"` strategies. For long horizons, prefer the pooled logistic model, with
 #' a longer `intervalLength` if daily intervals are too costly.
 #'
-#' `maxCohortSizeForFitting` applies only to the binary models at the end of the grace period
-#' (through [CohortMethod::createPs()]). In this version the hazard models are always fitted to their
-#' whole risk set.
+#' `maxCohortSizeForFitting` applies to every censoring model: the binary models at the end of the
+#' grace period sample their starters and non-starters (through [CohortMethod::createPs()]), and a
+#' hazard model whose risk set holds more persons is fit on a uniform sample of that many persons and
+#' then predicts for every person (see [fitCensoringModels()]).
 #'
 #' **Weights of `"notInitiateWithin"` after the grace period.** With `postGraceModel = "hazard"` (the
 #' default), the weight of a `"notInitiateWithin(G)"` clone after day `G` is `1 / S(G | X)`, where
@@ -745,10 +746,15 @@ TimeBasis <- R6Class(
 #' @param useCovariates            Use the baseline covariates in the censoring models?
 #' @param excludeCovariateIds      Exclude these covariates from the censoring models.
 #' @param includeCovariateIds      Include only these covariates in the censoring models.
-#' @param maxCohortSizeForFitting  If the risk set of the binary model of an `"initiateWithin"`
-#'                                 strategy is larger than this number, it is sampled to this size
-#'                                 before fitting. `0` means no sampling. The hazard models do not
-#'                                 sample in this version.
+#' @param maxCohortSizeForFitting  The largest number of persons a censoring model is fit on. The
+#'                                 binary model at the end of the grace period samples its starters
+#'                                 and its non-starters to at most this many each (through
+#'                                 [CohortMethod::createPs()]). A hazard model (pooled logistic or Cox)
+#'                                 whose risk set holds more persons is fit on a uniform sample of this
+#'                                 many persons, with all their rows, drawn with the seed of `control`;
+#'                                 a uniform sample needs no correction of the intercept, and the
+#'                                 linear predictor is computed for every person. `0` means no
+#'                                 sampling.
 #' @param errorOnHighCorrelation   Check each covariate for high correlation with the response, and
 #'                                 throw an error if found?
 #' @param stopOnError              If an error occurs while fitting, should the function stop?

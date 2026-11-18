@@ -39,7 +39,10 @@
 #'
 #' In the replicates, the censoring models are fitted with `errorOnHighCorrelation = FALSE`: the check
 #' for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
-#' already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
+#' already passed, and duplicated persons can make it fail by chance in small data. A hazard model
+#' whose risk set holds more than `maxCohortSizeForFitting` persons (see [fitCensoringModels()]) is fit
+#' in each replicate on a new uniform sample of the replicate's persons, drawn with the seed of the
+#' censoring models' `control` plus the replicate number, so the replicates stay reproducible. The warnings of the
 #' replicates are not shown; those of a failed replicate are reported with its failure, except those
 #' that the analysis of the full data has already given (such as warnings about the design). The
 #' progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are
@@ -269,7 +272,9 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
           fitOutcomeModelArgs = fitOutcomeModelArgs,
           fixedPriorVariances = fixedPriorVariances,
           sourcePersonSeqIds = .copySourcePersonSeqIds(personSeqIds, counts[, replicate]),
-          censoringWithoutOutcome = censoringWithoutOutcome
+          censoringWithoutOutcome = censoringWithoutOutcome,
+          # Each replicate draws its own samples of the hazard models' risk sets (maxCohortSizeForFitting):
+          subsampleSeed = (.defaultSubsampleSeed(fitCensoringModelsArgs) + replicate) %% .Machine$integer.max
         )),
         error = function(e) conditionMessage(e)
       ),
@@ -387,7 +392,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
                                   censoringModels = NULL,
                                   fixedPriorVariances = NULL,
                                   sourcePersonSeqIds = NULL,
-                                  censoringWithoutOutcome = FALSE) {
+                                  censoringWithoutOutcome = FALSE,
+                                  subsampleSeed = NULL) {
   population <- createStudyPopulation(
     cloneCensorWeightData = cloneCensorWeightData,
     outcomeId = outcomeId,
@@ -407,7 +413,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     }
     censoringModels <- fitCensoringModels(censoringClones, cloneCensorWeightData, fitCensoringModelsArgs,
                                           .fixedPriorVariances = fixedPriorVariances,
-                                          .sourcePersonSeqIds = sourcePersonSeqIds)
+                                          .sourcePersonSeqIds = sourcePersonSeqIds,
+                                          .subsampleSeed = subsampleSeed)
   }
   outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
   weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)

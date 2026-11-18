@@ -9,7 +9,8 @@ fitCensoringModels(
   cloneCensorWeightData,
   fitCensoringModelsArgs = createFitCensoringModelsArgs(),
   .fixedPriorVariances = NULL,
-  .sourcePersonSeqIds = NULL
+  .sourcePersonSeqIds = NULL,
+  .subsampleSeed = NULL
 )
 }
 \arguments{
@@ -33,6 +34,10 @@ and without cross-validation.}
 \code{personSeqId} of each person and the \code{sourcePersonSeqId} of the person
 it is a copy of. Copies of one person stay in one cross-validation fold
 of every censoring model.}
+
+\item{.subsampleSeed}{For internal use (the bootstrap): \code{NULL}, or the seed of the samples
+of the hazard models' risk sets (see \code{maxCohortSizeForFitting}), in
+place of the seed of \code{control}.}
 }
 \value{
 An object of class \code{CcwCensoringModels}: a list with one element per strategy (in strategy order),
@@ -58,8 +63,10 @@ column's coefficients per person (non-zero values only). The linear predictor of
 interval \code{k} is \code{baseline + linearPredictor + sum(basis[k, ] * value)}.
 \item \code{numerator}: the model without covariates (\code{propensityScore}; \code{baselineHazard}; or
 \code{coefficients} and \code{intervals}).
-\item \code{diagnostics}: risk-set size, number of rows, events (initiations or starts by \code{G}), the AUC
-(binary models), and the fitting status.
+\item \code{diagnostics}: risk-set size, number of rows in the fit, events (initiations or starts by \code{G}),
+the AUC (binary models), the fitting status, and the sample the model was fit on (see
+\code{maxCohortSizeForFitting}): \code{sampled} (\code{TRUE} when it was fit on a sample of the risk set),
+\code{sampleSize} (persons) and \code{sampleEvents}.
 \item \code{postGrace} (\code{"notInitiateWithin"} strategies with \code{postGraceModel = "binary"} only): the binary
 model at \code{G} whose \code{1 - propensityScore} gives the weights after \code{G}, a list with the elements of
 a binary model above (\code{kind}, \code{horizon}, \code{modelType}, \code{coefficients}, \code{priorVariance},
@@ -149,8 +156,18 @@ weights do not reproduce the population, and weighted risks can be biased when i
 confounded. For long horizons, prefer the pooled logistic model, with a longer \code{intervalLength} if
 daily intervals are too costly.
 
-\code{maxCohortSizeForFitting} applies only to the binary models (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}});
-in this version the hazard models are always fitted to their whole risk set.
+\code{maxCohortSizeForFitting} (\code{0}: no sampling) applies to every model. The binary models sample
+their starters and non-starters to at most that many each (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). A
+hazard model whose risk set holds more persons than that is fit on a uniform sample of that many
+persons, with all their rows, drawn with the seed of \code{control} (1 when it has none) without
+changing the caller's random number stream: its numerator and denominator models, the
+cross-validation of the prior and the high-correlation check use the sample, and the linear
+predictor is then computed for every person of the risk set. A uniform sample of persons needs no
+correction of the intercept. With the indicator time basis, an interval in which no sampled person,
+or every one, at risk initiates, but not so in the whole risk set, gets the observed hazard of the
+whole risk set (shifted by the mean linear predictor of its persons in the model with covariates),
+so that persons outside the sample keep finite weights. The diagnostics of each model record whether
+it was sampled.
 
 With \code{useCovariates = FALSE} the models have only an intercept and time, so they equal their
 numerator models.

@@ -96,7 +96,10 @@ pooled logistic outcome model gets clones split on its interval grid
 
 In the replicates, the censoring models are fitted with \code{errorOnHighCorrelation = FALSE}: the check
 for covariates highly correlated with initiation is a design diagnostic, which the full-data fit has
-already passed, and duplicated persons can make it fail by chance in small data. The warnings of the
+already passed, and duplicated persons can make it fail by chance in small data. A hazard model
+whose risk set holds more than \code{maxCohortSizeForFitting} persons (see \code{\link[=fitCensoringModels]{fitCensoringModels()}}) is fit
+in each replicate on a new uniform sample of the replicate's persons, drawn with the seed of the
+censoring models' \code{control} plus the replicate number, so the replicates stay reproducible. The warnings of the
 replicates are not shown; those of a failed replicate are reported with its failure, except those
 that the analysis of the full data has already given (such as warnings about the design). The
 progress messages of every replicate (including those of CohortMethod and FeatureExtraction) are

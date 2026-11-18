@@ -70,10 +70,15 @@ observed until death but survivors only until their last record.}
 
 \item{includeCovariateIds}{Include only these covariates in the censoring models.}
 
-\item{maxCohortSizeForFitting}{If the risk set of the binary model of an \code{"initiateWithin"}
-strategy is larger than this number, it is sampled to this size
-before fitting. \code{0} means no sampling. The hazard models do not
-sample in this version.}
+\item{maxCohortSizeForFitting}{The largest number of persons a censoring model is fit on. The
+binary model at the end of the grace period samples its starters
+and its non-starters to at most this many each (through
+\code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). A hazard model (pooled logistic or Cox)
+whose risk set holds more persons is fit on a uniform sample of this
+many persons, with all their rows, drawn with the seed of \code{control};
+a uniform sample needs no correction of the intercept, and the
+linear predictor is computed for every person. \code{0} means no
+sampling.}
 
 \item{errorOnHighCorrelation}{Check each covariate for high correlation with the response, and
 throw an error if found?}
@@ -107,9 +112,10 @@ therefore grows with the horizon and with each person's daily probability of ini
 largest for \code{"neverInitiate"} strategies. For long horizons, prefer the pooled logistic model, with
 a longer \code{intervalLength} if daily intervals are too costly.
 
-\code{maxCohortSizeForFitting} applies only to the binary models at the end of the grace period
-(through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}). In this version the hazard models are always fitted to their
-whole risk set.
+\code{maxCohortSizeForFitting} applies to every censoring model: the binary models at the end of the
+grace period sample their starters and non-starters (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}), and a
+hazard model whose risk set holds more persons is fit on a uniform sample of that many persons and
+then predicts for every person (see \code{\link[=fitCensoringModels]{fitCensoringModels()}}).
 
 \strong{Weights of \code{"notInitiateWithin"} after the grace period.} With \code{postGraceModel = "hazard"} (the
 default), the weight of a \code{"notInitiateWithin(G)"} clone after day \code{G} is \code{1 / S(G | X)}, where

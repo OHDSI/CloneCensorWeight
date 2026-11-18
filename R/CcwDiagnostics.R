@@ -1332,8 +1332,9 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'                                    that depend on those
 #'                                    settings are fit again. For example, the binary model at G is
 #'                                    reused when only the hazard model's settings (`timeBasis` or
-#'                                    `hazardModelType`) differ, and the hazard models when only
-#'                                    `maxCohortSizeForFitting` differs.
+#'                                    `hazardModelType`) differ. Every model is fit again when
+#'                                    `maxCohortSizeForFitting` differs, since it can sample both the
+#'                                    binary and the hazard models.
 #'
 #' @return
 #' An object of class `CcwDiagnostics`: a list with `variants` (a tibble with `variant`,

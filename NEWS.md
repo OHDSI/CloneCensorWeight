@@ -5,6 +5,18 @@
 Changes that alter results of existing code, or of settings saved before them (which load with the
 new defaults):
 
+* `createFitCensoringModelsArgs(maxCohortSizeForFitting = 250000)` now also applies to the
+  initiation hazard models (pooled logistic and Cox), not only to the binary models: a hazard model
+  whose risk set holds more persons is fit on a uniform sample of that many persons (all their rows),
+  drawn with the seed of `control` without changing the caller's random number stream, and then
+  predicts the linear predictor of every person. The numerator and denominator models, the
+  cross-validation of the prior and the high-correlation check use the sample; a uniform sample of
+  persons needs no correction of the intercept. Each bootstrap replicate draws its own sample. The
+  diagnostics of every censoring model record `sampled`, `sampleSize` and `sampleEvents`, and the
+  fitting message says when a hazard model is sampled. `maxCohortSizeForFitting = 0` fits the hazard
+  models to their whole risk set, as before; risk sets of at most 250,000 persons are not affected.
+  `computeCcwDiagnostics()` and `computeCcwSensitivity()` refit the hazard models given to them when
+  `maxCohortSizeForFitting` differs.
 * The Cox and pooled logistic outcome models are fitted with unstabilized weights by default
   (`createFitOutcomeModelArgs(msmWeights = "unstabilized")`), whatever `createComputeWeightsArgs()`
   `stabilized` is. `msmWeights = "stabilized"` reproduces the earlier fits.
