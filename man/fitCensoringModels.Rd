@@ -66,7 +66,8 @@ interval \code{k} is \code{baseline + linearPredictor + sum(basis[k, ] * value)}
 \item \code{diagnostics}: risk-set size, number of rows in the fit, events (initiations or starts by \code{G}),
 the AUC (binary models), the fitting status, and the sample the model was fit on (see
 \code{maxCohortSizeForFitting}): \code{sampled} (\code{TRUE} when it was fit on a sample of the risk set),
-\code{sampleSize} (persons) and \code{sampleEvents}.
+\code{sampleSize} (persons) and \code{sampleEvents}. Pooled logistic models also record the \code{engine} that fit
+them (\code{pooledLogisticEngine}).
 \item \code{postGrace} (\code{"notInitiateWithin"} strategies with \code{postGraceModel = "binary"} only): the binary
 model at \code{G} whose \code{1 - propensityScore} gives the weights after \code{G}, a list with the elements of
 a binary model above (\code{kind}, \code{horizon}, \code{modelType}, \code{coefficients}, \code{priorVariance},

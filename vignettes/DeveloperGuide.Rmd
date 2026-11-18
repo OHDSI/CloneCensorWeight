@@ -609,6 +609,9 @@ few minutes:
   variable only when the error is raised, as the development version of dbplyr does. Formatting it
   up front for every `count()` took about 15% of the test time. It too switches itself off once
   dbplyr is updated.
+- `test-m3-weights-pooledLogisticEngine.R` compares the two engines of the pooled logistic hazard model
+  (`pooledLogisticEngine = "plr"` and `"lr"`) and skips those comparisons when the loaded Cyclops has
+  no plr (`modelType = "plr"`); install a Cyclops with plr first on the library path to run them.
 - Tests that share an expensive fixture (the analyses of `test-integration-msmWeights.R`, the
   diagnostics of `test-integration-designChoicesDiagnostics.R`, the pooled logistic analyses and fits
   of `test-integration-warnings.R`) build it once per file and do not change it.

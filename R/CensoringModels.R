@@ -163,7 +163,8 @@
 #' - `diagnostics`: risk-set size, number of rows in the fit, events (initiations or starts by `G`),
 #'   the AUC (binary models), the fitting status, and the sample the model was fit on (see
 #'   `maxCohortSizeForFitting`): `sampled` (`TRUE` when it was fit on a sample of the risk set),
-#'   `sampleSize` (persons) and `sampleEvents`.
+#'   `sampleSize` (persons) and `sampleEvents`. Pooled logistic models also record the `engine` that fit
+#'   them (`pooledLogisticEngine`).
 #' - `postGrace` (`"notInitiateWithin"` strategies with `postGraceModel = "binary"` only): the binary
 #'   model at `G` whose `1 - propensityScore` gives the weights after `G`, a list with the elements of
 #'   a binary model above (`kind`, `horizon`, `modelType`, `coefficients`, `priorVariance`,
@@ -421,6 +422,7 @@ fitCensoringModels <- function(clones,
     argsList$hazardModelType <- NULL
     argsList$timeBasis <- NULL
     argsList$covariateTimeInteraction <- NULL
+    argsList$pooledLogisticEngine <- NULL
   }
   return(paste(
     component,
@@ -761,9 +763,9 @@ fitCensoringModels <- function(clones,
 }
 
 # Fits a Cyclops model, returning the fit, or an error message when stopOnError = FALSE.
-.fitCyclops <- function(cyclopsData, prior, control, stopOnError) {
+.fitCyclops <- function(cyclopsData, prior, control, stopOnError, fixedCoefficients = NULL) {
   cyclopsFit <- tryCatch(
-    Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control),
+    Cyclops::fitCyclopsModel(cyclopsData, prior = prior, control = control, fixedCoefficients = fixedCoefficients),
     error = function(e) conditionMessage(e)
   )
   if (!is.character(cyclopsFit) && cyclopsFit$return_flag != "SUCCESS") {
@@ -992,6 +994,103 @@ fitCensoringModels <- function(clones,
   return(c("(Intercept)" = stats::qlogis(meanY)))
 }
 
+# TRUE when the loaded Cyclops has pooled logistic regression (modelType = "plr").
+.cyclopsHasPooledLogistic <- function() {
+  return("convertToLongOutcome" %in% getNamespaceExports("Cyclops"))
+}
+
+# The outcomes of the pooled logistic regression with Cyclops's modelType = "plr" (interval k is plr
+# interval k + 1): a person's rows are the intervals of `fitIntervals` up to their last interval. When
+# the fit intervals are consecutive, a person is one row (implicit rows: entry, exit, y); otherwise a
+# person has one row per interval (explicit rows: interval, y), still without covariates. Returns the
+# `outcomes`, the `persons` with rows (rowId, lastInterval) and the number of person-interval rows.
+.createPooledRows <- function(fitSet, fitIntervals) {
+  if (length(fitIntervals) > 0 && all(diff(fitIntervals) == 1L)) {
+    first <- fitIntervals[1]
+    last <- fitIntervals[length(fitIntervals)]
+    persons <- fitSet[fitSet$lastInterval >= first, , drop = FALSE]
+    outcomes <- tibble(
+      rowId = persons$rowId,
+      subjectId = persons$subjectId,
+      entry = first + 1L,
+      exit = pmin(persons$lastInterval, last) + 1L,
+      y = as.numeric(persons$y == 1 & persons$lastInterval <= last)
+    )
+    nRows <- sum(outcomes$exit - outcomes$entry + 1)
+  } else {
+    n <- findInterval(fitSet$lastInterval, fitIntervals)
+    persons <- fitSet[n > 0, , drop = FALSE]
+    person <- rep(seq_len(nrow(fitSet)), n)
+    k <- fitIntervals[sequence(n)]
+    outcomes <- tibble(
+      rowId = fitSet$rowId[person],
+      subjectId = fitSet$subjectId[person],
+      interval = k + 1L,
+      y = as.numeric(fitSet$y[person] == 1 & k == fitSet$lastInterval[person])
+    )
+    nRows <- nrow(outcomes)
+  }
+  return(list(outcomes = outcomes, persons = persons[, c("rowId", "lastInterval")], nRows = nRows))
+}
+
+# Fits the pooled logistic regression of the "plr" engine on `pooled` (.createPooledRows()): the
+# covariates (an Andromeda table, or NULL) stay one row per person, and the time basis (its columns with
+# rows, `presentBasisIds`) and the covariate-by-time interactions (`interactionRef`: column c of
+# `interactionBasis` multiplies every covariate) are given per interval. An interaction column that is
+# not a time-basis column (such as "day0") enters the basis with its coefficient fixed at 0, so that the
+# model is that of the "lr" engine, and an interaction without rows (no person with the covariate reaches
+# an interval where its column is not 0) is left out, as the "lr" engine has no column for it. Returns
+# the fit and its coefficients (the intercept, then by id, as Cyclops orders those of "lr"), or the error
+# message.
+.fitPooledRows <- function(pooled, covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs) {
+  outcomes <- pooled$outcomes
+  if (is.null(covariates)) {
+    covariates <- tibble(rowId = numeric(0), covariateId = numeric(0), covariateValue = numeric(0))
+  } else {
+    covariates <- collect(covariates)
+    covariates <- covariates[covariates$rowId %in% outcomes$rowId, , drop = FALSE]
+  }
+  columnIds <- basisIds[match(colnames(interactionBasis), colnames(basis))]
+  extra <- is.na(columnIds)
+  columnIds[extra] <- min(c(0, basisIds, interactionRef$interactionId)) - seq_len(sum(extra))
+  values <- cbind(basis[, match(presentBasisIds, basisIds), drop = FALSE], interactionBasis[, extra, drop = FALSE])
+  timeBasis <- tibble(
+    interval = rep(seq_len(nrow(values)), ncol(values)),
+    covariateId = rep(c(presentBasisIds, columnIds[extra]), each = nrow(values)),
+    covariateValue = as.vector(values)
+  ) |>
+    filter(.data$covariateValue != 0)
+  firstRow <- vapply(seq_len(ncol(interactionBasis)), function(column) {
+    min(c(Inf, rowIntervals[interactionBasis[rowIntervals + 1L, column] != 0]))
+  }, numeric(1))
+  lastInterval <- tapply(pooled$persons$lastInterval[match(covariates$rowId, pooled$persons$rowId)], covariates$covariateId, max)
+  covariateLast <- lastInterval[as.character(interactionRef$covariateId)]
+  keep <- !is.na(covariateLast) & firstRow[interactionRef$columnIndex] <= covariateLast
+  timeEffectMap <- tibble(
+    covariateId = interactionRef$covariateId,
+    timeCovariateId = columnIds[interactionRef$columnIndex],
+    interactionId = interactionRef$interactionId
+  )[keep, ]
+  cyclopsData <- Cyclops::convertToCyclopsData(
+    outcomes,
+    covariates,
+    modelType = "plr",
+    timeBasis = if (nrow(timeBasis) > 0) timeBasis,
+    timeEffectMap = if (nrow(timeEffectMap) > 0) timeEffectMap,
+    quiet = TRUE
+  )
+  fixed <- as.numeric(Cyclops::getCovariateIds(cyclopsData)) %in% columnIds[extra]
+  cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError, fixedCoefficients = if (any(fixed)) fixed)
+  if (is.character(cyclopsFit)) {
+    return(cyclopsFit)
+  }
+  coefficients <- stats::coef(cyclopsFit)
+  coefficients <- coefficients[!names(coefficients) %in% as.character(columnIds[extra])]
+  others <- setdiff(names(coefficients), "(Intercept)")
+  coefficients <- coefficients[c("(Intercept)", others[order(as.numeric(others))])]
+  return(list(fit = cyclopsFit, coefficients = coefficients))
+}
+
 # Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
 # of the risk set.
 .fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet) {
@@ -1038,84 +1137,110 @@ fitCensoringModels <- function(clones,
     columnIndex = rep(seq_len(ncol(interactionBasis)), each = length(covariateIds))
   )
   interactionRef$interactionId <- -(ncol(basis) + seq_len(nrow(interactionRef)))
-  covariateData$interactionRef <- interactionRef
-  covariateData$interactionBasis <- tibble(
-    k = rep(k, ncol(interactionBasis)),
-    columnIndex = rep(seq_len(ncol(interactionBasis)), each = nIntervals),
-    zValue = as.vector(interactionBasis)
-  ) |>
-    filter(.data$zValue != 0)
-  covariateData$riskSet <- fitSet |>
-    select("rowId", "subjectId", "lastInterval", "y")
-  covariateData$intervals <- tibble(k = fitIntervals)
-  covariateData$basis <- tibble(
-    k = rep(k, ncol(basis)),
-    covariateId = rep(as.numeric(basisIds), each = nIntervals),
-    covariateValue = as.vector(basis)
-  ) |>
-    filter(.data$covariateValue != 0)
-  .andromedaExecute(covariateData, "
-    CREATE TABLE hazardRows AS
-    SELECT CAST(ROW_NUMBER() OVER (ORDER BY riskSet.rowId, intervals.k) AS DOUBLE) AS rowId,
-      riskSet.rowId AS personRowId,
-      riskSet.subjectId,
-      intervals.k,
-      CASE WHEN riskSet.y = 1 AND intervals.k = riskSet.lastInterval THEN 1 ELSE 0 END AS y
-    FROM riskSet
-    INNER JOIN intervals
-      ON intervals.k <= riskSet.lastInterval;")
-  # subjectId keeps the rows of a person in one cross-validation fold (Cyclops 4.0.1 or later)
-  .andromedaExecute(covariateData, "
-    CREATE TABLE hazardOutcomes AS
-    SELECT rowId, y, subjectId
-    FROM hazardRows;")
-  .andromedaExecute(covariateData, "
-    CREATE TABLE hazardBasis AS
-    SELECT hazardRows.rowId,
-      basis.covariateId,
-      basis.covariateValue
-    FROM hazardRows
-    INNER JOIN basis
-      ON hazardRows.k = basis.k;")
-  .andromedaExecute(covariateData, "
-    CREATE TABLE hazardCovariates AS
-    SELECT hazardRows.rowId,
-      covariates.covariateId,
-      covariates.covariateValue
-    FROM hazardRows
-    INNER JOIN covariates
-      ON hazardRows.personRowId = covariates.rowId
-    UNION ALL
-    SELECT rowId, covariateId, covariateValue
-    FROM hazardBasis
-    UNION ALL
-    SELECT hazardRows.rowId,
-      interactionRef.interactionId AS covariateId,
-      covariates.covariateValue * interactionBasis.zValue AS covariateValue
-    FROM hazardRows
-    INNER JOIN interactionBasis
-      ON hazardRows.k = interactionBasis.k
-    INNER JOIN covariates
-      ON hazardRows.personRowId = covariates.rowId
-    INNER JOIN interactionRef
-      ON covariates.covariateId = interactionRef.covariateId
-        AND interactionBasis.columnIndex = interactionRef.columnIndex;")
-  nRows <- covariateData$hazardRows |>
-    count() |>
-    pull()
+  # The engine: "lr" expands the rows (person x interval) with their covariates in Andromeda; "plr" keeps
+  # the covariates one row per person and gives Cyclops the intervals (.createPooledRows()).
+  engine <- fitCensoringModelsArgs$pooledLogisticEngine
+  if (engine == "plr" && !.cyclopsHasPooledLogistic()) {
+    stop(sprintf("pooledLogisticEngine = \"plr\" needs a Cyclops with pooled logistic regression (modelType = \"plr\"), which the loaded Cyclops %s does not have. Install one that has it, or use pooledLogisticEngine = \"lr\" (the default), which gives the same fit with more memory", utils::packageVersion("Cyclops")))
+  }
+  if (engine == "lr") {
+    covariateData$interactionRef <- interactionRef
+    covariateData$interactionBasis <- tibble(
+      k = rep(k, ncol(interactionBasis)),
+      columnIndex = rep(seq_len(ncol(interactionBasis)), each = nIntervals),
+      zValue = as.vector(interactionBasis)
+    ) |>
+      filter(.data$zValue != 0)
+    covariateData$riskSet <- fitSet |>
+      select("rowId", "subjectId", "lastInterval", "y")
+    covariateData$intervals <- tibble(k = fitIntervals)
+    covariateData$basis <- tibble(
+      k = rep(k, ncol(basis)),
+      covariateId = rep(as.numeric(basisIds), each = nIntervals),
+      covariateValue = as.vector(basis)
+    ) |>
+      filter(.data$covariateValue != 0)
+    .andromedaExecute(covariateData, "
+      CREATE TABLE hazardRows AS
+      SELECT CAST(ROW_NUMBER() OVER (ORDER BY riskSet.rowId, intervals.k) AS DOUBLE) AS rowId,
+        riskSet.rowId AS personRowId,
+        riskSet.subjectId,
+        intervals.k,
+        CASE WHEN riskSet.y = 1 AND intervals.k = riskSet.lastInterval THEN 1 ELSE 0 END AS y
+      FROM riskSet
+      INNER JOIN intervals
+        ON intervals.k <= riskSet.lastInterval;")
+    # subjectId keeps the rows of a person in one cross-validation fold (Cyclops 4.0.1 or later)
+    .andromedaExecute(covariateData, "
+      CREATE TABLE hazardOutcomes AS
+      SELECT rowId, y, subjectId
+      FROM hazardRows;")
+    .andromedaExecute(covariateData, "
+      CREATE TABLE hazardBasis AS
+      SELECT hazardRows.rowId,
+        basis.covariateId,
+        basis.covariateValue
+      FROM hazardRows
+      INNER JOIN basis
+        ON hazardRows.k = basis.k;")
+    .andromedaExecute(covariateData, "
+      CREATE TABLE hazardCovariates AS
+      SELECT hazardRows.rowId,
+        covariates.covariateId,
+        covariates.covariateValue
+      FROM hazardRows
+      INNER JOIN covariates
+        ON hazardRows.personRowId = covariates.rowId
+      UNION ALL
+      SELECT rowId, covariateId, covariateValue
+      FROM hazardBasis
+      UNION ALL
+      SELECT hazardRows.rowId,
+        interactionRef.interactionId AS covariateId,
+        covariates.covariateValue * interactionBasis.zValue AS covariateValue
+      FROM hazardRows
+      INNER JOIN interactionBasis
+        ON hazardRows.k = interactionBasis.k
+      INNER JOIN covariates
+        ON hazardRows.personRowId = covariates.rowId
+      INNER JOIN interactionRef
+        ON covariates.covariateId = interactionRef.covariateId
+          AND interactionBasis.columnIndex = interactionRef.columnIndex;")
+    nRows <- covariateData$hazardRows |>
+      count() |>
+      pull()
+    # Basis columns with no rows (intervals nobody reaches) are not in the model:
+    presentBasisIds <- covariateData$hazardBasis |>
+      dplyr::distinct(.data$covariateId) |>
+      pull()
+
+    fitLr <- function(covariates, prior) {
+      cyclopsData <- Cyclops::convertToCyclopsData(covariateData$hazardOutcomes, covariates, modelType = "lr", quiet = TRUE)
+      cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError)
+      if (is.character(cyclopsFit)) {
+        return(cyclopsFit)
+      }
+      return(list(fit = cyclopsFit, coefficients = stats::coef(cyclopsFit)))
+    }
+    fitNumerator <- function() fitLr(covariateData$hazardBasis, Cyclops::createPrior("none"))
+    fitDenominator <- function(prior) fitLr(covariateData$hazardCovariates, prior)
+    interceptOnly <- function() .fitInterceptOnly(covariateData)
+  } else {
+    pooled <- .createPooledRows(fitSet, fitIntervals)
+    nRows <- pooled$nRows
+    presentBasisIds <- basisIds[colSums(basis[rowIntervals + 1L, , drop = FALSE] != 0) > 0]
+    interceptOnly <- function() c("(Intercept)" = stats::qlogis(sum(pooled$outcomes$y) / nRows))
+    fitNumerator <- function() {
+      .fitPooledRows(pooled, NULL, basis, basisIds, presentBasisIds, interactionRef[0, ], interactionBasis[, 0, drop = FALSE], rowIntervals, Cyclops::createPrior("none"), fitCensoringModelsArgs)
+    }
+    fitDenominator <- function(prior) {
+      .fitPooledRows(pooled, covariateData$covariates, basis, basisIds, presentBasisIds, interactionRef, interactionBasis, rowIntervals, prior, fitCensoringModelsArgs)
+    }
+  }
   events <- sum(fitSet$y)
   if (length(covariateIds) > 0 && events > 0 && nRows > 0) {
     requested <- if (fitCensoringModelsArgs$covariateTimeInteraction == "day0") "day0" else colnames(basis)
     .messageDroppedInteractions(fitCensoringModelsArgs$covariateTimeInteraction, requested, colnames(interactionBasis), rowIntervals, nIntervals, intervalLength, description)
-  }
-  # Basis columns with no rows (intervals nobody reaches) are not in the model:
-  presentBasisIds <- covariateData$hazardBasis |>
-    dplyr::distinct(.data$covariateId) |>
-    pull()
-
-  fitLr <- function(covariates, prior) {
-    cyclopsData <- Cyclops::convertToCyclopsData(covariateData$hazardOutcomes, covariates, modelType = "lr", quiet = TRUE)
-    return(.fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError))
   }
 
   # Numerator: intercept and time basis.
@@ -1125,7 +1250,7 @@ fitCensoringModels <- function(clones,
     # interval's log-odds.
     numeratorCoefficients <- c("(Intercept)" = if (0L %in% fullIntervals) Inf else -Inf)
   } else if (length(presentBasisIds) == 0 || events == 0) {
-    numeratorCoefficients <- .fitInterceptOnly(covariateData)
+    numeratorCoefficients <- interceptOnly()
   } else if (fitCensoringModelsArgs$timeBasis$type == "indicator") {
     # The indicator basis is saturated in the fitted intervals, so the maximum likelihood fit is the
     # observed hazard of each: the intercept is the log-odds of the reference (first) interval, and the
@@ -1134,13 +1259,13 @@ fitCensoringModels <- function(clones,
     numeratorCoefficients <- c(logOdds[1], logOdds[-1] - logOdds[1])
     names(numeratorCoefficients) <- c("(Intercept)", as.character(basisIds))
   } else {
-    numeratorFit <- fitLr(covariateData$hazardBasis, Cyclops::createPrior("none"))
+    numeratorFit <- fitNumerator()
     if (is.character(numeratorFit)) {
       numeratorError <- paste("Fitting the numerator model failed:", numeratorFit)
       message(numeratorError, ". Using an intercept-only numerator model")
-      numeratorCoefficients <- .fitInterceptOnly(covariateData)
+      numeratorCoefficients <- interceptOnly()
     } else {
-      numeratorCoefficients <- stats::coef(numeratorFit)
+      numeratorCoefficients <- numeratorFit$coefficients
     }
   }
 
@@ -1156,12 +1281,12 @@ fitCensoringModels <- function(clones,
       error <- "OK"
       # The interaction columns are not excluded, so they are penalized like the covariates:
       prior <- .restrictPrior(prior, covariateIds, unpenalizedIds = c(0, presentBasisIds))
-      cyclopsFit <- fitLr(covariateData$hazardCovariates, prior)
+      cyclopsFit <- fitDenominator(prior)
       if (is.character(cyclopsFit)) {
         error <- cyclopsFit
       } else {
-        coefficients <- stats::coef(cyclopsFit)
-        priorVariance <- .getPriorVariance(prior, cyclopsFit)
+        coefficients <- cyclopsFit$coefficients
+        priorVariance <- .getPriorVariance(prior, cyclopsFit$fit)
         isInteraction <- names(coefficients) %in% as.character(interactionRef$interactionId)
         covariateCoefficients <- coefficients[!names(coefficients) %in% c("(Intercept)", as.character(basisIds)) & !isInteraction]
         linearPredictor <- .computeLinearPredictor(covariateData, riskSet, covariateCoefficients)
@@ -1225,7 +1350,8 @@ fitCensoringModels <- function(clones,
         rows = as.integer(nRows),
         events = sum(riskSet$y),
         auc = NA_real_,
-        status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; ")
+        status = paste(c(numeratorError, if (error != "OK" || is.null(numeratorError)) error), collapse = "; "),
+        engine = engine
       ),
       .sampleDiagnostics(riskSet, fitSet)
     )

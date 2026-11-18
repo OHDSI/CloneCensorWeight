@@ -124,6 +124,13 @@ new defaults):
 
 New features:
 
+* `createFitCensoringModelsArgs(pooledLogisticEngine = "plr")` fits the pooled logistic initiation
+  hazard model with Cyclops's pooled logistic regression (`modelType = "plr"`), which keeps the
+  covariates one row per person instead of expanding them to one row per person and interval. It needs
+  a Cyclops with plr (not yet released) and stops with a clear error otherwise. With a fixed prior
+  variance or no prior, it gives the coefficients and weights of the default, `"lr"` (about 1e-7);
+  with cross-validation the plr Cyclops can choose a different variance, so `"lr"` stays the default.
+  The diagnostics of each pooled logistic model record the `engine`.
 * `createFitCensoringModelsArgs(covariateTimeInteraction = "day0" or "interval")` adds
   covariate-by-time interactions to the pooled logistic initiation hazard model.
 * `computeCensoringModelCalibration()` and `plotCensoringModelCalibration()` compare the predicted

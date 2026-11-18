@@ -571,6 +571,21 @@ TimeBasis <- R6Class(
 #' largest for `"neverInitiate"` strategies. For long horizons, prefer the pooled logistic model, with
 #' a longer `intervalLength` if daily intervals are too costly.
 #'
+#' `pooledLogisticEngine` chooses how the pooled logistic hazard model is fit. `"lr"` (the default)
+#' expands the risk set to one row per person and interval, with the person's covariates, the time
+#' basis and the interactions on every row. `"plr"` gives Cyclops's pooled logistic regression
+#' (`modelType = "plr"`) the covariates once per person, each person's intervals (as a first and last
+#' interval, or as a list when the indicator basis leaves out an interval), the time basis per interval
+#' and the interactions as covariate-by-basis products, so its memory stays near that of one row per
+#' person. A `"day0"` interaction column that is not a basis column enters with its main effect fixed
+#' at 0. With a fixed prior variance (or no prior) the two engines agree to about 1e-7 in the
+#' coefficients and weights. With cross-validation they can choose different variances: the
+#' Cyclops version with plr can pick a much smaller variance than `"lr"` on the same data (for
+#' example with `fold = 5`, or on a sample of the risk set), and when its data-driven
+#' `startingVariance` (the default `-1`) is left to it, it starts from a value set by the number of
+#' persons rather than person-intervals. `"plr"` also does not flag separation in the interaction
+#' columns, which `"lr"` reports as a failed fit. So `"lr"` stays the default.
+#'
 #' `maxCohortSizeForFitting` applies to every censoring model: the binary models at the end of the
 #' grace period sample their starters and non-starters (through [CohortMethod::createPs()]), and a
 #' hazard model whose risk set holds more persons is fit on a uniform sample of that many persons and
@@ -722,6 +737,15 @@ TimeBasis <- R6Class(
 #'                                 covariate times each time-basis column), or `"none"`. See details.
 #'                                 Must be `"none"` with `hazardModelType = "cox"`, and is `"none"` by
 #'                                 default then.
+#' @param pooledLogisticEngine     How the pooled logistic initiation hazard model is fit: `"lr"`
+#'                                 (logistic regression on the rows expanded to one per person and
+#'                                 interval, with their covariates) or `"plr"` (Cyclops's pooled
+#'                                 logistic regression, which keeps the covariates one row per person
+#'                                 and builds the person-interval rows, time basis and interactions on
+#'                                 the fly, so it needs much less memory). Both fit the same model; see
+#'                                 details for when they agree. `"plr"` needs a Cyclops with
+#'                                 pooled logistic regression and stops with an error otherwise. The
+#'                                 model's `diagnostics$engine` says which was used.
 #' @param postGraceModel           The model that gives the weights of `"notInitiateWithin"` strategies
 #'                                 after the grace period: `"hazard"` (`1 / S(G | X)` from the
 #'                                 initiation hazard model) or `"binary"` (`1 / (1 - pi(X))` from the
@@ -776,6 +800,7 @@ TimeBasis <- R6Class(
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
                                          covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
+                                         pooledLogisticEngine = "lr",
                                          postGraceModel = "hazard",
                                          initiateWithinModel = "binary",
                                          graceRegime = "binaryAtG",
@@ -811,6 +836,7 @@ FitCensoringModelsArgs <- R6Class(
     timeBasis = NULL,
     # Defaults, so settings saved before these fields existed load:
     covariateTimeInteraction = "day0",
+    pooledLogisticEngine = "lr",
     postGraceModel = "hazard",
     initiateWithinModel = "binary",
     graceRegime = "binaryAtG",
@@ -828,6 +854,7 @@ FitCensoringModelsArgs <- R6Class(
       checkmate::assertChoice(self$hazardModelType, c("cox", "logistic"), add = errorMessages)
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
       checkmate::assertChoice(self$covariateTimeInteraction, c("none", "day0", "interval"), add = errorMessages)
+      checkmate::assertChoice(self$pooledLogisticEngine, c("plr", "lr"), add = errorMessages)
       checkmate::assertChoice(self$postGraceModel, c("binary", "hazard"), add = errorMessages)
       checkmate::assertChoice(self$initiateWithinModel, c("binary", "hazard"), add = errorMessages)
       checkmate::assertChoice(self$graceRegime, c("binaryAtG", "naturalGrace"), add = errorMessages)

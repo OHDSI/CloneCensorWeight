@@ -8,6 +8,7 @@ createFitCensoringModelsArgs(
   hazardModelType = "logistic",
   timeBasis = createTimeBasis(),
   covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
+  pooledLogisticEngine = "lr",
   postGraceModel = "hazard",
   initiateWithinModel = "binary",
   graceRegime = "binaryAtG",
@@ -38,6 +39,16 @@ or of the first interval with longer intervals), \code{"interval"} (each
 covariate times each time-basis column), or \code{"none"}. See details.
 Must be \code{"none"} with \code{hazardModelType = "cox"}, and is \code{"none"} by
 default then.}
+
+\item{pooledLogisticEngine}{How the pooled logistic initiation hazard model is fit: \code{"lr"}
+(logistic regression on the rows expanded to one per person and
+interval, with their covariates) or \code{"plr"} (Cyclops's pooled
+logistic regression, which keeps the covariates one row per person
+and builds the person-interval rows, time basis and interactions on
+the fly, so it needs much less memory). Both fit the same model; see
+details for when they agree. \code{"plr"} needs a Cyclops with
+pooled logistic regression and stops with an error otherwise. The
+model's \code{diagnostics$engine} says which was used.}
 
 \item{postGraceModel}{The model that gives the weights of \code{"notInitiateWithin"} strategies
 after the grace period: \code{"hazard"} (\code{1 / S(G | X)} from the
@@ -112,6 +123,21 @@ probability \code{h}, and the error builds up over the days of the horizon. The 
 therefore grows with the horizon and with each person's daily probability of initiating; it is
 largest for \code{"neverInitiate"} strategies. For long horizons, prefer the pooled logistic model, with
 a longer \code{intervalLength} if daily intervals are too costly.
+
+\code{pooledLogisticEngine} chooses how the pooled logistic hazard model is fit. \code{"lr"} (the default)
+expands the risk set to one row per person and interval, with the person's covariates, the time
+basis and the interactions on every row. \code{"plr"} gives Cyclops's pooled logistic regression
+(\code{modelType = "plr"}) the covariates once per person, each person's intervals (as a first and last
+interval, or as a list when the indicator basis leaves out an interval), the time basis per interval
+and the interactions as covariate-by-basis products, so its memory stays near that of one row per
+person. A \code{"day0"} interaction column that is not a basis column enters with its main effect fixed
+at 0. With a fixed prior variance (or no prior) the two engines agree to about 1e-7 in the
+coefficients and weights. With cross-validation they can choose different variances: the
+Cyclops version with plr can pick a much smaller variance than \code{"lr"} on the same data (for
+example with \code{fold = 5}, or on a sample of the risk set), and when its data-driven
+\code{startingVariance} (the default \code{-1}) is left to it, it starts from a value set by the number of
+persons rather than person-intervals. \code{"plr"} also does not flag separation in the interaction
+columns, which \code{"lr"} reports as a failed fit. So \code{"lr"} stays the default.
 
 \code{maxCohortSizeForFitting} applies to every censoring model: the binary models at the end of the
 grace period sample their starters and non-starters (through \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}}), and a
