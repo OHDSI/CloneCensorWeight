@@ -192,25 +192,6 @@ test_that("Cells with a fixed hazard and coefficients that are not identified ar
   expect_equal(cyclopsModel$estimates, ccwModel$estimates, tolerance = 1e-8)
 })
 
-test_that("The default robust variance stops with a clear error when the loaded Cyclops has no vcov(type = \"robust\")", {
-  # The loaded (development) Cyclops has it:
-  expect_silent(.checkCyclopsRobustVcov())
-  # vcov.cyclopsFit() of Cyclops releases up to 4.0.1, which ignores `type`:
-  oldVcov <- function(object, control, overrideNoRegularization = FALSE, ...) NULL
-  expect_error(.checkCyclopsRobustVcov(oldVcov), "robustVarianceEngine = \"ccw\"")
-  expect_error(.checkCyclopsRobustVcov(oldVcov), "does not have")
-
-  fixture <- createM4Fixture(n = 60, riskStart = 0, competingEvents = "none")
-  realCheck <- .checkCyclopsRobustVcov
-  local_mocked_bindings(.checkCyclopsRobustVcov = function() realCheck(oldVcov))
-  expect_error(fitM4(fixture, modelType = "cox", horizons = 10), "robustVarianceEngine = \"ccw\"")
-  expect_error(fitM4(fixture, modelType = "logistic", horizons = 10, timeBasis = createTimeBasis("linear", intervalLength = 1)), "robustVarianceEngine = \"ccw\"")
-  # Not needed by the package's own sandwich, the model-based variance or the Kaplan-Meier:
-  expect_false(is.na(getM4Estimate(fitM4(fixture, modelType = "cox", horizons = 10, robustVarianceEngine = "ccw"), "hr", "seLogEstimate")))
-  expect_false(is.na(getM4Estimate(fitM4(fixture, modelType = "cox", horizons = 10, varianceEstimator = "modelBased"), "hr", "seLogEstimate")))
-  expect_false(is.na(getM4Estimate(fitM4(fixture, modelType = "km", horizons = 10), "risk_target_10", "se")))
-})
-
 test_that("When the stacked pooled logistic model cannot be refitted, its robust covariance is NA, with a warning", {
   fixture <- createM4Fixture(n = 200, riskStart = 1, competingEvents = "death", seed = 3)
   timeBasis <- createTimeBasis("linear", intervalLength = 1)

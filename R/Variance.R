@@ -243,26 +243,6 @@
   return(vcov)
 }
 
-# Stops unless the loaded Cyclops has vcov(fit, type = "robust") (Cyclops C2, plan section 5), that is,
-# unless its `vcovMethod` has a `type` argument. An older vcov.cyclopsFit() would silently ignore `type`
-# (it takes `...`) and return the model-based variance. The DESCRIPTION requires Cyclops 4.0.2, the first
-# version with it, but development builds of 4.0.1 with and without it exist, so this checks the method.
-.checkCyclopsRobustVcov <- function(vcovMethod = utils::getS3method("vcov", "cyclopsFit")) {
-  if (!"type" %in% names(formals(vcovMethod))) {
-    stop(sprintf(
-      "The robust variance with robustVarianceEngine = \"cyclops\" (the default of createFitOutcomeModelArgs()) needs a Cyclops whose vcov() has type = \"robust\" (not yet in a released Cyclops), which the loaded Cyclops %s (%s) does not have. Install a Cyclops that has it, or use createFitOutcomeModelArgs(robustVarianceEngine = \"ccw\"), this package's own sandwich, which gives the same variance",
-      utils::packageVersion("Cyclops"), find.package("Cyclops")
-    ), call. = FALSE)
-  }
-  invisible(NULL)
-}
-
-# Does fitOutcomeModel() with these FitOutcomeModelArgs use Cyclops' vcov(type = "robust")?
-.needsCyclopsRobustVcov <- function(fitOutcomeModelArgs) {
-  return(fitOutcomeModelArgs$varianceEstimator == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops" &&
-    fitOutcomeModelArgs$modelType != "km")
-}
-
 .blockDiagonal <- function(matrices) {
   sizes <- vapply(matrices, nrow, integer(1))
   result <- matrix(0, sum(sizes), sum(sizes))

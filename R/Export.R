@@ -15,8 +15,8 @@
 # limitations under the License.
 
 # The export follows CohortMethod's exportToCsv() (R/Export.R, Copyright Observational Health Data
-# Sciences and Informatics, Apache 2.0): the target-comparator hash, the minimum cell count rule
-# (enforceMinCellValue) and the tidying of the covariate balance are adapted from there.
+# Sciences and Informatics, Apache 2.0): the target-comparator hash and the tidying of the covariate
+# balance are adapted from there, and the minimum cell count rule is its enforceMinCellValue().
 
 #' Export clone-censor-weight results to CSV files
 #'
@@ -190,30 +190,13 @@ exportToCsv <- function(outputFolder,
   return(fileName)
 }
 
-# Counts greater than 0 and below minValues are written as -minValues (from CohortMethod).
+# Counts greater than 0 and below minValues are written as -minValues, by
+# CohortMethod::enforceMinCellValue(). A table without the column (an empty table) is returned as is.
 .enforceMinCellValue <- function(data, fieldName, minValues, silent = FALSE) {
-  values <- data[[fieldName]]
-  if (is.null(values)) {
+  if (is.null(data[[fieldName]])) {
     return(data)
   }
-  if (all(is.na(minValues))) {
-    # The threshold is unknown (balance without the sizes to infer it), so nothing can be shown:
-    data[[fieldName]] <- rep(NA_real_, nrow(data))
-    return(data)
-  }
-  toCensor <- !is.na(values) & (values < minValues) & (values != 0)
-  if (!silent && nrow(data) > 0) {
-    message(sprintf(
-      "   censoring %d values (%s%%) from %s because value below minimum",
-      sum(toCensor), round(100 * sum(toCensor) / nrow(data), 1), fieldName
-    ))
-  }
-  if (length(minValues) == 1) {
-    data[[fieldName]][toCensor] <- -minValues
-  } else {
-    data[[fieldName]][toCensor] <- -minValues[toCensor]
-  }
-  return(data)
+  return(CohortMethod::enforceMinCellValue(data, fieldName, minValues, silent = silent))
 }
 
 .enforceMinCellValues <- function(data, tableName, minCellCount, silent = TRUE) {

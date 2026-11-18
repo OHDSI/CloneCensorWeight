@@ -184,9 +184,6 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (fitOutcomeModelArgs$varianceEstimator == "modelBased" && fitOutcomeModelArgs$modelType == "km") {
     stop("varianceEstimator = \"modelBased\" is not available for modelType = \"km\"")
   }
-  if (.needsCyclopsRobustVcov(fitOutcomeModelArgs)) {
-    .checkCyclopsRobustVcov()
-  }
   start <- Sys.time()
 
   data <- .getOutcomeData(weightedClones)

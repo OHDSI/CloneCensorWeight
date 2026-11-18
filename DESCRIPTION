@@ -27,10 +27,10 @@ LazyData: false
 Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.1.0),
-    Andromeda (>= 1.0.0)
+    Andromeda (>= 1.2.2)
 Imports:
     checkmate,
-    CohortMethod (>= 6.0.0),
+    CohortMethod (>= 6.0.3),
     Cyclops (>= 4.0.2),
     DatabaseConnector (>= 6.0.0),
     DBI,
@@ -71,6 +71,7 @@ Suggests:
     TTE (>= 1.1.2),
     zip
 Remotes:
+    ohdsi/Andromeda@develop,
     ohdsi/Cyclops@develop,
     ohdsi/CohortMethod@left-censored
 VignetteBuilder: knitr

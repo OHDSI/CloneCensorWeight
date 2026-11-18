@@ -1002,7 +1002,8 @@ fitCensoringModels <- function(clones,
   return(c("(Intercept)" = stats::qlogis(meanY)))
 }
 
-# TRUE when the loaded Cyclops has pooled logistic regression (modelType = "plr").
+# TRUE when the loaded Cyclops has pooled logistic regression (modelType = "plr"). Not every Cyclops
+# 4.0.2 has it: the first commits of 4.0.2 on Cyclops develop came before plr (45957c11).
 .cyclopsHasPooledLogistic <- function() {
   return("convertToLongOutcome" %in% getNamespaceExports("Cyclops"))
 }

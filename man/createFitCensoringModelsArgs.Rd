@@ -133,8 +133,8 @@ and the interactions as covariate-by-basis products, so its memory stays near th
 person. A \code{"day0"} interaction column that is not a basis column enters with its main effect fixed
 at 0. With a fixed prior variance (or no prior, when the maximum likelihood estimate exists) the two
 engines agree to about 1e-6 in the
-coefficients and weights. With cross-validation, the plr Cyclops (local branch \code{ccw-plr} at
-\verb{2b211c6a} or later) flags separation in the time-basis and interaction columns as \code{"lr"} does,
+coefficients and weights. With cross-validation, the plr of Cyclops develop (from \verb{2b211c6a})
+flags separation in the time-basis and interaction columns as \code{"lr"} does,
 and starts its data-driven \code{startingVariance} (the default \code{-1}) from the person-interval rows, so
 on a test case it selected the variance \code{"lr"} selects; with a \code{"day0"} interaction its start
 differs slightly from \code{"lr"}'s (about 1e-4 relative), because the fixed main effect counts as a

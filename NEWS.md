@@ -39,12 +39,15 @@ new defaults):
   `"ccw"`, because of the refit. The standard errors of the Kaplan-Meier and Aalen-Johansen estimates
   stay this package's own.
 * The default robust variance needs a Cyclops whose `vcov()` has `type = "robust"`. No released
-  Cyclops has it; it comes with Cyclops 4.0.2, so the DESCRIPTION requires `Cyclops (>= 4.0.2)`, with
-  `Remotes: ohdsi/Cyclops@develop`, where it is to be merged (plan decision 9 item 2). Development
-  builds of Cyclops 4.0.1 with and without it exist, so `fitOutcomeModel()` also stops with an error
-  naming `robustVarianceEngine = "ccw"` when the loaded Cyclops lacks it (an older `vcov()` would
-  silently return the model-based variance), and so does `runCcwAnalyses()`, before any work, when one
-  of its analyses needs it.
+  Cyclops has it; it comes with Cyclops 4.0.2 (on Cyclops develop), so the DESCRIPTION requires
+  `Cyclops (>= 4.0.2)`, with `Remotes: ohdsi/Cyclops@develop` (plan decision 9 item 2). Every Cyclops
+  4.0.2 on develop has it, so `fitOutcomeModel()` and `runCcwAnalyses()` no longer check the loaded
+  Cyclops for it.
+* The minimum detectable relative risk of logistic outcome models (`computeMdrr(modelType =
+  "logistic")`, the `mdrr` of `runCcwAnalyses()` with `modelType = "logistic"`) comes from CohortMethod,
+  whose left-censored branch now includes the treatment allocation in the standard error of the log
+  odds ratio. It is larger than before (it had about 30% power instead of 80% with equal allocation),
+  so the MDRR diagnostic can fail where it passed.
 * The empirical calibration is seeded: `createCcwAnalysesSpecifications(calibrationSeed = 1)` fits the
   null distribution of each calibration group (`EmpiricalCalibration::fitMcmcNull()`, an MCMC) with
   this seed and R's default random number kinds, whatever the caller's `RNGkind()`, and then restores
@@ -130,7 +133,7 @@ New features:
   a Cyclops with plr (not yet released) and stops with a clear error otherwise. With a fixed prior
   variance, or no prior when the maximum likelihood estimate exists, it gives the coefficients and
   weights of the default, `"lr"` (to about 1e-6); with cross-validation, a plr Cyclops before the
-  separation and starting-variance fixes (local `ccw-plr` `2b211c6a`) can choose a different
+  separation and starting-variance fixes (`2b211c6a`, now on Cyclops develop) can choose a different
   variance. `"lr"` stays the default while plr is not in a released Cyclops.
   The diagnostics of each pooled logistic model record the `engine`.
 * `createFitCensoringModelsArgs(covariateTimeInteraction = "day0" or "interval")` adds
@@ -227,6 +230,18 @@ New features:
   the hazard model's `intervalLength` does not allow). `fitCensoringModels()` warns when, under
   `"naturalGrace"`, persons reach day `G` untreated but nobody starts on day `G`, so that the regime is
   not identified.
+
+Dependencies:
+
+* Requires Andromeda 1.2.2 (`Remotes: ohdsi/Andromeda@develop`), whose `flushAndromeda()` no longer
+  creates a temporary database on every flush. The test-only workaround for Andromeda 1.2.0 and 1.2.1
+  (`tests/testthat/setup-andromeda.R`) is removed.
+* Requires CohortMethod 6.0.3 from its left-censored branch, and uses its exports instead of copies:
+  the settings objects inherit from `CohortMethod::AbstractSerializableSettings` (keeping this
+  package's message about fields filled with defaults and its 15-digit JSON), the covariate settings
+  are serialized with `CohortMethod::.convertAttrToMember()`, `.convertMemberToAttr()` and
+  `.convertEmptyListToLogical()`, and `exportToCsv()` censors small counts with
+  `CohortMethod::enforceMinCellValue()`. The exported results are unchanged.
 
 Documentation:
 

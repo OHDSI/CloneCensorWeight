@@ -14,32 +14,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# The code from here to the end of .convertEmptyListToLogical() is copied from CohortMethod
-# (R/SettingsObjects.R, Copyright Observational Health Data Sciences and Informatics, Apache 2.0),
-# because CohortMethod does not export it. Replace it with the CohortMethod exports once they exist.
-
-.recurseToList <- function(x) {
-  if ("toList" %in% names(x)) {
-    return(x$toList())
-  } else if (is.list(x)) {
-    for (i in seq_along(x)) {
-      # If member is NULL then assigning NULL will remove it from the list altogether.
-      if (!is.null(x[[i]])) {
-        x[[i]] <- .recurseToList(x[[i]])
-      }
-    }
-    if (is.object(x)) {
-      # jsonlite::toJSON throws error on S3 objects
-      class(x) <- NULL
-    }
-    return(x)
-  } else {
-    return(x)
-  }
-}
+# The base class of the settings objects is CohortMethod's AbstractSerializableSettings, which
+# provides toList() and fromList(). This package's version also says which fields a list or JSON saved
+# by an earlier version did not have, and writes JSON with 15 significant digits.
 
 AbstractSerializableSettings <- R6Class(
   "AbstractSerializableSettings",
+  inherit = CohortMethod::AbstractSerializableSettings,
   public = list(
     initialize = function(typedList, untypedList, json) {
       if (!missing(typedList)) {
@@ -63,12 +44,6 @@ AbstractSerializableSettings <- R6Class(
       }
       self$validate()
     },
-    toList = function() {
-      # Using is(x, "environment") instead of is.environment(x) because former is FALSE for R6 objects.
-      asList <- Filter(function(x) !is.function(x) & !is(x, "environment"), as.list(self))
-      asList <- .recurseToList(asList)
-      return(asList)
-    },
     toJson  = function() {
       # Unlike CohortMethod, digits = NA (15 significant digits) instead of jsonlite's default of 4
       # decimal places, so that reloaded settings keep their values.
@@ -79,13 +54,6 @@ AbstractSerializableSettings <- R6Class(
         null = "null",
         digits = NA
       )
-    },
-    fromList = function(list, requireTyping) {
-      for (name in names(list)) {
-        if (name %in% names(self)) {
-          self[[name]] <- list[[name]]
-        }
-      }
     }
   )
 )
@@ -110,6 +78,9 @@ AbstractSerializableSettings <- R6Class(
   }
 }
 
+# .dateCheck() is copied from CohortMethod (R/SettingsObjects.R, Copyright Observational Health Data
+# Sciences and Informatics, Apache 2.0), because CohortMethod does not export it.
+
 .dateCheck <- function(date) {
   if (date != "") {
     tryCatch({
@@ -125,77 +96,6 @@ AbstractSerializableSettings <- R6Class(
     })
     checkmate::assertDate(date, lower = "1000-01-01", upper = "2999-12-31")
   }
-}
-
-.convertAttrToMember <- function(object) {
-  if (is.function(object)) {
-    return(list(serialized_code = as.character(serialize(object, NULL))))
-  } else if (is.list(object)) {
-    if (length(object) > 0) {
-      for (i in 1:length(object)) {
-        if (!is.null(object[[i]])) {
-          object[[i]] <- .convertAttrToMember(object[[i]])
-        }
-      }
-    }
-    a <- names(attributes(object))
-    a <- a[!a %in% c("names", "class")]
-    class <- class(object)
-    if (length(class) > 1 || class != "list") {
-      class(object) <- "list"
-      object$attr_class <- class
-    }
-    if (length(a) > 0) {
-      object[paste("attr", a, sep = "_")] <- attributes(object)[a]
-    }
-  }
-  return(object)
-}
-
-.convertMemberToAttr <- function(object) {
-  if (is.list(object)) {
-    if (length(object) > 0) {
-      if (length(object) == 1 && !is.null(names(object)) && names(object) == "serialized_code") {
-        return(unserialize(as.raw(sapply(object$serialized_code, strtoi, base = 16L))))
-      }
-      for (i in 1:length(object)) {
-        if (!is.null(object[[i]])) {
-          object[[i]] <- .convertMemberToAttr(object[[i]])
-        }
-      }
-      attrNames <- names(object)[grep("^attr_", names(object))]
-      cleanNames <- gsub("^attr_", "", attrNames)
-      if (any(cleanNames == "class")) {
-        class(object) <- object$attr_class
-        object$attr_class <- NULL
-        attrNames <- attrNames[attrNames != "attr_class"]
-        cleanNames <- cleanNames[cleanNames != "class"]
-      }
-      if (any(cleanNames == "row.names") &&  length(object$attr_row.names) ==  0) {
-        object$attr_row.names <- as.character(c())
-      }
-      attributes(object)[cleanNames] <- object[attrNames]
-      object[attrNames] <- NULL
-    }
-  }
-  return(object)
-}
-
-.convertEmptyListToLogical <- function(object) {
-  # To mimic FeatureExtraction covariate settings behavior: empty vectors are logical
-  if (is.list(object)) {
-    if (length(object) > 0) {
-      for (i in 1:length(object)) {
-        if (!is.null(object[[i]])) {
-          object[[i]] <- .convertEmptyListToLogical(object[[i]])
-        }
-      }
-
-      idx <-sapply(object, function(x) is.list(x) && length(x) == 0)
-      object[idx] <- sapply(object[idx], as.logical)
-    }
-  }
-  return(object)
 }
 
 # End of code copied from CohortMethod --------------------------------------------------------------
@@ -409,13 +309,13 @@ GetDbCloneCensorWeightDataArgs <- R6Class(
     },
     toList = function() {
       asList <- super$toList()
-      asList$covariateSettings <- .convertAttrToMember(self$covariateSettings)
+      asList$covariateSettings <- CohortMethod::.convertAttrToMember(self$covariateSettings)
       return(asList)
     },
     fromList = function(list, requireTyping) {
       super$fromList(list)
       if (requireTyping) {
-        self$covariateSettings <- .convertEmptyListToLogical(.convertMemberToAttr(list$covariateSettings))
+        self$covariateSettings <- CohortMethod::.convertEmptyListToLogical(CohortMethod::.convertMemberToAttr(list$covariateSettings))
       }
     }
   )
@@ -580,8 +480,8 @@ TimeBasis <- R6Class(
 #' person. A `"day0"` interaction column that is not a basis column enters with its main effect fixed
 #' at 0. With a fixed prior variance (or no prior, when the maximum likelihood estimate exists) the two
 #' engines agree to about 1e-6 in the
-#' coefficients and weights. With cross-validation, the plr Cyclops (local branch `ccw-plr` at
-#' `2b211c6a` or later) flags separation in the time-basis and interaction columns as `"lr"` does,
+#' coefficients and weights. With cross-validation, the plr of Cyclops develop (from `2b211c6a`)
+#' flags separation in the time-basis and interaction columns as `"lr"` does,
 #' and starts its data-driven `startingVariance` (the default `-1`) from the person-interval rows, so
 #' on a test case it selected the variance `"lr"` selects; with a `"day0"` interaction its start
 #' differs slightly from `"lr"`'s (about 1e-4 relative), because the fixed main effect counts as a
@@ -1205,10 +1105,7 @@ BootstrapArgs <- R6Class(
 #' sandwich in R from the score residuals summed by person, at the reported estimates, without the
 #' refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
 #' when the outcome model is converged, as with the default `control`; with a loose convergence
-#' criterion the refit moves the estimates, and the two differ accordingly. `"cyclops"` needs a
-#' Cyclops whose `vcov()` has `type = "robust"`, which is not yet in a released Cyclops;
-#' [fitOutcomeModel()] and [runCcwAnalyses()] stop with an error naming `"ccw"` when the loaded Cyclops
-#' lacks it.
+#' criterion the refit moves the estimates, and the two differ accordingly.
 #'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`
@@ -1238,8 +1135,7 @@ BootstrapArgs <- R6Class(
 #'                             are the HC0 sandwich clustered on person and agree to rounding when the
 #'                             outcome model is converged (see Details). The standard errors of the
 #'                             Kaplan-Meier and Aalen-Johansen estimates (of `"km"`, and the rows at
-#'                             the horizons of `"cox"`) are this package's own either way. `"cyclops"`
-#'                             needs a Cyclops with `vcov(type = "robust")` (see Details).
+#'                             the horizons of `"cox"`) are this package's own either way.
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
 #'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?

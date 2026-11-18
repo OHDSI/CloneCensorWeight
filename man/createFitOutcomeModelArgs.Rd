@@ -55,8 +55,7 @@ Aalen-Johansen estimates (of \code{"km"}, and the rows at the horizons of
 are the HC0 sandwich clustered on person and agree to rounding when the
 outcome model is converged (see Details). The standard errors of the
 Kaplan-Meier and Aalen-Johansen estimates (of \code{"km"}, and the rows at
-the horizons of \code{"cox"}) are this package's own either way. \code{"cyclops"}
-needs a Cyclops with \code{vcov(type = "robust")} (see Details).}
+the horizons of \code{"cox"}) are this package's own either way.}
 
 \item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
 \code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}.}
@@ -160,10 +159,7 @@ is Cyclops' \code{vcov(fit, type = "robust")}, at the estimates of that refit. \
 sandwich in R from the score residuals summed by person, at the reported estimates, without the
 refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
 when the outcome model is converged, as with the default \code{control}; with a loose convergence
-criterion the refit moves the estimates, and the two differ accordingly. \code{"cyclops"} needs a
-Cyclops whose \code{vcov()} has \code{type = "robust"}, which is not yet in a released Cyclops;
-\code{\link[=fitOutcomeModel]{fitOutcomeModel()}} and \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} stop with an error naming \code{"ccw"} when the loaded Cyclops
-lacks it.
+criterion the refit moves the estimates, and the two differ accordingly.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
