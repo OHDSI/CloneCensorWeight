@@ -418,6 +418,30 @@ test_that("Cross-validation of the censoring models keeps the rows and copies of
   close(data)
 })
 
+test_that("The Cox censoring model gives Cyclops' prox-Newton room for its covariate values", {
+  values <- Andromeda::andromeda(covariates = data.frame(rowId = 1:3, covariateId = 1, covariateValue = 1))
+  on.exit(close(values), add = TRUE)
+  # 12 bytes per value, in whole MB, on top of the budget given (NULL is Cyclops' 1024)
+  expect_equal(CloneCensorWeight:::.coxNewtonControl(list(), values)$newtonMemoryBudget, 1025)
+  expect_equal(CloneCensorWeight:::.coxNewtonControl(list(newtonMemoryBudget = 2), values)$newtonMemoryBudget, 3)
+
+  fixture <- createM3Fixture(150, riskStart = 0L, seed = 12)
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("notInitiateWithin", "neverInitiate", graceEnd = 7), "eventsFirst")
+  on.exit({close(clones); close(data)}, add = TRUE)
+  args <- m3Args("cox", prior = Cyclops::createPrior("laplace", variance = 1, exclude = c(0)))
+  default <- suppressMessages(fitCensoringModels(clones, data, args))
+  # 10 bytes: too little for any prox-Newton step, which Cyclops warns leaves the fit on coordinate descent
+  args$control$newtonMemoryBudget <- 1e-5
+  local({
+    testthat::local_mocked_bindings(.coxNewtonControl = function(control, covariateData) control)
+    warnings <- capture_warnings(suppressMessages(fitCensoringModels(clones, data, args)))
+    expect_length(grep("more than newtonMemoryBudget", warnings), 2) # one per strategy's Cox model
+  })
+  expect_no_warning(tiny <- suppressMessages(fitCensoringModels(clones, data, args)))
+  expect_equal(tiny[[1]]$coefficients, default[[1]]$coefficients, tolerance = 1e-6)
+})
+
 test_that("Laplace and normal priors at a fixed variance match glmnet", {
   skip_if_not_installed("glmnet", minimum_version = "5.0")
   skip_if_not_installed("survival")
