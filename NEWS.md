@@ -18,6 +18,23 @@ new defaults):
   models to their whole risk set, as before; risk sets of at most 250,000 persons are not affected.
   `computeCcwDiagnostics()` and `computeCcwSensitivity()` refit the hazard models given to them when
   `maxCohortSizeForFitting` differs.
+* `createFitCensoringModelsArgs()`'s default `control` now has `resetCoefficients = FALSE`, so the
+  cross-validation fold fits of the censoring models start from each fold's solution at the nearest
+  prior variance already tried instead of from zero. On the 10^5-person simulated data (G = 7, daily
+  grid, 4 threads) this cut the pooled logistic hazard model's cross-validated fit from 2,597 s to
+  1,736 s, and the binary and Cox models' by 18% and 7%. The selected variances and coefficients agree
+  with the cold-start fits to rounding (predicted probabilities within 1e-9), and do not depend on
+  `threads`. `resetCoefficients = TRUE` restores cold starts.
+* The same default `control` now has `fitter = "super"` (an interim default) and no `tolerance`. For
+  the logistic censoring models (the binary models and the pooled logistic hazard model with the `"lr"`
+  engine), Cyclops' `"super"` variance search steps down from `startingVariance` first, never evaluates a
+  variance below the null-model variance, and refines its result. On the 10^5-person simulated data it
+  selected a variance 15% (binary) and 40% (hazard) smaller, with 544 instead of 705 nonzero hazard
+  coefficients, changed the factors 1/p and 1/(1 - p) by up to 20%, and took 165 s instead of 253 s
+  (binary) with warm starts. The fits still stop by the `"gap"` criterion of `algorithm = "auto"`. Cox
+  models are not affected. The earlier `tolerance = 2e-07` was already ignored by these fits, and under
+  `"super"` a logistic fit warns about a tolerance given without a `convergenceType`.
+  `fitter = "default"` restores the earlier search.
 * The Cox initiation hazard model raises the `newtonMemoryBudget` of `control` by 12 bytes per
   covariate value of its risk set, the row-wise copy of the design that Cyclops' Laplace prox-Newton
   steps make. Under the 1024 MB default, a risk set of more than about 90 million covariate values
