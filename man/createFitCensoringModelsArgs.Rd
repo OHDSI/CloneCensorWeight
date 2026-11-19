@@ -100,7 +100,12 @@ throw an error if found?}
 \item{prior}{The prior used to fit the models. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}.}
 
 \item{control}{The control object used to fit the models. See
-\code{\link[Cyclops:createControl]{Cyclops::createControl()}}.}
+\code{\link[Cyclops:createControl]{Cyclops::createControl()}}. For the Cox initiation hazard model,
+its \code{newtonMemoryBudget} is raised by 12 bytes per covariate value of
+the risk set (about 2.7 GB at 10^6 persons with ~240 values each), the
+row-wise copy of the design that Cyclops' prox-Newton steps make, so
+that large Laplace fits are not left on coordinate descent. The budget
+holds per fit: cross-validation folds on several threads may each use it.}
 }
 \value{
 An object of type \code{FitCensoringModelsArgs}.

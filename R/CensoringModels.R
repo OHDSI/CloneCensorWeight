@@ -1214,6 +1214,20 @@ fitCensoringModels <- function(clones,
   return(tibble(time = as.numeric(times[isEventTime]), cumHazard = cumsum(events[isEventTime] / atRisk[isEventTime])))
 }
 
+# `control` with room in `newtonMemoryBudget` (MB; NULL is Cyclops' 1024) for the row-wise copy of the design that
+# a Laplace prox-Newton step of a Cox model makes: Cyclops counts 12 bytes per covariate value of the working set
+# against the budget, so a large risk set left the fit on coordinate descent, which on these correlated designs
+# ran 1,700 cycles in 25 minutes without converging at 500,000 persons (Newton: 24 iterations, 105 s). The values
+# of the whole risk set bound those of the working set. The 24 |W|^2 Hessian part stays within the budget given.
+.coxNewtonControl <- function(control, covariateData) {
+  values <- covariateData$covariates |>
+    count() |>
+    pull()
+  budget <- if (is.null(control$newtonMemoryBudget)) 1024 else control$newtonMemoryBudget
+  control$newtonMemoryBudget <- budget + ceiling(12 * values / 2^20)
+  return(control)
+}
+
 # Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
 # of the risk set. `refit` (the reweight bootstrap, whose risk sets have frequency weights):
 # `list(buildOnly = TRUE)` returns the Cyclops data of the full data (`fitSet` the risk set) for
@@ -1290,7 +1304,8 @@ fitCensoringModels <- function(clones,
             startingCoefficients = .startingCoefficients(refit, refit$startingFits[[refit$startingKey]]$coefficients, ids, as.character(ids))
           )
         }
-        cyclopsFit <- .fitCyclops(cyclopsData, prior, fitCensoringModelsArgs$control, fitCensoringModelsArgs$stopOnError,
+        control <- .coxNewtonControl(fitCensoringModelsArgs$control, covariateData)
+        cyclopsFit <- .fitCyclops(cyclopsData, prior, control, fitCensoringModelsArgs$stopOnError,
                                   fixedCoefficients = if (any(fixed)) fixed, refit = cyclopsRefit)
         if (is.character(cyclopsFit)) {
           error <- cyclopsFit

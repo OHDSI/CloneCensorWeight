@@ -18,6 +18,12 @@ new defaults):
   models to their whole risk set, as before; risk sets of at most 250,000 persons are not affected.
   `computeCcwDiagnostics()` and `computeCcwSensitivity()` refit the hazard models given to them when
   `maxCohortSizeForFitting` differs.
+* The Cox initiation hazard model raises the `newtonMemoryBudget` of `control` by 12 bytes per
+  covariate value of its risk set, the row-wise copy of the design that Cyclops' Laplace prox-Newton
+  steps make. Under the 1024 MB default, a risk set of more than about 90 million covariate values
+  (about 400,000 persons of the Synthea-profile data) left the fit on coordinate descent, which did
+  not converge: at 500,000 persons, 1,700 cycles in 25 minutes; with the larger budget it takes 24
+  Newton iterations and 105 s (10^6 persons: 187 s, about 20 GB peak). Smaller fits are unchanged.
 * The Cox and pooled logistic outcome models are fitted with unstabilized weights by default
   (`createFitOutcomeModelArgs(msmWeights = "unstabilized")`), whatever `createComputeWeightsArgs()`
   `stabilized` is. `msmWeights = "stabilized"` reproduces the earlier fits.

@@ -687,7 +687,12 @@ TimeBasis <- R6Class(
 #' @param stopOnError              If an error occurs while fitting, should the function stop?
 #' @param prior                    The prior used to fit the models. See [Cyclops::createPrior()].
 #' @param control                  The control object used to fit the models. See
-#'                                 [Cyclops::createControl()].
+#'                                 [Cyclops::createControl()]. For the Cox initiation hazard model,
+#'                                 its `newtonMemoryBudget` is raised by 12 bytes per covariate value of
+#'                                 the risk set (about 2.7 GB at 10^6 persons with ~240 values each), the
+#'                                 row-wise copy of the design that Cyclops' prox-Newton steps make, so
+#'                                 that large Laplace fits are not left on coordinate descent. The budget
+#'                                 holds per fit: cross-validation folds on several threads may each use it.
 #'
 #' @return
 #' An object of type `FitCensoringModelsArgs`.
