@@ -693,6 +693,18 @@ TimeBasis <- R6Class(
 #'                                 row-wise copy of the design that Cyclops' prox-Newton steps make, so
 #'                                 that large Laplace fits are not left on coordinate descent. The budget
 #'                                 holds per fit: cross-validation folds on several threads may each use it.
+#'                                 The default `resetCoefficients = FALSE` starts each cross-validation fold
+#'                                 fit from that fold's solution at the nearest prior variance already tried
+#'                                 (Cyclops' `cvWarmStart`): the same fits as cold starts to rounding, and
+#'                                 independent of `threads`. The default `fitter = "super"` (an interim
+#'                                 choice, to be revisited by the stopping-rule study of the plan) changes
+#'                                 the variance search of the logistic models (`"lr"`): it steps down from
+#'                                 `startingVariance` first, never below the variance at which every
+#'                                 penalized coefficient is 0, and refines its result. It selects a smaller
+#'                                 variance than `fitter = "default"` and is faster. The fits still stop by
+#'                                 Cyclops' `"gap"` criterion under its default `algorithm = "auto"`. Cox models
+#'                                 are not affected. No `tolerance` is set, since under `"super"` a logistic
+#'                                 fit ignores (and warns about) a tolerance given without a `convergenceType`.
 #'
 #' @return
 #' An object of type `FitCensoringModelsArgs`.
@@ -724,8 +736,8 @@ createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          control = Cyclops::createControl(noiseLevel = "silent",
                                                                           cvType = "auto",
                                                                           seed = 1,
-                                                                          resetCoefficients = TRUE,
-                                                                          tolerance = 2e-07,
+                                                                          resetCoefficients = FALSE,
+                                                                          fitter = "super",
                                                                           cvRepetitions = 3,
                                                                           startingVariance = 0.01)) {
   args <- list()

@@ -21,7 +21,7 @@ createFitCensoringModelsArgs(
   stopOnError = TRUE,
   prior = Cyclops::createPrior("laplace", exclude = c(0), useCrossValidation = TRUE),
   control = Cyclops::createControl(noiseLevel = "silent", cvType = "auto", seed = 1,
-    resetCoefficients = TRUE, tolerance = 2e-07, cvRepetitions = 3, startingVariance =
+    resetCoefficients = FALSE, fitter = "super", cvRepetitions = 3, startingVariance =
     0.01)
 )
 }
@@ -105,7 +105,19 @@ its \code{newtonMemoryBudget} is raised by 12 bytes per covariate value of
 the risk set (about 2.7 GB at 10^6 persons with ~240 values each), the
 row-wise copy of the design that Cyclops' prox-Newton steps make, so
 that large Laplace fits are not left on coordinate descent. The budget
-holds per fit: cross-validation folds on several threads may each use it.}
+holds per fit: cross-validation folds on several threads may each use it.
+The default \code{resetCoefficients = FALSE} starts each cross-validation fold
+fit from that fold's solution at the nearest prior variance already tried
+(Cyclops' \code{cvWarmStart}): the same fits as cold starts to rounding, and
+independent of \code{threads}. The default \code{fitter = "super"} (an interim
+choice, to be revisited by the stopping-rule study of the plan) changes
+the variance search of the logistic models (\code{"lr"}): it steps down from
+\code{startingVariance} first, never below the variance at which every
+penalized coefficient is 0, and refines its result. It selects a smaller
+variance than \code{fitter = "default"} and is faster. The fits still stop by
+Cyclops' \code{"gap"} criterion under its default \code{algorithm = "auto"}. Cox models
+are not affected. No \code{tolerance} is set, since under \code{"super"} a logistic
+fit ignores (and warns about) a tolerance given without a \code{convergenceType}.}
 }
 \value{
 An object of type \code{FitCensoringModelsArgs}.
