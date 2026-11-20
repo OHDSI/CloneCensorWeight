@@ -5,6 +5,16 @@
 Changes that alter results of existing code, or of settings saved before them (which load with the
 new defaults):
 
+* `createFitCensoringModelsArgs(pooledLogisticEngine = "plr")` is now the default: the pooled logistic
+  initiation hazard model is fit by Cyclops' pooled logistic regression, which keeps the covariates one
+  row per person instead of expanding them to one row per person and interval. On the 10^6-person
+  simulated data (G = 30, fixed prior, 4 threads) the censoring models took 235 s and 14 GB peak memory
+  instead of 353 s and 23 GB. With a fixed prior the two engines agree to about 1e-6; with
+  cross-validation they select the same variance once Cyclops' `fitter = "super"` covers `plr`
+  (Cyclops develop after `bcb3804b`; earlier builds give `plr` the search of `fitter = "default"`).
+  Settings saved before `pooledLogisticEngine` existed still load as `"lr"`, the engine they were fit
+  with. `pooledLogisticEngine = "lr"` restores the earlier fits.
+
 * `createFitCensoringModelsArgs(maxCohortSizeForFitting = 250000)` now also applies to the
   initiation hazard models (pooled logistic and Cox), not only to the binary models: a hazard model
   whose risk set holds more persons is fit on a uniform sample of that many persons (all their rows),
@@ -180,9 +190,9 @@ New features:
   covariates one row per person instead of expanding them to one row per person and interval. It needs
   a Cyclops with plr (not yet released) and stops with a clear error otherwise. With a fixed prior
   variance, or no prior when the maximum likelihood estimate exists, it gives the coefficients and
-  weights of the default, `"lr"` (to about 1e-6); with cross-validation, a plr Cyclops before the
+  weights of `"lr"` (to about 1e-6); with cross-validation, a plr Cyclops before the
   separation and starting-variance fixes (`2b211c6a`, now on Cyclops develop) can choose a different
-  variance. `"lr"` stays the default while plr is not in a released Cyclops.
+  variance. It is now the default (see above).
   The diagnostics of each pooled logistic model record the `engine`.
 * `createFitCensoringModelsArgs(covariateTimeInteraction = "day0" or "interval")` adds
   covariate-by-time interactions to the pooled logistic initiation hazard model.
