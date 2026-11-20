@@ -471,9 +471,9 @@ TimeBasis <- R6Class(
 #' largest for `"neverInitiate"` strategies. For long horizons, prefer the pooled logistic model, with
 #' a longer `intervalLength` if daily intervals are too costly.
 #'
-#' `pooledLogisticEngine` chooses how the pooled logistic hazard model is fit. `"lr"` (the default)
+#' `pooledLogisticEngine` chooses how the pooled logistic hazard model is fit. `"lr"`
 #' expands the risk set to one row per person and interval, with the person's covariates, the time
-#' basis and the interactions on every row. `"plr"` gives Cyclops's pooled logistic regression
+#' basis and the interactions on every row. `"plr"` (the default) gives Cyclops's pooled logistic regression
 #' (`modelType = "plr"`) the covariates once per person, each person's intervals (as a first and last
 #' interval, or as a list when the indicator basis leaves out an interval), the time basis per interval
 #' and the interactions as covariate-by-basis products, so its memory stays near that of one row per
@@ -485,8 +485,11 @@ TimeBasis <- R6Class(
 #' and starts its data-driven `startingVariance` (the default `-1`) from the person-interval rows, so
 #' on a test case it selected the variance `"lr"` selects; with a `"day0"` interaction its start
 #' differs slightly from `"lr"`'s (about 1e-4 relative), because the fixed main effect counts as a
-#' column. Earlier plr builds could pick a much smaller variance (for example with `fold = 5`). plr
-#' is not yet in a released Cyclops, so `"lr"` stays the default.
+#' column. Earlier plr builds could pick a much smaller variance (for example with `fold = 5`), and
+#' before Cyclops' `fitter = "super"` covered `modelType = "plr"`, the plr hazard model's search
+#' under the default control could select a different variance than `"lr"`'s. `"plr"` needs much
+#' less memory and is faster (10^6 persons, G = 30, fixed prior: 235 s and 14 GB against 353 s and
+#' 23 GB).
 #'
 #' `maxCohortSizeForFitting` applies to every censoring model: the binary models at the end of the
 #' grace period sample their starters and non-starters (through [CohortMethod::createPs()]), and a
@@ -645,7 +648,7 @@ TimeBasis <- R6Class(
 #'                                 logistic regression, which keeps the covariates one row per person
 #'                                 and builds the person-interval rows, time basis and interactions on
 #'                                 the fly, so it needs much less memory). Both fit the same model; see
-#'                                 details for when they agree. `"plr"` needs a Cyclops with
+#'                                 details for when they agree. `"plr"`, the default, needs a Cyclops with
 #'                                 pooled logistic regression and stops with an error otherwise. The
 #'                                 model's `diagnostics$engine` says which was used.
 #' @param postGraceModel           The model that gives the weights of `"notInitiateWithin"` strategies
@@ -698,7 +701,7 @@ TimeBasis <- R6Class(
 #'                                 (Cyclops' `cvWarmStart`): the same fits as cold starts to rounding, and
 #'                                 independent of `threads`. The default `fitter = "super"` (an interim
 #'                                 choice, to be revisited by the stopping-rule study of the plan) changes
-#'                                 the variance search of the logistic models (`"lr"`): it steps down from
+#'                                 the variance search of the logistic models (both engines): it steps down from
 #'                                 `startingVariance` first, never below the variance at which every
 #'                                 penalized coefficient is 0, and refines its result. It selects a smaller
 #'                                 variance than `fitter = "default"` and is faster. The fits still stop by
@@ -719,7 +722,7 @@ TimeBasis <- R6Class(
 createFitCensoringModelsArgs <- function(hazardModelType = "logistic",
                                          timeBasis = createTimeBasis(),
                                          covariateTimeInteraction = if (identical(hazardModelType, "cox")) "none" else "day0",
-                                         pooledLogisticEngine = "lr",
+                                         pooledLogisticEngine = "plr",
                                          postGraceModel = "hazard",
                                          initiateWithinModel = "binary",
                                          graceRegime = "binaryAtG",
@@ -753,7 +756,7 @@ FitCensoringModelsArgs <- R6Class(
   public = list(
     hazardModelType = NULL,
     timeBasis = NULL,
-    # Defaults, so settings saved before these fields existed load:
+    # Defaults, so settings saved before these fields existed load (with the engine they were fit with):
     covariateTimeInteraction = "day0",
     pooledLogisticEngine = "lr",
     postGraceModel = "hazard",

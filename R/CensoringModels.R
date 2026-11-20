@@ -249,7 +249,7 @@ fitCensoringModels <- function(clones,
   .checkInitiateWithinHazardGrid(strategies, fitCensoringModelsArgs)
   # Before any fit, so that a long run does not stop late:
   if (fitCensoringModelsArgs$hazardModelType == "logistic" && fitCensoringModelsArgs$pooledLogisticEngine == "plr" && !.cyclopsHasPooledLogistic()) {
-    stop(sprintf("pooledLogisticEngine = \"plr\" needs a Cyclops with pooled logistic regression (modelType = \"plr\"), which the loaded Cyclops %s does not have. Install one that has it, or use pooledLogisticEngine = \"lr\" (the default), which gives the same fit with more memory", utils::packageVersion("Cyclops")))
+    stop(sprintf("pooledLogisticEngine = \"plr\" needs a Cyclops with pooled logistic regression (modelType = \"plr\"), which the loaded Cyclops %s does not have. Install one that has it, or use pooledLogisticEngine = \"lr\", which gives the same fit with more memory", utils::packageVersion("Cyclops")))
   }
   if (warnDay0CovariateWindows) {
     .warnDay0CovariateWindows(strategies, cloneCensorWeightData, fitCensoringModelsArgs)
@@ -460,7 +460,7 @@ fitCensoringModels <- function(clones,
     argsList$covariateTimeInteraction <- NULL
     argsList$pooledLogisticEngine <- NULL
   }
-  # The default engine is left out, so that the keys of models saved before the setting existed match:
+  # "lr", the engine of settings saved before the setting existed, is left out, so that their keys match:
   if (identical(argsList$pooledLogisticEngine, "lr")) {
     argsList$pooledLogisticEngine <- NULL
   }
@@ -1529,9 +1529,12 @@ fitCensoringModels <- function(clones,
     covariateData <- Andromeda::andromeda(covariates = tibble(rowId = integer(0), covariateId = numeric(0), covariateValue = numeric(0)))
   }
   on.exit(close(covariateData))
+  # Sorted, so the interaction IDs (and the order of the model's columns) do not depend on the order in
+  # which the database returns the covariates.
   covariateIds <- covariateData$covariates |>
     dplyr::distinct(.data$covariateId) |>
-    pull()
+    pull() |>
+    sort()
   # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
   rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, fitSet$lastInterval))]
   interactionBasis <- .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
