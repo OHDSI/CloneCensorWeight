@@ -12,6 +12,7 @@ createFitOutcomeModelArgs(
   msmWeights = "unstabilized",
   varianceEstimator = "robust",
   robustVarianceEngine = "cyclops",
+  fineGrayCensoring = "natural",
   bootstrapArgs = createBootstrapArgs(),
   useCovariates = FALSE,
   stratified = FALSE,
@@ -22,8 +23,10 @@ createFitOutcomeModelArgs(
 }
 \arguments{
 \item{modelType}{The outcome model: \code{"cox"} (the hazard ratio of a weighted Cox model,
-with the risks of \code{"km"}), \code{"logistic"} (pooled logistic), or \code{"km"}
-(weighted Kaplan-Meier, or Aalen-Johansen with competing events).}
+with the risks of \code{"km"}), \code{"logistic"} (pooled logistic), \code{"km"}
+(weighted Kaplan-Meier, or Aalen-Johansen with competing events), or
+\code{"fineGray"} (the subdistribution hazard ratio of a weighted Fine-Gray
+model, with the risks of \code{"km"}; needs competing death).}
 
 \item{horizons}{Days since index at which risks, risk differences and risk ratios are
 reported.}
@@ -56,6 +59,18 @@ are the HC0 sandwich clustered on person and agree to rounding when the
 outcome model is converged (see Details). The standard errors of the
 Kaplan-Meier and Aalen-Johansen estimates (of \code{"km"}, and the rows at
 the horizons of \code{"cox"}) are this package's own either way.}
+
+\item{fineGrayCensoring}{The censoring survival G of \code{"fineGray"}, per strategy: \code{"natural"} (the
+default) estimates it from the clones whose follow-up ended at the end of
+observation or of the risk window, with the clones weighted by their
+weights; clones censored at a deviation from their strategy leave its risk
+set without counting as censored, because the weights already account for
+that (artificial) censoring. \code{"finegray"} estimates it as
+\code{\link[survival:finegray]{survival::finegray()}} does: unweighted, from every end that is not an
+outcome or a death, deviations included, so artificial censoring counts in
+both the weights and G; it reproduces \code{\link[survival:finegray]{survival::finegray()}} and is meant
+for comparisons. Censorings at a time follow the outcomes and deaths at
+that time.}
 
 \item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
 \code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}.}
@@ -108,6 +123,14 @@ which a grace period violates by design: during the grace period the clones of b
 follow the same course, so their true hazards are equal there. Such risks are biased, also at
 horizons within the grace period, so they are not reported. The hazard ratio is kept because
 meta-analysis and empirical calibration use it.
+
+\code{"fineGray"} (an option, not the default) needs clones created with \code{competingEvents = "death"}. It
+reports the subdistribution hazard ratio (\code{"shr"}) of a weighted Fine-Gray model: a weighted Cox
+model of the outcome in which a clone that dies stays in the risk set after its death, with its weight
+at death times G(t-) / G(T-), where T is the time of death and G the censoring survival of its
+strategy (\code{fineGrayCensoring}). Like \code{"cox"}, it reports the Aalen-Johansen risks, risk differences
+and risk ratios of \code{"km"} at the horizons, not the model-based cumulative incidence, which would
+assume proportional subdistribution hazards. Its robust variance treats the weights and G as fixed.
 
 The pooled logistic (\code{"logistic"}) risks are model-based. Without \code{armByTimeInteraction} they assume
 an odds ratio that is constant over follow-up and are biased under a grace period for the same

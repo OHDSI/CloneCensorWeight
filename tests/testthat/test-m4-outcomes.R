@@ -772,6 +772,8 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
   settings <- list(
     list(modelType = "cox"),
     list(modelType = "km"),
+    list(modelType = "fineGray", censoring = "natural"),
+    list(modelType = "fineGray", censoring = "finegray"),
     list(modelType = "logistic", type = "linear", interaction = FALSE),
     # Bases whose definition depends on the distribution of the rows' intervals (knots at quantiles;
     # orthogonal polynomials), with and without the arm x time interaction:
@@ -785,7 +787,8 @@ test_that("Frequency weights in .fitOutcomeModelPoint equal copying persons", {
     args <- createFitOutcomeModelArgs(
       modelType = setting$modelType, horizons = c(6, 15), varianceEstimator = "bootstrap",
       timeBasis = createTimeBasis(type, intervalLength = 3, df = 3, degree = 2, raw = FALSE),
-      armByTimeInteraction = isTRUE(setting$interaction), control = m4Control
+      armByTimeInteraction = isTRUE(setting$interaction), control = m4Control,
+      fineGrayCensoring = if (is.null(setting$censoring)) "natural" else setting$censoring
     )
     weighted <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(weightedClones, args, personCounts = personCounts))
     copied <- withoutGracePeriodWarnings(.fitOutcomeModelPoint(copyWeightedClones, args))

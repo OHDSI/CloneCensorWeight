@@ -20,7 +20,7 @@ fitOutcomeModel(
 An object of class \code{CcwOutcomeModel}: a list with
 \itemize{
 \item \code{modelType} and \code{varianceEstimator};
-\item \code{estimates}: a tibble with one row per estimand (\code{"hr"} or \code{"or"} (with \code{armByTimeInteraction},
+\item \code{estimates}: a tibble with one row per estimand (\code{"hr"}, \code{"shr"} (\code{"fineGray"}) or \code{"or"} (with \code{armByTimeInteraction},
 the odds ratio where the time basis is 0; see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), and per horizon \code{h}
 \code{"risk_target_<h>"}, \code{"risk_comparator_<h>"}, \code{"rd_<h>"}, \code{"rr_<h>"}, and for \code{"km"} and \code{"cox"}
 \code{"rmst_<h>"} (without competing events) and \code{"rmtl_<h>"}, the target minus comparator
@@ -92,6 +92,15 @@ follow-up. Coefficients the data do not identify (for example the arm-by-time in
 interval only one strategy enters) are \code{NA}, and so are the risks that need them.
 \item \code{"km"}: weighted Kaplan-Meier (no competing events) or Aalen-Johansen (competing death) per
 strategy.
+\item \code{"fineGray"} (needs competing death): the subdistribution hazard ratio of a weighted Fine-Gray
+regression, fitted as the weighted Cox regression above on rows in which a clone that dies at T
+stays in the risk set after T, with weight w(T) G(s-) / G(T-) at times s > T (w(T) its weight at
+death, G the censoring survival of its strategy, chosen by \code{fineGrayCensoring} in
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), and, at the horizons, the Aalen-Johansen rows of \code{"km"}, as for
+\code{"cox"}. Cyclops fits these rows without expanding them when it supports Fine-Gray rows
+(\code{Cyclops::convertToCyclopsData(fineGrayCensoring = )}); with \code{robustVarianceEngine = "ccw"}, or an
+older Cyclops, the rows after each death are built here. The robust variance treats the weights and G
+as fixed.
 }
 
 The Cox and pooled logistic models, and their robust and model-based variances, use the weights

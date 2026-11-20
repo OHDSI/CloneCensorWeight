@@ -795,12 +795,12 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
 # 0.25 with a sign test p < 0.01 (the sign test alone flags negligible shifts with many replicates),
 # assessed only with at least 20 finite replicates (NA otherwise).
 .bootstrapReplicateShift <- function(t0, replicates) {
-  estimands <- t0$estimand[grepl("^(hr|rd_[0-9]+)$", t0$estimand)]
+  estimands <- t0$estimand[grepl("^(hr|shr|rd_[0-9]+)$", t0$estimand)]
   rows <- list()
   for (estimand in estimands) {
     estimate <- t0$estimate[t0$estimand == estimand]
     t <- replicates[, estimand]
-    if (estimand == "hr") {
+    if (estimand %in% c("hr", "shr")) {
       estimate <- log(estimate)
       t <- log(t)
     }
