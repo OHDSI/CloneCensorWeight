@@ -1095,6 +1095,14 @@ BootstrapArgs <- R6Class(
 #' horizons within the grace period, so they are not reported. The hazard ratio is kept because
 #' meta-analysis and empirical calibration use it.
 #'
+#' `"fineGray"` (an option, not the default) needs clones created with `competingEvents = "death"`. It
+#' reports the subdistribution hazard ratio (`"shr"`) of a weighted Fine-Gray model: a weighted Cox
+#' model of the outcome in which a clone that dies stays in the risk set after its death, with its weight
+#' at death times G(t-) / G(T-), where T is the time of death and G the censoring survival of its
+#' strategy (`fineGrayCensoring`). Like `"cox"`, it reports the Aalen-Johansen risks, risk differences
+#' and risk ratios of `"km"` at the horizons, not the model-based cumulative incidence, which would
+#' assume proportional subdistribution hazards. Its robust variance treats the weights and G as fixed.
+#'
 #' The pooled logistic (`"logistic"`) risks are model-based. Without `armByTimeInteraction` they assume
 #' an odds ratio that is constant over follow-up and are biased under a grace period for the same
 #' reason, so use `armByTimeInteraction = TRUE` with a grace period. With daily intervals, an indicator
@@ -1148,8 +1156,10 @@ BootstrapArgs <- R6Class(
 #' criterion the refit moves the estimates, and the two differ accordingly.
 #'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
-#'                             with the risks of `"km"`), `"logistic"` (pooled logistic), or `"km"`
-#'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events).
+#'                             with the risks of `"km"`), `"logistic"` (pooled logistic), `"km"`
+#'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events), or
+#'                             `"fineGray"` (the subdistribution hazard ratio of a weighted Fine-Gray
+#'                             model, with the risks of `"km"`; needs competing death).
 #' @param horizons             Days since index at which risks, risk differences and risk ratios are
 #'                             reported.
 #' @param timeBasis            An object of type `TimeBasis` as created using [createTimeBasis()], used
@@ -1176,6 +1186,17 @@ BootstrapArgs <- R6Class(
 #'                             outcome model is converged (see Details). The standard errors of the
 #'                             Kaplan-Meier and Aalen-Johansen estimates (of `"km"`, and the rows at
 #'                             the horizons of `"cox"`) are this package's own either way.
+#' @param fineGrayCensoring    The censoring survival G of `"fineGray"`, per strategy: `"natural"` (the
+#'                             default) estimates it from the clones whose follow-up ended at the end of
+#'                             observation or of the risk window, with the clones weighted by their
+#'                             weights; clones censored at a deviation from their strategy leave its risk
+#'                             set without counting as censored, because the weights already account for
+#'                             that (artificial) censoring. `"finegray"` estimates it as
+#'                             [survival::finegray()] does: unweighted, from every end that is not an
+#'                             outcome or a death, deviations included, so artificial censoring counts in
+#'                             both the weights and G; it reproduces [survival::finegray()] and is meant
+#'                             for comparisons. Censorings at a time follow the outcomes and deaths at
+#'                             that time.
 #' @param bootstrapArgs        An object of type `BootstrapArgs` as created using
 #'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?
@@ -1205,6 +1226,7 @@ createFitOutcomeModelArgs <- function(modelType = "cox",
                                       msmWeights = "unstabilized",
                                       varianceEstimator = "robust",
                                       robustVarianceEngine = "cyclops",
+                                      fineGrayCensoring = "natural",
                                       bootstrapArgs = createBootstrapArgs(),
                                       useCovariates = FALSE,
                                       stratified = FALSE,
@@ -1233,6 +1255,8 @@ FitOutcomeModelArgs <- R6Class(
     varianceEstimator = NULL,
     # Default, so settings saved before this field existed load:
     robustVarianceEngine = "cyclops",
+    # Default, so settings saved before this field existed load:
+    fineGrayCensoring = "natural",
     bootstrapArgs = NULL,
     useCovariates = NULL,
     stratified = NULL,
@@ -1240,13 +1264,14 @@ FitOutcomeModelArgs <- R6Class(
     control = NULL,
     validate = function() {
       errorMessages <- checkmate::makeAssertCollection()
-      checkmate::assertChoice(self$modelType, c("cox", "logistic", "km"), add = errorMessages)
+      checkmate::assertChoice(self$modelType, c("cox", "logistic", "km", "fineGray"), add = errorMessages)
       checkmate::assertIntegerish(self$horizons, lower = 0, min.len = 1, any.missing = FALSE, add = errorMessages)
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
       checkmate::assertFlag(self$armByTimeInteraction, add = errorMessages)
       checkmate::assertChoice(self$msmWeights, c("unstabilized", "stabilized"), add = errorMessages)
       checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased"), add = errorMessages)
       checkmate::assertChoice(self$robustVarianceEngine, c("cyclops", "ccw"), add = errorMessages)
+      checkmate::assertChoice(self$fineGrayCensoring, c("natural", "finegray"), add = errorMessages)
       checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
       checkmate::assertFlag(self$useCovariates, add = errorMessages)
       checkmate::assertFlag(self$stratified, add = errorMessages)

@@ -2,6 +2,21 @@
 
 * Initial development
 
+* `createFitOutcomeModelArgs(modelType = "fineGray")` (an option, not the default) fits a weighted
+  Fine-Gray MSM: the subdistribution hazard ratio (`"shr"`), with the Aalen-Johansen risks, risk
+  differences and risk ratios of `"km"` at the horizons. It needs `competingEvents = "death"`. A clone that
+  dies at T stays in the risk set after T with weight w(T) G(s-) / G(T-), where G is the censoring
+  survival of its strategy. The rows are built in R and fitted with the weighted `cox_counting` model,
+  with the robust (person-clustered), model-based or bootstrap variance of `"cox"`; the robust variance
+  treats the weights and G as fixed. `fineGrayCensoring = "natural"` (the default) estimates G from the
+  ends at `observationEnd` and `riskEnd` only, weighted by the clone weights, leaving the artificial
+  censoring at deviations to the weights; `"finegray"` estimates G as `survival::finegray()` does
+  (unweighted, all censorings including deviations), for comparisons. Tests: `survival::finegray()`'s
+  weights (compared per strategy and risk-set cell: with `strata()` it extends a clone that dies only
+  over its own stratum's outcome times, as for a stratified Cox model, and in survival 3.8-6 misaligns
+  the weights when combined with `weights`), and `coxph()` on hand-built Fine-Gray rows for both
+  options.
+
 Changes that alter results of existing code, or of settings saved before them (which load with the
 new defaults):
 
