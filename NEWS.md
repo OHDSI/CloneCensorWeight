@@ -6,9 +6,12 @@
   Fine-Gray MSM: the subdistribution hazard ratio (`"shr"`), with the Aalen-Johansen risks, risk
   differences and risk ratios of `"km"` at the horizons. It needs `competingEvents = "death"`. A clone that
   dies at T stays in the risk set after T with weight w(T) G(s-) / G(T-), where G is the censoring
-  survival of its strategy. The rows are built in R and fitted with the weighted `cox_counting` model,
-  with the robust (person-clustered), model-based or bootstrap variance of `"cox"`; the robust variance
-  treats the weights and G as fixed. `fineGrayCensoring = "natural"` (the default) estimates G from the
+  survival of its strategy. With a Cyclops that fits Fine-Gray rows (`convertToCyclopsData(fineGrayCensoring
+  = )`), Cyclops fits it without expanding rows and gives its robust (person-clustered) and model-based
+  variances: at 10^5 simulated persons, 2.1 s instead of 11.3 s, on the 1.0 million segments instead of 4.3
+  million expanded rows, with the same estimate and standard error. With `robustVarianceEngine = "ccw"`, or
+  an older Cyclops, the rows are expanded in R (one per competing death and later jump of G) and fitted
+  with the weighted `cox_counting` model. The robust variance treats the weights and G as fixed. `fineGrayCensoring = "natural"` (the default) estimates G from the
   ends at `observationEnd` and `riskEnd` only, weighted by the clone weights, leaving the artificial
   censoring at deviations to the weights; `"finegray"` estimates G as `survival::finegray()` does
   (unweighted, all censorings including deviations), for comparisons. Tests: `survival::finegray()`'s

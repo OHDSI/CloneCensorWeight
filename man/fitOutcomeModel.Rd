@@ -97,7 +97,10 @@ regression, fitted as the weighted Cox regression above on rows in which a clone
 stays in the risk set after T, with weight w(T) G(s-) / G(T-) at times s > T (w(T) its weight at
 death, G the censoring survival of its strategy, chosen by \code{fineGrayCensoring} in
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), and, at the horizons, the Aalen-Johansen rows of \code{"km"}, as for
-\code{"cox"}. The robust variance treats the weights and G as fixed.
+\code{"cox"}. Cyclops fits these rows without expanding them when it supports Fine-Gray rows
+(\code{Cyclops::convertToCyclopsData(fineGrayCensoring = )}); with \code{robustVarianceEngine = "ccw"}, or an
+older Cyclops, the rows after each death are built here. The robust variance treats the weights and G
+as fixed.
 }
 
 The Cox and pooled logistic models, and their robust and model-based variances, use the weights

@@ -65,7 +65,10 @@
 #'   stays in the risk set after T, with weight w(T) G(s-) / G(T-) at times s > T (w(T) its weight at
 #'   death, G the censoring survival of its strategy, chosen by `fineGrayCensoring` in
 #'   [createFitOutcomeModelArgs()]), and, at the horizons, the Aalen-Johansen rows of `"km"`, as for
-#'   `"cox"`. The robust variance treats the weights and G as fixed.
+#'   `"cox"`. Cyclops fits these rows without expanding them when it supports Fine-Gray rows
+#'   (`Cyclops::convertToCyclopsData(fineGrayCensoring = )`); with `robustVarianceEngine = "ccw"`, or an
+#'   older Cyclops, the rows after each death are built here. The robust variance treats the weights and G
+#'   as fixed.
 #'
 #' The Cox and pooled logistic models, and their robust and model-based variances, use the weights
 #' chosen by `fitOutcomeModelArgs$msmWeights` (unstabilized by default; see
@@ -429,9 +432,15 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       stop("modelType = \"fineGray\" needs clones created with competingEvents = \"death\"")
     }
     # The subdistribution hazard ratio of the weighted Fine-Gray MSM, and the Aalen-Johansen rows of
-    # "km" for the horizons, as for "cox":
-    segments <- .fineGraySegments(msmData, fitOutcomeModelArgs$fineGrayCensoring)
-    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, segments = segments, estimand = "shr")
+    # "km" for the horizons, as for "cox". Cyclops fits the Fine-Gray rows without expanding them when it
+    # can; this package's own robust sandwich ("ccw") needs the expanded rows.
+    ccwSandwich <- variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "ccw"
+    if (.cyclopsHasFineGray() && !ccwSandwich) {
+      model <- .fitFineGrayMsm(msmData, fitOutcomeModelArgs, variance)
+    } else {
+      segments <- .fineGraySegments(msmData, fitOutcomeModelArgs$fineGrayCensoring)
+      model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, segments = segments, estimand = "shr")
+    }
     km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
     return(model)
@@ -545,7 +554,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # covariate, using Cyclops cox_counting (Breslow ties), with `subjectId` (one per segment, for
 # vcov(type = "robust")) as the Cyclops subjects when given. Returns the fit, or NULL (with a warning)
 # when there are no events or the fit fails.
-.fitCyclopsCox <- function(segments, y, prior, control, label, subjectId = NULL) {
+.fitCyclopsCox <- function(segments, y, prior, control, label, subjectId = NULL, fineGrayCensoring = NULL) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s Cox model", label, label))
     return(NULL)
@@ -561,7 +570,15 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     outcomes$subjectId <- subjectId
   }
   covariates <- data.frame(rowId = which(segments$x == 1), covariateId = 1, covariateValue = 1)
-  cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE, quiet = TRUE)
+  if (is.null(fineGrayCensoring)) {
+    cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE, quiet = TRUE)
+  } else {
+    # Cyclops' Fine-Gray rows: a row of segments$fineGrayGroup g > 0 stays in the later risk sets, weighted by
+    # its group's censoring survival (see .fitFineGrayMsm())
+    outcomes$fineGrayGroup <- segments$fineGrayGroup
+    cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE,
+                                                 quiet = TRUE, fineGrayCensoring = fineGrayCensoring)
+  }
   return(.fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label)))
 }
 
@@ -603,6 +620,46 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 }
 
 # Fine-Gray --------------------------------------------------------------------------------------
+
+# Whether the installed Cyclops fits Fine-Gray rows (convertToCyclopsData(fineGrayCensoring = )).
+.cyclopsHasFineGray <- function() {
+  return("fineGrayCensoring" %in% names(formals(Cyclops::convertToCyclopsData)))
+}
+
+# The subdistribution hazard ratio row of the weighted Fine-Gray MSM, its coefficient and its (robust or
+# model-based) variance, fitted by Cyclops on the segments with positive weight: each clone's death segment
+# is a Fine-Gray row of its strategy, whose censoring survival G (.fineGrayCensoringSurvival()) is passed as
+# a step function. The same likelihood as the expanded rows of .fineGraySegments(), without them. Both
+# variances are Cyclops' (the robust one clustered on person, as for "cox").
+.fitFineGrayMsm <- function(data, fitOutcomeModelArgs, variance) {
+  segments <- data$segments[data$segments$weight > 0, ]
+  segments$fineGrayGroup <- ifelse(segments$competing == 1, segments$strategyId, 0L)
+  censoring <- do.call(rbind, lapply(sort(unique(segments$strategyId)), function(strategyId) {
+    survival <- .fineGrayCensoringSurvival(segments[segments$strategyId == strategyId, ], data$cloneEnds, fitOutcomeModelArgs$fineGrayCensoring)
+    data.frame(fineGrayGroup = rep(as.integer(strategyId), length(survival$times)), time = survival$times, survival = survival$after(survival$times))
+  }))
+  robust <- variance == "robust"
+  fit <- .fitCyclopsCox(
+    segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome",
+    subjectId = if (robust) segments$personIndex else NULL, fineGrayCensoring = censoring
+  )
+  beta <- if (is.null(fit)) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
+  coefficients <- c(target = beta)
+  if (is.na(beta)) {
+    return(list(estimates = .ratioRow("shr", NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
+  }
+  vcov <- if (robust) {
+    unname(stats::vcov(fit, type = "robust"))
+  } else if (variance == "modelBased") {
+    unname(stats::vcov(fit))
+  } else {
+    NULL
+  }
+  if (!is.null(vcov)) {
+    vcov <- matrix(vcov, 1, 1, dimnames = list(names(coefficients), names(coefficients)))
+  }
+  return(list(estimates = .ratioRow("shr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1])), coefficients = coefficients, vcov = vcov))
+}
 
 # The rows of the weighted Fine-Gray MSM: the segments with positive weight, plus, for each clone that
 # has the competing event (death) at T, rows after T that keep it in the subdistribution risk set with
@@ -675,7 +732,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     idxStop[endsWithEvent] <- idxStop[endsWithEvent] - 1L
     atRisk <- .riskSetSums(g, idxStart, idxStop, length(times))
     censorings <- .sumBy(g[censored], match(segments$stopTime[censored], times), length(times))
-    hazard <- ifelse(atRisk > 0, censorings / atRisk, 0)
+    hazard <- ifelse(atRisk > 0, pmin(censorings / atRisk, 1), 0) # at most 1 (all at risk censored), also after rounding
     survival <- cumprod(1 - hazard)
   }
   value <- function(k) c(1, survival)[k + 1L]
