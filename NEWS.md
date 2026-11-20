@@ -176,6 +176,11 @@ new defaults):
   differ, because cross-validation on weighted persons draws other folds than on copies. In the
   reweight bootstrap the binary models' sampling (`maxCohortSizeForFitting`) is seeded per replicate.
 
+* The covariate-by-time interactions of the pooled logistic initiation hazard model take their IDs in
+  the order of the covariate IDs. They followed the order in which the database returned the covariates,
+  which can change from run to run, and with it the order of the model's columns and so its fit within
+  the convergence tolerance.
+
 New features:
 
 * `bootstrapCcwAnalysis(threads = )` runs the replicates on parallel workers (and

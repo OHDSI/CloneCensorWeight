@@ -1529,9 +1529,12 @@ fitCensoringModels <- function(clones,
     covariateData <- Andromeda::andromeda(covariates = tibble(rowId = integer(0), covariateId = numeric(0), covariateValue = numeric(0)))
   }
   on.exit(close(covariateData))
+  # Sorted, so the interaction IDs (and the order of the model's columns) do not depend on the order in
+  # which the database returns the covariates.
   covariateIds <- covariateData$covariates |>
     dplyr::distinct(.data$covariateId) |>
-    pull()
+    pull() |>
+    sort()
   # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
   rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, fitSet$lastInterval))]
   interactionBasis <- .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
