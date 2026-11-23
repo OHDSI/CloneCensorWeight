@@ -56,10 +56,12 @@ Suggests:
     ccwr (>= 0.0.2),
     CohortGenerator,
     Eunomia,
+    geex (>= 1.1.1),
     geepack (>= 1.3.13),
     ggplot2,
     glmnet (>= 5.0),
     ipw (>= 1.3.2),
+    ipwCoxCSV (>= 1.2),
     knitr,
     pkgload,
     rmarkdown,
@@ -70,6 +72,7 @@ Suggests:
     testthat (>= 3.0.0),
     trtswitch (>= 0.2.8),
     TTE (>= 1.1.2),
+    WeightIt (>= 2.1.0),
     zip
 Remotes:
     ohdsi/Andromeda@develop,

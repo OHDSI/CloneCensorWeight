@@ -50,8 +50,13 @@ strategy has no outcomes, or only outcomes, in the first interval.}
 Aalen-Johansen estimates (of \code{"km"}, and the rows at the horizons of
 \code{"cox"}) do not depend on it.}
 
-\item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person),
-\code{"bootstrap"} (computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}), or \code{"modelBased"}.}
+\item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person, the
+default), \code{"bootstrap"} (computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}),
+\code{"modelBased"}, or \code{"stackedSandwich"} (the robust sandwich stacked with
+the estimating equations of the censoring models, so that it accounts
+for the estimation of the weights; \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} then needs
+\code{cloneCensorWeightData}, see its Details). \code{"stackedSandwich"} is not
+available for \code{modelType = "fineGray"}.}
 
 \item{robustVarianceEngine}{What computes the robust variance of the Cox and pooled logistic models
 (with \code{varianceEstimator = "robust"}): \code{"cyclops"} (Cyclops'

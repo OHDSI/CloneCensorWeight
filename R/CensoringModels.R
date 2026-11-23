@@ -147,7 +147,10 @@
 #'   interactions, named `"<covariateId>:<column>"`, for the logistic model) and `priorVariance` (`NA`
 #'   without a prior).
 #' - `predictions`: a tibble with `rowId` and `propensityScore` (binary) or `linearPredictor` (the
-#'   covariate part of the linear predictor, hazard models) for every person in the risk set.
+#'   covariate part of the linear predictor, hazard models) for every person in the risk set, with the
+#'   person's `personSeqId`, `y` (started by `G`, or initiated on the last day at risk), `lastDay` (the
+#'   last day at risk, hazard models only) and `inFit` (whether the person was in the sample the model
+#'   was fit on; `NA` for a binary model fit on a sample drawn by `CohortMethod::createPs()`).
 #' - For Cox: `baselineHazard`, a tibble `time, cumHazard` (Breslow, at the initiation times, on the
 #'   scale time = day + 1). For logistic: `timeBasis` (the settings, interval length, number of
 #'   intervals, the basis matrix, and the intervals with a hazard of 0 or 1), `intervals`, a tibble
@@ -591,6 +594,21 @@ fitCensoringModels <- function(clones,
 # The sample diagnostics of a model fit on `fitSet`, the risk set or a sample of it.
 .sampleDiagnostics <- function(riskSet, fitSet) {
   return(list(sampled = .count(fitSet) < .count(riskSet), sampleSize = .count(fitSet), sampleEvents = .countEvents(fitSet)))
+}
+
+# The `predictions` of a model for the persons of its risk set: rowId, the model's prediction (`...`,
+# propensityScore or linearPredictor), and the person's personSeqId, y, lastDay (hazard risk sets only)
+# and `inFit` (whether the person was in the fit), from which the stacked sandwich finds each person's
+# score.
+.riskSetPredictions <- function(riskSet, inFit, ...) {
+  return(tibble(
+    rowId = riskSet$rowId,
+    ...,
+    personSeqId = riskSet$personSeqId,
+    y = riskSet$y,
+    lastDay = riskSet[["lastDay"]], # NULL (no column) for binary risk sets
+    inFit = inFit
+  ))
 }
 
 # The reweight bootstrap ------------------------------------------------------------------------------
@@ -1153,7 +1171,8 @@ fitCensoringModels <- function(clones,
     modelType = "binary",
     coefficients = coefficients,
     priorVariance = priorVariance,
-    predictions = tibble(rowId = riskSet$rowId, propensityScore = propensityScore),
+    # Which persons createPs() sampled is not known:
+    predictions = .riskSetPredictions(riskSet, inFit = if (isTRUE(sample$sampled) && error == "OK") NA else TRUE, propensityScore = propensityScore),
     numerator = list(propensityScore = marginal),
     diagnostics = c(
       list(
@@ -1171,7 +1190,8 @@ fitCensoringModels <- function(clones,
 # The binary model of the reweight bootstrap, for a risk set with frequency weights. CohortMethod::createPs()
 # takes no case weights, so the model is fit, as in the copy bootstrap, on copies of the drawn persons: each
 # person `frequency` times, in the order of the copy bootstrap's copies (.copyRows()), with the drawn person
-# as the subject of its copies. Each person gets the propensity score of its copies. createPs() samples
+# as the subject of its copies. Each person gets the propensity score of its copies, and is in the fit
+# (`inFit`) when any of its copies is, as in the hazard models (.sampleWeightedRiskSet()). createPs() samples
 # (maxCohortSizeForFitting) with R's random number generator, which `seed` seeds, so that a replicate does
 # not depend on the replicates before it.
 .fitWeightedBinaryCensoringModel <- function(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, seed) {
@@ -1193,7 +1213,9 @@ fitCensoringModels <- function(clones,
   rowIdMap <- tibble(newRowId = copied$rowId, rowId = copies$sorted$rowId[rows])
   model <- withSeed(.fitBinaryCensoringModel(copied, cloneCensorWeightData, fitCensoringModelsArgs, prior, rowIdMap = rowIdMap))
   first <- match(riskSet$rowId, rowIdMap$rowId)
-  model$predictions <- tibble(rowId = riskSet$rowId, propensityScore = model$predictions$propensityScore[first])
+  person <- factor(match(rowIdMap$rowId, riskSet$rowId), levels = seq_len(nrow(riskSet)))
+  inFit <- as.vector(tapply(model$predictions$inFit, person, any))
+  model$predictions <- .riskSetPredictions(riskSet, inFit = inFit, propensityScore = model$predictions$propensityScore[first])
   return(model)
 }
 
@@ -1336,7 +1358,7 @@ fitCensoringModels <- function(clones,
     modelType = "cox",
     coefficients = coefficients,
     priorVariance = priorVariance,
-    predictions = tibble(rowId = riskSet$rowId, linearPredictor = linearPredictor),
+    predictions = .riskSetPredictions(riskSet, inFit = riskSet$rowId %in% fitSet$rowId, linearPredictor = linearPredictor),
     baselineHazard = baselineHazard,
     numerator = list(baselineHazard = numeratorHazard),
     diagnostics = c(
@@ -1901,7 +1923,7 @@ fitCensoringModels <- function(clones,
     modelType = "logistic",
     coefficients = .renameBasisCoefficients(coefficients, basisIds, colnames(basis)),
     priorVariance = priorVariance,
-    predictions = tibble(rowId = riskSet$rowId, linearPredictor = linearPredictor),
+    predictions = .riskSetPredictions(riskSet, inFit = riskSet$rowId %in% fitSet$rowId, linearPredictor = linearPredictor),
     timeBasis = list(
       settings = fitCensoringModelsArgs$timeBasis$toList(),
       intervalLength = intervalLength,

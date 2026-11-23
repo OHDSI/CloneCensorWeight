@@ -499,3 +499,89 @@ test_that("Laplace and normal priors at a fixed variance match glmnet", {
   close(clones)
   close(data)
 })
+
+test_that("Predictions keep each person's personSeqId, y, lastDay and whether the person was in the fit", {
+  fixture <- createM3Fixture(100, seed = 3)
+  fixture$persons$personSeqId <- fixture$persons$rowId + 1000L
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin"))
+  # Two strategies that share one Cox model:
+  hazardClones <- buildM3Clones(fixture$persons, m3Strategies("neverInitiate", "neverInitiate"))
+  on.exit({
+    close(clones)
+    close(hazardClones)
+    close(data)
+  })
+  args <- m3Args("logistic")
+  args$maxCohortSizeForFitting <- 30
+  models <- suppressMessages(fitCensoringModels(clones, data, args))
+  # The binary model at G, fit by createPs() on a sample whose persons are not known:
+  binary <- models[[1]]$predictions
+  expect_equal(names(binary), c("rowId", "propensityScore", "personSeqId", "y", "inFit"))
+  riskSet <- refBinaryRiskSet(fixture$persons, 7, "eventsFirst")
+  expect_equal(binary$y[match(riskSet$rowId, binary$rowId)], riskSet$y)
+  expect_equal(binary$personSeqId, binary$rowId + 1000L)
+  expect_true(models[[1]]$diagnostics$sampled)
+  expect_true(all(is.na(binary$inFit)))
+  # The hazard models: logistic through G on a uniform sample of persons, and Cox through the end of
+  # follow-up on the whole risk set:
+  args <- m3Args("cox")
+  args$maxCohortSizeForFitting <- 0
+  coxModel <- suppressMessages(fitCensoringModels(hazardClones, data, args))[[1]]
+  for (model in list(models[[2]], coxModel)) {
+    hazard <- model$predictions
+    expect_equal(names(hazard), c("rowId", "linearPredictor", "personSeqId", "y", "lastDay", "inFit"))
+    rows <- refCoxRows(fixture$persons, model$horizon, "eventsFirst")
+    idx <- match(rows$rowId, hazard$rowId)
+    expect_equal(hazard$lastDay[idx], as.integer(rows$time - 1))
+    expect_equal(hazard$y[idx], rows$initiated)
+    expect_equal(hazard$personSeqId, hazard$rowId + 1000L)
+    expect_equal(sum(hazard$inFit), model$diagnostics$sampleSize)
+    expect_equal(sum(hazard$y[hazard$inFit]), model$diagnostics$sampleEvents)
+  }
+  expect_true(models[[2]]$diagnostics$sampled)
+  expect_true(all(coxModel$predictions$inFit))
+})
+
+test_that("Reweight replicates keep each person's own personSeqId, and whether any of its copies was in the fit", {
+  fixture <- createM3Fixture(60, seed = 3)
+  fixture$persons$personSeqId <- fixture$persons$rowId + 1000L
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin"))
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  # Each person drawn 0 to 3 times, so the binary model is fit on copies of the persons:
+  counts <- data.frame(personSeqId = fixture$persons$personSeqId, count = rep(0:3, length.out = 60))
+  args <- m3Args("logistic")
+  args$maxCohortSizeForFitting <- 30
+  models <- suppressMessages(.fitCensoringModelsWithFits(clones, data, args, refit = list(counts = counts, cache = new.env())))$models
+  for (model in models) {
+    expect_true(model$diagnostics$sampled)
+    # The person's own personSeqId, not the number of its copy:
+    expect_equal(model$predictions$personSeqId, model$predictions$rowId + 1000L)
+    expect_true(all(counts$count[match(model$predictions$personSeqId, counts$personSeqId)] > 0))
+  }
+  expect_true(all(is.na(models[[1]]$predictions$inFit)))
+  # The logistic hazard model, fit on a sample of 30 of the copies, in which some persons have several:
+  hazard <- models[[2]]$predictions
+  riskSet <- hazard[c("rowId", "personSeqId", "y")]
+  riskSet$frequency <- counts$count[match(riskSet$personSeqId, counts$personSeqId)]
+  fitSet <- suppressMessages(.sampleWeightedRiskSet(riskSet, 30, .defaultSubsampleSeed(args), "hazard model"))
+  expect_equal(sum(fitSet$frequency), models[[2]]$diagnostics$sampleSize)
+  expect_equal(sum(fitSet$frequency * fitSet$y), models[[2]]$diagnostics$sampleEvents)
+  expect_equal(hazard$inFit, hazard$rowId %in% fitSet$rowId)
+  expect_lt(sum(hazard$inFit), models[[2]]$diagnostics$sampleSize)
+})
+
+test_that("A person of a reweight replicate is in the binary model's fit when any of its copies is", {
+  # Persons 1, 2 and 3 drawn 3, 1 and 2 times; their copies are in the order of personSeqId:
+  riskSet <- data.frame(rowId = c(9L, 5L, 7L), personSeqId = c(3L, 1L, 2L), y = c(0L, 1L, 0L), frequency = c(2, 3, 1))
+  local_mocked_bindings(.fitBinaryCensoringModel = function(riskSet, ...) {
+    list(predictions = data.frame(rowId = riskSet$rowId, propensityScore = 0.5, inFit = c(FALSE, TRUE, FALSE, FALSE, NA, NA)))
+  })
+  predictions <- .fitWeightedBinaryCensoringModel(riskSet, NULL, NULL, NULL, seed = 1)$predictions
+  expect_equal(predictions$personSeqId, c(3L, 1L, 2L))
+  expect_equal(predictions$inFit, c(NA, TRUE, FALSE))
+})
