@@ -113,10 +113,43 @@
 #' Kaplan-Meier has no model-based variance), and `"km"` is not supported. `varianceEstimator =
 #' "bootstrap"` is computed by [bootstrapCcwAnalysis()], not by this function.
 #'
+#' `varianceEstimator = "stackedSandwich"` (an option; `"robust"` stays the default) stacks the
+#' estimating equations of the outcome estimates with those of the censoring models and their
+#' stabilization numerators, so that the variance accounts for the estimation of the weights (Shu et al.
+#' 2021). Person i's influence is its infinitesimal-jackknife influence (that of this package's own
+#' robust sandwich, whatever `robustVarianceEngine` says) plus `psi_i' A^- D`, summed over the censoring
+#' models, where `psi_i` is the person's centered score in the model (summed over the person's entries
+#' when a person has several index dates), `A` the model's information (with
+#' a pivoted-Cholesky generalized inverse) and `D` the derivative of the estimates with respect to the
+#' model's coefficients through the weights. The scores and the information come from the censoring
+#' models' stored predictions and the covariates of `cloneCensorWeightData`, for the persons of each
+#' model's risk set (which can differ from the outcome population when the models are shared across
+#' outcomes). It supports the binary models at `G` and the pooled logistic hazard models of every
+#' strategy type and of every `initiateWithinModel`, `postGraceModel`, `graceRegime` and `graceStart`,
+#' with stabilized or unstabilized weights. The derivative of each log weight is taken on the scale the
+#' estimates use (`weight` for the Kaplan-Meier and Aalen-Johansen rows, and `otherScaleWeight` for the
+#' Cox and pooled logistic models when `msmWeights` is of the other kind, truncated on its own scale or
+#' formed from the truncated `weight` as `truncateMsmWeights` says), holding the truncation caps fixed: a
+#' truncated weight depends on the censoring models only through its numerator, if at all. This is exact
+#' for fixed caps and conditional on the cap for percentile caps. A normal prior is taken at its variance
+#' (its curvature `s_j^2 / sigma^2`, with `s_j` the covariate's largest value over the model's risk set,
+#' the normalization of the covariates, is added to `A`); as in the fit, the interactions of a
+#' covariate that the prior excludes are penalized. A Laplace prior is taken conditional on its
+#' support (the nonzero coefficients) and on its variance, which ignores the selection of the covariates
+#' and of the variance by cross-validation. A hazard model fit on a uniform sample of its risk set
+#' (`maxCohortSizeForFitting`) has scores for the persons of the sample only. It stops for the Cox
+#' censoring model, for binary models that [CohortMethod::createPs()] fit on a sample (set
+#' `maxCohortSizeForFitting = 0` or use the bootstrap), for indicator intervals whose hazard a sample
+#' left to a plug-in from the whole risk set, and for censoring models saved by an earlier version, which
+#' must be refit.
+#'
 #' @param weightedClones      A `CcwClones` object with weighted segments, as created by
 #'                            `computeCensoringWeights()`.
 #' @param fitOutcomeModelArgs An object of type `FitOutcomeModelArgs` as created using
 #'                            [createFitOutcomeModelArgs()].
+#' @param cloneCensorWeightData An object of type [CloneCensorWeightData] holding the baseline
+#'                            covariates the censoring models were fit with. Needed (and used) only with
+#'                            `varianceEstimator = "stackedSandwich"`.
 #'
 #' @return
 #' An object of class `CcwOutcomeModel`: a list with
@@ -146,7 +179,16 @@
 #'   model used (`msmWeights`), their `cap` on that scale (`NA` when they were not truncated on their own
 #'   scale, see `truncateMsmWeights` in [createComputeWeightsArgs()]), `maxWeight`, the largest weight
 #'   used (the effective maximum), and `truncatedShare`, the share of the strategy's clones whose weight
-#'   was truncated.
+#'   was truncated;
+#' - with `varianceEstimator = "stackedSandwich"`, `varianceDiagnostics`: `estimands`, a tibble with,
+#'   per estimand, `seRobust` (the robust standard error), `seStacked` (the stacked one, which the
+#'   estimates use) and their `ratio` (of the standard errors of the log for ratios); and `models`, a
+#'   tibble with, per censoring model and numerator model (`strategyId`, `component`), its `prior`,
+#'   `supportSize` (the number of its coefficients in the stack), `conditionalOnSupport` (`TRUE` with a
+#'   Laplace prior), `maxKktGap` (Laplace: the largest `|sum_i U_ij| / s_j - lambda` over the penalized
+#'   coefficients of the support, 0 at the exact optimum, `NA` when it has none), the `rank` and
+#'   `conditionNumber` (on the correlation scale) of its information, whether it was fit on a sample (`sampled`), and its
+#'   strategy's `truncatedShare` and `otherScaleTruncatedShare` (see [computeCensoringWeights()]).
 #'
 #' @references
 #' Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.
@@ -155,6 +197,9 @@
 #'
 #' Young JG, Stensrud MJ, Tchetgen Tchetgen EJ, Hernan MA. A causal framework for classical statistical
 #' estimands in failure-time settings with competing events. Statistics in Medicine. 2020;39:1199-1236.
+#'
+#' Shu D, Young JG, Toh S, Wang R. Variance estimation in inverse probability weighted Cox models.
+#' Biometrics. 2021;77:1101-1117.
 #'
 #' @example inst/examples/clones.R
 #' @example inst/examples/weightedClones.R
@@ -182,10 +227,13 @@
 #' close(data)
 #'
 #' @export
-fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutcomeModelArgs()) {
+fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutcomeModelArgs(), cloneCensorWeightData = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(weightedClones, weighted = TRUE, add = errorMessages)
   checkmate::assertR6(fitOutcomeModelArgs, "FitOutcomeModelArgs", add = errorMessages)
+  if (!is.null(cloneCensorWeightData)) {
+    .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
+  }
   checkmate::reportAssertions(collection = errorMessages)
   if (fitOutcomeModelArgs$varianceEstimator == "bootstrap") {
     stop("varianceEstimator = \"bootstrap\" requires refitting the censoring models in every replicate. Use the bootstrap driver, bootstrapCcwAnalysis()")
@@ -193,10 +241,15 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (fitOutcomeModelArgs$varianceEstimator == "modelBased" && fitOutcomeModelArgs$modelType == "km") {
     stop("varianceEstimator = \"modelBased\" is not available for modelType = \"km\"")
   }
+  stackedSandwich <- fitOutcomeModelArgs$varianceEstimator == "stackedSandwich"
+  if (stackedSandwich && is.null(cloneCensorWeightData)) {
+    stop("varianceEstimator = \"stackedSandwich\" needs the baseline covariates of the censoring models: pass cloneCensorWeightData")
+  }
   start <- Sys.time()
 
   data <- .getOutcomeData(weightedClones)
-  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = TRUE)
+  stacked <- if (stackedSandwich) .stackedCensoringBlocks(data, cloneCensorWeightData, weightedClones) else NULL
+  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = TRUE, stacked = stacked)
   metaData <- attr(weightedClones, "metaData")
   result <- list(
     modelType = fitOutcomeModelArgs$modelType,
@@ -216,6 +269,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   )
   if (fitOutcomeModelArgs$modelType != "km") {
     result$metaData$msmWeightSummary <- .summarizeMsmWeights(data, fitOutcomeModelArgs$msmWeights)
+  }
+  if (stackedSandwich) {
+    result$varianceDiagnostics <- .stackedVarianceDiagnostics(model$estimates, model$robustEstimates, stacked)
   }
   class(result) <- "CcwOutcomeModel"
   delta <- Sys.time() - start
@@ -276,7 +332,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
   # otherScaleWeight is written by computeCensoringWeights() (Phase1Contracts section 12.2); segments
   # made otherwise have only the numerator:
-  columns <- c("cloneRowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "otherScaleWeight", "outcome", "competing")
+  columns <- c("cloneRowId", "rowId", "personSeqId", "strategyId", "startTime", "stopTime", "weight", "stabilizationNumerator", "otherScaleWeight", "outcome", "competing")
   segments <- weightedClones$segments |>
     select(dplyr::any_of(columns)) |>
     collect()
@@ -404,7 +460,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # Models ------------------------------------------------------------------------------------------
 
-.fitOutcomeModelCore <- function(data, fitOutcomeModelArgs, computeVariance) {
+# `stacked` (.stackedCensoringBlocks()): the censoring blocks of the stacked sandwich, with which the
+# models also return `robustEstimates`, the estimates with the robust variance.
+.fitOutcomeModelCore <- function(data, fitOutcomeModelArgs, computeVariance, stacked = NULL) {
   segments <- data$segments
   if (!all(1:2 %in% segments$strategyId[segments$weight > 0])) {
     stop("Both strategies must have clones with positive weights")
@@ -413,7 +471,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   .checkHorizons(horizons, data$riskStart)
   competing <- data$competingEvents == "death"
   if (fitOutcomeModelArgs$modelType == "km") {
-    return(.fitKm(data, horizons, competing, computeVariance))
+    return(.fitKm(data, horizons, competing, computeVariance, stacked))
   }
   variance <- if (computeVariance) fitOutcomeModelArgs$varianceEstimator else "none"
   # The MSMs use the weights chosen by msmWeights; the Kaplan-Meier and Aalen-Johansen estimates, which
@@ -421,10 +479,13 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   msmData <- .withMsmWeights(data, fitOutcomeModelArgs$msmWeights)
   if (fitOutcomeModelArgs$modelType == "cox") {
     # The hazard ratio of the Cox MSM, and the rows of "km" for the horizons (Phase1Contracts section
-    # 10.5), with their IJ standard errors only under the robust variance:
-    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance)
-    km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
+    # 10.5), with their IJ standard errors only under the robust (or stacked) variance:
+    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, stacked = stacked)
+    km <- .fitKm(data, horizons, competing, computeVariance = variance %in% c("robust", "stackedSandwich"), stacked = stacked)
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
+    if (!is.null(stacked)) {
+      model$robustEstimates <- dplyr::bind_rows(model$robustEstimates, km$robustEstimates)
+    }
     return(model)
   }
   if (fitOutcomeModelArgs$modelType == "fineGray") {
@@ -445,12 +506,14 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
     return(model)
   }
-  return(.fitLogisticMsm(msmData, fitOutcomeModelArgs, competing, variance))
+  return(.fitLogisticMsm(msmData, fitOutcomeModelArgs, competing, variance, stacked))
 }
 
 # Kaplan-Meier / Aalen-Johansen ------------------------------------------------------------------
 
-.fitKm <- function(data, horizons, competing, computeVariance) {
+# With `stacked`, the standard errors are those of the stacked sandwich, and `robustEstimates` holds the
+# estimates with the robust (IJ) standard errors.
+.fitKm <- function(data, horizons, competing, computeVariance, stacked = NULL) {
   segments <- data$segments[data$segments$weight > 0, ]
   times <- .eventTimes(segments)
   segments <- .indexSegments(segments, times)
@@ -459,12 +522,29 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
   se <- function(influence) if (is.null(influence)) NA_real_ else sqrt(sum(influence^2))
   rows <- list()
+  stackedRows <- list()
   for (horizon in horizons) {
     tau <- horizon - data$riskStart + 1
     functionals <- lapply(hazards, .strategyFunctionals, times = times, tau = tau)
     riskInfluences <- list(NULL, NULL)
     aucInfluences <- list(NULL, NULL)
-    if (computeVariance) {
+    if (computeVariance && !is.null(stacked)) {
+      # The influence of each segment on the risk and area of each strategy, summed by person for the
+      # robust variance, and stacked with the censoring models:
+      bySegment <- lapply(1:2, function(i) {
+        f <- functionals[[i]]
+        .strategyInfluence(hazards[[i]], cbind(f$gradRiskY, f$gradAucY), cbind(f$gradRiskD, f$gradAucD), nPersons, bySegment = TRUE)
+      })
+      for (i in 1:2) {
+        riskInfluences[[i]] <- .sumBy(bySegment[[i]][, 1], hazards[[i]]$segments$personIndex, nPersons)
+        aucInfluences[[i]] <- .sumBy(bySegment[[i]][, 2], hazards[[i]]$segments$personIndex, nPersons)
+      }
+      influence <- rbind(cbind(bySegment[[1]], 0, 0), cbind(0, 0, bySegment[[2]]))
+      vcov <- .stackedVcov(stacked, rbind(hazards[[1]]$segments, hazards[[2]]$segments), influence, data$riskStart, data$stabilized)
+      stackedRows[[length(stackedRows) + 1]] <- .stackedKmRows(
+        horizon, tau, vapply(functionals, function(f) f$risk, numeric(1)), vapply(functionals, function(f) f$auc, numeric(1)), vcov, competing
+      )
+    } else if (computeVariance) {
       for (i in 1:2) {
         riskInfluences[[i]] <- .strategyInfluence(hazards[[i]], functionals[[i]]$gradRiskY, functionals[[i]]$gradRiskD, nPersons)
         aucInfluences[[i]] <- .strategyInfluence(hazards[[i]], functionals[[i]]$gradAucY, functionals[[i]]$gradAucD, nPersons)
@@ -487,6 +567,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       .amountRow(sprintf("rmtl_comparator_%s", horizon), auc[2], se(aucInfluences[[2]])),
       .differenceRow(sprintf("rmtl_%s", horizon), auc[1] - auc[2], .seDifference(aucInfluences))
     )
+  }
+  if (computeVariance && !is.null(stacked)) {
+    return(list(estimates = dplyr::bind_rows(stackedRows), robustEstimates = dplyr::bind_rows(rows), coefficients = NULL, vcov = NULL))
   }
   return(list(estimates = dplyr::bind_rows(rows), coefficients = NULL, vcov = NULL))
 }
@@ -586,7 +669,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # censoring, its coefficient, and its (robust or model-based) variance. Risks from this model are not
 # reported (see fitOutcomeModel()). The Fine-Gray model passes its own rows as `segments`, and
 # `estimand = "shr"`.
-.fitCoxMsm <- function(data, fitOutcomeModelArgs, variance, segments = data$segments, estimand = "hr") {
+# With `stacked` (variance "stackedSandwich"), also returns `robustEstimates`, with this package's robust
+# sandwich.
+.fitCoxMsm <- function(data, fitOutcomeModelArgs, variance, segments = data$segments, estimand = "hr", stacked = NULL) {
   segments <- segments[segments$weight > 0, ]
   times <- .eventTimes(segments)
   segments <- .indexSegments(segments, times)
@@ -600,11 +685,17 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   beta <- if (is.null(fit)) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
   coefficients <- c(target = beta)
   if (is.na(beta)) {
-    return(list(estimates = .ratioRow(estimand, NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
+    return(list(estimates = .ratioRow(estimand, NA_real_, NA_real_), robustEstimates = .ratioRow(estimand, NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
   }
   outcome <- .breslow(segments, segments$outcome == 1, beta, length(times))
+  robustEstimates <- NULL
   if (cyclopsRobust) {
     vcov <- unname(stats::vcov(fit, type = "robust"))
+  } else if (variance == "stackedSandwich") {
+    influence <- .coxCoefficientInfluence(segments, outcome, length(data$personSeqIds), bySegment = TRUE)
+    vcov <- .stackedVcov(stacked, segments, influence, data$riskStart, data$stabilized)
+    robustVariance <- sum(.sumBy(influence, segments$personIndex, length(data$personSeqIds))^2)
+    robustEstimates <- .ratioRow(estimand, beta, sqrt(robustVariance))
   } else if (variance == "robust") {
     vcov <- crossprod(cbind(.coxCoefficientInfluence(segments, outcome, length(data$personSeqIds))))
   } else if (variance == "modelBased") {
@@ -616,7 +707,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     dimnames(vcov) <- list(names(coefficients), names(coefficients))
   }
   hr <- .ratioRow(estimand, beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1]))
-  return(list(estimates = hr, coefficients = coefficients, vcov = vcov))
+  return(list(estimates = hr, robustEstimates = robustEstimates, coefficients = coefficients, vcov = vcov))
 }
 
 # Fine-Gray --------------------------------------------------------------------------------------
@@ -772,13 +863,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # One row per clone and interval of `intervalLength` days the clone enters (interval k covers t in
 # (k L, (k + 1) L], counted from riskStart), with the weight that applies on the clone's last day in
-# the interval (t = min((k + 1) L, end of follow-up)), the person's frequency weight `count`, and
-# indicators of the outcome and of a competing event in the interval. `segments` must hold all segments
+# the interval (t = min((k + 1) L, end of follow-up), `stopTime`), the person's frequency weight `count`,
+# and indicators of the outcome and of a competing event in the interval. `segments` must hold all segments
 # of each clone, sorted by cloneRowId and startTime.
 .expandToIntervals <- function(segments, intervalLength) {
-  cloneIndex <- match(segments$cloneRowId, unique(segments$cloneRowId))
-  last <- !duplicated(cloneIndex, fromLast = TRUE)
-  lastSegments <- segments[last, ]
+  # The clones are runs of consecutive segments (sorted by cloneRowId):
+  n <- nrow(segments)
+  change <- segments$cloneRowId[-1L] != segments$cloneRowId[-n]
+  cloneIndex <- cumsum(c(TRUE, change))[seq_len(n)]
+  last <- c(change, TRUE)[seq_len(n)]
+  lastSegments <- .keepRows(segments, last)
   nIntervals <- ceiling(lastSegments$stopTime / intervalLength)
   rowClone <- rep(seq_len(nrow(lastSegments)), nIntervals)
   interval <- sequence(nIntervals) - 1L
@@ -791,13 +885,25 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   isLast <- interval == nIntervals[rowClone] - 1
   return(data.frame(
     personIndex = lastSegments$personIndex[rowClone],
+    rowId = lastSegments$rowId[rowClone], # the entry, for the stacked sandwich (NULL: no column)
     x = lastSegments$x[rowClone],
     interval = interval,
+    stopTime = lastDay,
     weight = segments$weight[segment],
     count = lastSegments$count[rowClone],
     y = as.integer(isLast & lastSegments$outcome[rowClone] == 1),
     death = as.integer(isLast & lastSegments$competing[rowClone] == 1)
   ))
+}
+
+# The rows `keep` (logical) of the data frame `rows`, subset column by column (faster than `[.data.frame`
+# on many rows); `rows` itself when every row is kept.
+.keepRows <- function(rows, keep) {
+  if (all(keep)) {
+    return(rows)
+  }
+  keep <- which(keep)
+  return(list2DF(lapply(rows, function(column) column[keep])))
 }
 
 # Design matrix: intercept, target indicator, time basis and, optionally, target x time basis.
@@ -841,7 +947,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # other coefficients, so they are left out of the fit, and their cells get the fixed hazard
 # (`fixedHazard`, NA for the other cells), as the censoring models do. The coefficients that only these
 # cells inform are NA (their estimates are infinite), without a warning. Unless `variance` is "none", also
-# returns the bread (inverse weighted information) and the score residuals summed by person and cell.
+# returns the bread (inverse weighted information), the score residuals summed by person and cell, and
+# each cell's fitted hazard (`probability`, for the row-level influence of .pooledRowInfluence()).
 # Returns NULL (with a warning) if the model cannot be fitted.
 .fitPooledModel <- function(rows, y, design, prior, control, label, variance, groups = NULL) {
   if (!any(y == 1)) {
@@ -849,8 +956,13 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     return(NULL)
   }
   nCells <- nrow(design)
-  events <- .sumBy(rows$weight * y, rows$cell, nCells)
-  nonEvents <- .sumBy(rows$weight * (1 - y), rows$cell, nCells)
+  # The weighted numbers of rows with and without the event by cell, in one pass:
+  sums <- rowsum(cbind(rows$weight * y, rows$weight * (1 - y)), rows$cell)
+  events <- numeric(nCells)
+  nonEvents <- numeric(nCells)
+  events[as.integer(rownames(sums))] <- sums[, 1]
+  nonEvents[as.integer(rownames(sums))] <- sums[, 2]
+  rm(sums)
   fixedHazard <- rep(NA_real_, nCells)
   if (!is.null(groups)) {
     groupEvents <- .sumBy(events, groups, max(groups))[groups]
@@ -913,6 +1025,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     information <- crossprod(result$design, result$design * ((events + nonEvents) * probability * (1 - probability)))
     result$bread <- .invertInformation(information, sprintf("%s pooled logistic", label))
     result$residuals <- .sumByPersonAndCell(rows$weight * (y - probability[rows$cell]), rows$personIndex, rows$cell, nCells)
+    result$probability <- probability
   }
   return(result)
 }
@@ -1050,7 +1163,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   invisible(NULL)
 }
 
-.fitLogisticMsm <- function(data, fitOutcomeModelArgs, competing, variance) {
+# With `stacked` (variance "stackedSandwich"), also returns `robustEstimates`, with this package's robust
+# sandwich.
+.fitLogisticMsm <- function(data, fitOutcomeModelArgs, competing, variance, stacked = NULL) {
   timeBasis <- fitOutcomeModelArgs$timeBasis
   intervalLength <- timeBasis$intervalLength
   horizons <- fitOutcomeModelArgs$horizons
@@ -1070,7 +1185,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
   .warnPooledGracePeriod(data, timeBasis)
   rows <- .expandToIntervals(data$segments, intervalLength)
-  rows <- rows[rows$weight > 0, ]
+  rows <- .keepRows(rows, rows$weight > 0)
   basis <- .timeBasisColumns(timeBasis, rows$interval, rows$count)
   basisNames <- if (timeBasis$type == "linear") "time" else sprintf("time%d", basis$labels)
   # The design depends on a row only through its cell: the comparator's intervals 0, ..., nIntervals - 1
@@ -1087,7 +1202,10 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))
-  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance, groups))
+  # (only the columns that .fitPooledModel() reads)
+  outcomeModelRows <- .keepRows(rows[c("weight", "cell", "personIndex", "y")], outcomeRows)
+  models <- list(.fitPooledModel(outcomeModelRows, outcomeModelRows$y, design, prior, control, "outcome", variance, groups))
+  rm(outcomeModelRows)
   # The rows and response column of each model, for Cyclops' robust variance:
   modelRows <- list(list(subset = outcomeRows, response = "y"))
   if (is.null(models[[1]])) {
@@ -1117,10 +1235,29 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   )
 
   thetaVcov <- NULL
+  robustThetaVcov <- NULL
   vcov <- NULL
   if (variance != "none") {
     if (variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops") {
       thetaVcov <- .cyclopsJointSandwich(models, rows, modelRows, theta, control)
+    } else if (variance == "stackedSandwich") {
+      # The influence of each row on the identified coefficients of every model, stacked with the
+      # censoring models, factored (.influenceRows()): per model, its rows' residuals (formed on every row
+      # and set to 0 on the rows outside it) and its loadings on its coefficients, so that no rows x
+      # coefficients array is formed.
+      parts <- lapply(seq_along(models), function(m) {
+        factors <- .pooledRowInfluence(models[[m]], rows, rows[[modelRows[[m]]$response]])
+        residual <- factors$residual
+        residual[!modelRows[[m]]$subset] <- 0
+        loading <- matrix(0, nrow(factors$loading), length(theta))
+        loading[, layout$index[[m]]] <- factors$loading
+        return(list(residual = residual, loading = loading))
+      })
+      influence <- list(cell = rows$cell, parts = parts)
+      rowSegments <- data.frame(rowId = rows$rowId, personSeqId = data$personSeqIds[rows$personIndex], strategyId = 2L - rows$x, stopTime = rows$stopTime)
+      thetaVcov <- .stackedVcov(stacked, rowSegments, influence, data$riskStart, data$stabilized)
+      rm(influence, parts, rowSegments)
+      robustThetaVcov <- .jointSandwich(models, length(data$personSeqIds))
     } else if (variance == "robust") {
       thetaVcov <- .jointSandwich(models, length(data$personSeqIds))
     } else {
@@ -1143,8 +1280,15 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     seLogOr <- NA_real_
   }
   estimates <- list(.ratioRow("or", logOr, seLogOr))
+  robustEstimates <- NULL
+  if (!is.null(robustThetaVcov)) {
+    target <- match("target", names(theta))
+    robustEstimates <- list(.ratioRow("or", logOr, if (is.na(seLogOr)) NA_real_ else .standardError(robustThetaVcov[target, target], robustThetaVcov)))
+  }
   if (deathFailed) {
-    return(.withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design))))
+    result <- .withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design)))
+    result$robustEstimates <- dplyr::bind_rows(robustEstimates)
+    return(result)
   }
   horizonIntervals <- .pooledHorizonIntervals(horizons, data$riskStart, intervalLength, nIntervals)
   riskFunction <- function(theta) .pooledRisks(theta, layout, horizonIntervals)
@@ -1160,8 +1304,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   for (i in seq_along(horizons)) {
     gradients <- if (is.null(jacobian)) NULL else jacobian[2 * i - c(1, 0), , drop = FALSE]
     estimates[[length(estimates) + 1]] <- .deltaContrastRows(horizons[i], risks[, i], gradients, thetaVcov, competing)
+    if (!is.null(robustThetaVcov)) {
+      robustEstimates[[length(robustEstimates) + 1]] <- .deltaContrastRows(horizons[i], risks[, i], gradients, robustThetaVcov, competing)
+    }
   }
-  return(list(estimates = dplyr::bind_rows(estimates), coefficients = coefficients, vcov = vcov))
+  return(list(estimates = dplyr::bind_rows(estimates), robustEstimates = dplyr::bind_rows(robustEstimates), coefficients = coefficients, vcov = vcov))
 }
 
 # Methods ------------------------------------------------------------------------------------------
@@ -1170,6 +1317,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 print.CcwOutcomeModel <- function(x, ...) {
   message(paste("Model type:", x$modelType))
   message(paste("Variance estimator:", x$varianceEstimator))
+  ratio <- x$varianceDiagnostics$estimands$ratio
+  if (any(is.finite(ratio))) {
+    ratio <- range(ratio[is.finite(ratio)])
+    message(sprintf("Stacked sandwich SE / robust SE: %.3g to %.3g", ratio[1], ratio[2]))
+  }
   message(paste("Competing events:", x$metaData$competingEvents))
   if (x$modelType %in% c("cox", "fineGray")) {
     message(sprintf("Risks: weighted %s", if (identical(x$metaData$competingEvents, "death")) "Aalen-Johansen" else "Kaplan-Meier"))

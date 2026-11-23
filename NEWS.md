@@ -20,6 +20,54 @@
   the weights when combined with `weights`), and `coxph()` on hand-built Fine-Gray rows for both
   options.
 
+* `createFitOutcomeModelArgs(varianceEstimator = "stackedSandwich")` (an option; `"robust"` stays the
+  default): the person-clustered sandwich of the outcome estimates stacked with the estimating equations
+  of the censoring models and their stabilization numerators, so the standard errors account for the
+  estimation of the weights (Shu et al. 2021). It is assembled as the quadratic form
+  IJ'IJ + C'G + G'C + C'BC from the segment-level infinitesimal-jackknife influences and the scores and
+  information of the censoring models, computed from their stored predictions and the covariates;
+  `fitOutcomeModel()` takes them through its new argument `cloneCensorWeightData` (which
+  `runCcwAnalyses()` passes). `outcomeModel$varianceDiagnostics` holds the robust and stacked SE of
+  every estimand and their ratio. It covers the Kaplan-Meier/Aalen-Johansen, Cox and pooled logistic
+  estimands with the binary models at G and the pooled logistic hazard models (any
+  `covariateTimeInteraction`) of every strategy type, `initiateWithinModel`, `postGraceModel`,
+  `graceRegime` and `graceStart`, with stabilized or unstabilized weights. Truncated weights are taken
+  per weight scale with the caps held fixed (exact for fixed caps, conditional for percentile caps): the
+  Kaplan-Meier rows use `weight`, and the MSMs `otherScaleWeight` truncated on its own scale or formed
+  from the truncated `weight` (`truncateMsmWeights`), so a truncated segment keeps only its numerator
+  term, if any. A normal prior is exact at its variance (its curvature `s_j^2 / sigma^2` added to the
+  information, `s_j` the covariate's normalization); a Laplace prior is conditional on its support and
+  variance. Hazard models fit on a uniform sample (`maxCohortSizeForFitting`) have scores for the
+  sampled persons only. `varianceDiagnostics$models` reports, per censoring and numerator model, the
+  prior, support size, `conditionalOnSupport`, the largest KKT gap (Laplace), the rank and condition
+  number of the information, whether it was sampled, and the truncated shares on both weight scales.
+  It stops for the Cox censoring model and `"fineGray"` (when the settings are validated), for binary
+  models that `CohortMethod::createPs()` fit on a sample (use `maxCohortSizeForFitting = 0` or the
+  bootstrap), and for indicator intervals whose hazard a sample left to a plug-in. Checked against an
+  independent `geex` stack with a binding fixed cap and `truncateMsmWeights = FALSE`, and with a normal
+  prior (SEs agree to about 3e-10 relative), and, for every strategy case and both weight scales,
+  against numerical derivatives of the weights of `computeCensoringWeights()`. A censoring model whose
+  information is singular (a time
+  basis collinear with the intercept over the intervals with rows) gets a generalized inverse whose
+  rank ignores rounding-level pivots (below 1e-10 on the correlation scale), so its SEs equal those of
+  an equivalent nonsingular basis. The
+  censoring models now store each person's `personSeqId`, `y`, `lastDay` and `inFit` in `predictions`;
+  models saved earlier must be refit to use it. Tested against a hand-written per-person stacked
+  influence (glm censoring models, `coxph()` and a written-out Kaplan-Meier, numerical Jacobian): the SEs
+  of the hazard ratio, risks and risk difference agree to about 1e-9 relative. Full-tier cross-checks
+  (`CCW_FULL_TESTS=true`; `geex`, `WeightIt` and `ipwCoxCSV` added to Suggests): at G = 0 the SE of the
+  log hazard ratio equals that of `ipwCoxCSV::ipwCoxInd()` with unstabilized and stabilized weights,
+  and the SEs of the risk difference and log risk ratio equal those of
+  `WeightIt::glm_weightit(vcov = "asympt")`; a `geex` stack written from the person-level data agrees
+  with a binding fixed cap and `truncateMsmWeights = FALSE`, and with a Laplace prior conditional on its
+  support (all to about 1e-10 relative). Results of the other variance estimators are unchanged.
+  A person with several index dates (`firstOnly = FALSE`) is one cluster: segments are matched to the
+  censoring models' rows by `rowId` (now kept in the outcome segments), and the scores of a person's
+  entries are summed. As in the fit, a prior's `exclude` leaves the interactions of an excluded
+  covariate penalized (in a Laplace support, and at the covariate's `s_j` in a normal prior's
+  curvature). A Laplace model is reported as `conditionalOnSupport` with its prior even when its
+  support has no penalized coefficient (`maxKktGap` is then NA).
+
 Changes that alter results of existing code, or of settings saved before them (which load with the
 new defaults):
 

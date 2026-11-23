@@ -82,11 +82,12 @@
 }
 
 # Person-level influence of a functional of one strategy's hazard increments with the given gradients
-# (or of several functionals, with one gradient column each; see .hazardInfluence()).
-.strategyInfluence <- function(hazards, gradientY, gradientD, nPersons) {
-  influence <- .hazardInfluence(hazards$segments, hazards$outcome, gradientY, nPersons)
+# (or of several functionals, with one gradient column each; see .hazardInfluence()). With `bySegment`,
+# the influence of each of the strategy's segments (`hazards$segments`).
+.strategyInfluence <- function(hazards, gradientY, gradientD, nPersons, bySegment = FALSE) {
+  influence <- .hazardInfluence(hazards$segments, hazards$outcome, gradientY, nPersons, bySegment)
   if (!is.null(hazards$death)) {
-    influence <- influence + .hazardInfluence(hazards$segments, hazards$death, gradientD, nPersons)
+    influence <- influence + .hazardInfluence(hazards$segments, hazards$death, gradientD, nPersons, bySegment)
   }
   return(influence)
 }

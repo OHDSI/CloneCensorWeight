@@ -50,7 +50,10 @@ each a list with
 interactions, named \code{"<covariateId>:<column>"}, for the logistic model) and \code{priorVariance} (\code{NA}
 without a prior).
 \item \code{predictions}: a tibble with \code{rowId} and \code{propensityScore} (binary) or \code{linearPredictor} (the
-covariate part of the linear predictor, hazard models) for every person in the risk set.
+covariate part of the linear predictor, hazard models) for every person in the risk set, with the
+person's \code{personSeqId}, \code{y} (started by \code{G}, or initiated on the last day at risk), \code{lastDay} (the
+last day at risk, hazard models only) and \code{inFit} (whether the person was in the sample the model
+was fit on; \code{NA} for a binary model fit on a sample drawn by \code{CohortMethod::createPs()}).
 \item For Cox: \code{baselineHazard}, a tibble \verb{time, cumHazard} (Breslow, at the initiation times, on the
 scale time = day + 1). For logistic: \code{timeBasis} (the settings, interval length, number of
 intervals, the basis matrix, and the intervals with a hazard of 0 or 1), \code{intervals}, a tibble

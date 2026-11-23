@@ -1060,7 +1060,7 @@ computeCcwSensitivity <- function(clones,
     if (is.null(weightedClones[[weightsKey]])) {
       weightedClones[[weightsKey]] <- computeCensoringWeights(clones, censoringModels[[censoringKey]], args$computeWeightsArgs, outcomeTimeBasis)
     }
-    model <- fitOutcomeModel(weightedClones[[weightsKey]], args$fitOutcomeModelArgs)
+    model <- fitOutcomeModel(weightedClones[[weightsKey]], args$fitOutcomeModelArgs, cloneCensorWeightData = cloneCensorWeightData)
     changes <- .describeVariant(variants[[name]])
     estimates[[name]] <- dplyr::mutate(model$estimates, variant = name, changes = changes, .before = 1)
     settings[[name]] <- tibble(

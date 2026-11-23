@@ -6,7 +6,8 @@
 \usage{
 fitOutcomeModel(
   weightedClones,
-  fitOutcomeModelArgs = createFitOutcomeModelArgs()
+  fitOutcomeModelArgs = createFitOutcomeModelArgs(),
+  cloneCensorWeightData = NULL
 )
 }
 \arguments{
@@ -15,6 +16,10 @@ fitOutcomeModel(
 
 \item{fitOutcomeModelArgs}{An object of type \code{FitOutcomeModelArgs} as created using
 \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}.}
+
+\item{cloneCensorWeightData}{An object of type \link{CloneCensorWeightData} holding the baseline
+covariates the censoring models were fit with. Needed (and used) only with
+\code{varianceEstimator = "stackedSandwich"}.}
 }
 \value{
 An object of class \code{CcwOutcomeModel}: a list with
@@ -45,7 +50,16 @@ and, for \code{"cox"} and \code{"logistic"}, \code{msmWeightSummary}: per strate
 model used (\code{msmWeights}), their \code{cap} on that scale (\code{NA} when they were not truncated on their own
 scale, see \code{truncateMsmWeights} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}), \code{maxWeight}, the largest weight
 used (the effective maximum), and \code{truncatedShare}, the share of the strategy's clones whose weight
-was truncated.
+was truncated;
+\item with \code{varianceEstimator = "stackedSandwich"}, \code{varianceDiagnostics}: \code{estimands}, a tibble with,
+per estimand, \code{seRobust} (the robust standard error), \code{seStacked} (the stacked one, which the
+estimates use) and their \code{ratio} (of the standard errors of the log for ratios); and \code{models}, a
+tibble with, per censoring model and numerator model (\code{strategyId}, \code{component}), its \code{prior},
+\code{supportSize} (the number of its coefficients in the stack), \code{conditionalOnSupport} (\code{TRUE} with a
+Laplace prior), \code{maxKktGap} (Laplace: the largest \verb{|sum_i U_ij| / s_j - lambda} over the penalized
+coefficients of the support, 0 at the exact optimum, \code{NA} when it has none), the \code{rank} and
+\code{conditionNumber} (on the correlation scale) of its information, whether it was fit on a sample (\code{sampled}), and its
+strategy's \code{truncatedShare} and \code{otherScaleTruncatedShare} (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}).
 }
 }
 \description{
@@ -144,6 +158,36 @@ estimates; for \code{"logistic"} they use the delta method with a numerical Jaco
 \code{varianceEstimator = "modelBased"} the hazard ratio or odds ratio uses the inverse of the weighted
 information; the \code{"cox"} rows at the horizons then have no standard errors or limits (the
 Kaplan-Meier has no model-based variance), and \code{"km"} is not supported. \code{varianceEstimator = "bootstrap"} is computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}, not by this function.
+
+\code{varianceEstimator = "stackedSandwich"} (an option; \code{"robust"} stays the default) stacks the
+estimating equations of the outcome estimates with those of the censoring models and their
+stabilization numerators, so that the variance accounts for the estimation of the weights (Shu et al.
+2021). Person i's influence is its infinitesimal-jackknife influence (that of this package's own
+robust sandwich, whatever \code{robustVarianceEngine} says) plus \verb{psi_i' A^- D}, summed over the censoring
+models, where \code{psi_i} is the person's centered score in the model (summed over the person's entries
+when a person has several index dates), \code{A} the model's information (with
+a pivoted-Cholesky generalized inverse) and \code{D} the derivative of the estimates with respect to the
+model's coefficients through the weights. The scores and the information come from the censoring
+models' stored predictions and the covariates of \code{cloneCensorWeightData}, for the persons of each
+model's risk set (which can differ from the outcome population when the models are shared across
+outcomes). It supports the binary models at \code{G} and the pooled logistic hazard models of every
+strategy type and of every \code{initiateWithinModel}, \code{postGraceModel}, \code{graceRegime} and \code{graceStart},
+with stabilized or unstabilized weights. The derivative of each log weight is taken on the scale the
+estimates use (\code{weight} for the Kaplan-Meier and Aalen-Johansen rows, and \code{otherScaleWeight} for the
+Cox and pooled logistic models when \code{msmWeights} is of the other kind, truncated on its own scale or
+formed from the truncated \code{weight} as \code{truncateMsmWeights} says), holding the truncation caps fixed: a
+truncated weight depends on the censoring models only through its numerator, if at all. This is exact
+for fixed caps and conditional on the cap for percentile caps. A normal prior is taken at its variance
+(its curvature \code{s_j^2 / sigma^2}, with \code{s_j} the covariate's largest value over the model's risk set,
+the normalization of the covariates, is added to \code{A}); as in the fit, the interactions of a
+covariate that the prior excludes are penalized. A Laplace prior is taken conditional on its
+support (the nonzero coefficients) and on its variance, which ignores the selection of the covariates
+and of the variance by cross-validation. A hazard model fit on a uniform sample of its risk set
+(\code{maxCohortSizeForFitting}) has scores for the persons of the sample only. It stops for the Cox
+censoring model, for binary models that \code{\link[CohortMethod:createPs]{CohortMethod::createPs()}} fit on a sample (set
+\code{maxCohortSizeForFitting = 0} or use the bootstrap), for indicator intervals whose hazard a sample
+left to a plug-in from the whole risk set, and for censoring models saved by an earlier version, which
+must be refit.
 }
 \examples{
 # Simulated data, its study population, and the clones of two strategies:
@@ -210,4 +254,7 @@ Stensrud MJ, Hernan MA. Why test for proportional hazards? JAMA. 2020;323:1401-1
 
 Young JG, Stensrud MJ, Tchetgen Tchetgen EJ, Hernan MA. A causal framework for classical statistical
 estimands in failure-time settings with competing events. Statistics in Medicine. 2020;39:1199-1236.
+
+Shu D, Young JG, Toh S, Wang R. Variance estimation in inverse probability weighted Cox models.
+Biometrics. 2021;77:1101-1117.
 }

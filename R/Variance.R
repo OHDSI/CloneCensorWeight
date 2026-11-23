@@ -101,8 +101,13 @@
   return(segments$weight * residuals)
 }
 
-# Person-level influence of the Cox coefficient: I^-1 times the score residuals summed by person.
-.coxCoefficientInfluence <- function(segments, breslow, nPersons) {
+# Person-level influence of the Cox coefficient: I^-1 times the score residuals summed by person. With
+# `bySegment`, the influence of each segment (I^-1 times its score residual), whose sums by person are
+# the person-level influence.
+.coxCoefficientInfluence <- function(segments, breslow, nPersons, bySegment = FALSE) {
+  if (bySegment) {
+    return(.coxScoreResiduals(segments, breslow) / breslow$information)
+  }
   scores <- .sumBy(.coxScoreResiduals(segments, breslow), segments$personIndex, nPersons)
   return(scores / breslow$information)
 }
@@ -114,8 +119,9 @@
 # w_k a(s) / S0(s) for its event, minus
 # w_k exp(beta x_k) sum_{s in (start_k, stop_k]} a(s) dLambda0(s) / S0(s).
 # `a` may also be a matrix with one column per functional; the result is then a persons x functionals
-# matrix.
-.hazardInfluence <- function(segments, breslow, a, nPersons) {
+# matrix. With `bySegment`, the influence of each segment (its contribution above, before the sum by
+# person), one row per row of `segments`.
+.hazardInfluence <- function(segments, breslow, a, nPersons, bySegment = FALSE) {
   isMatrix <- is.matrix(a)
   a <- as.matrix(a)
   positive <- breslow$s0 > 0
@@ -128,6 +134,9 @@
   isEvent <- which(breslow$isEvent)
   contribution[isEvent, ] <- contribution[isEvent, , drop = FALSE] +
     segments$weight[isEvent] * eventCoefficient[segments$idxEvent[isEvent], , drop = FALSE]
+  if (bySegment) {
+    return(if (isMatrix) contribution else contribution[, 1])
+  }
   influence <- matrix(0, nPersons, ncol(a))
   if (nrow(contribution) > 0) {
     sums <- rowsum(contribution, segments$personIndex)
@@ -152,9 +161,17 @@
 # value, one row per pair present, sorted by person and cell.
 .sumByPersonAndCell <- function(values, personIndex, cell, nCells) {
   key <- (as.numeric(personIndex) - 1) * nCells + (cell - 1)
-  keys <- sort(unique(key))
-  sums <- rowsum(values, match(key, keys), reorder = TRUE)
-  return(data.frame(person = keys %/% nCells + 1, cell = keys %% nCells + 1, value = sums[, 1]))
+  # Sorted by pair with a stable sort, so that each pair's values are summed in their order:
+  sorted <- order(key, method = "radix")
+  key <- key[sorted]
+  values <- values[sorted]
+  n <- length(key)
+  first <- c(TRUE, key[-1L] != key[-n])[seq_len(n)]
+  if (!all(first)) {
+    values <- rowsum(values, cumsum(first), reorder = FALSE)[, 1]
+  }
+  keys <- key[first]
+  return(data.frame(person = keys %/% nCells + 1, cell = keys %% nCells + 1, value = unname(values)))
 }
 
 # Joint HC0 sandwich clustered on person for pooled models fitted to rows of the same persons (each
@@ -179,6 +196,15 @@
     meat <- meat + crossprod(do.call(cbind, scores))
   }
   return(bread %*% meat %*% bread)
+}
+
+# Row-level influence of the identified coefficients of a pooled model (a .fitPooledModel() result fitted
+# with a variance) on the clone x interval `rows` it was fitted to, with response `y`: B X_c w (y - p_c)
+# for a row of cell c, factored as the row's `residual` w (y - p_c) times row c of `loading` = X B (cells
+# x coefficients), so that no rows x coefficients array is formed. Its sums by person are the
+# person-level influences B U_i of .jointSandwich(). Rows of cells with a fixed hazard are 0.
+.pooledRowInfluence <- function(fit, rows, y) {
+  return(list(residual = rows$weight * (y - fit$probability[rows$cell]), loading = fit$design %*% fit$bread))
 }
 
 # The same joint sandwich from Cyclops' vcov(type = "robust"), for the pooled models `models` (as in

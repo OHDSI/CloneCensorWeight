@@ -1176,8 +1176,13 @@ BootstrapArgs <- R6Class(
 #'                             `"stabilized"` (see Details). The weighted Kaplan-Meier and
 #'                             Aalen-Johansen estimates (of `"km"`, and the rows at the horizons of
 #'                             `"cox"`) do not depend on it.
-#' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person),
-#'                             `"bootstrap"` (computed by [bootstrapCcwAnalysis()]), or `"modelBased"`.
+#' @param varianceEstimator    The variance estimator: `"robust"` (sandwich clustered on person, the
+#'                             default), `"bootstrap"` (computed by [bootstrapCcwAnalysis()]),
+#'                             `"modelBased"`, or `"stackedSandwich"` (the robust sandwich stacked with
+#'                             the estimating equations of the censoring models, so that it accounts
+#'                             for the estimation of the weights; [fitOutcomeModel()] then needs
+#'                             `cloneCensorWeightData`, see its Details). `"stackedSandwich"` is not
+#'                             available for `modelType = "fineGray"`.
 #' @param robustVarianceEngine What computes the robust variance of the Cox and pooled logistic models
 #'                             (with `varianceEstimator = "robust"`): `"cyclops"` (Cyclops'
 #'                             `vcov(fit, type = "robust")`, fitted with the persons as subjects) or
@@ -1269,7 +1274,7 @@ FitOutcomeModelArgs <- R6Class(
       checkmate::assertR6(self$timeBasis, "TimeBasis", add = errorMessages)
       checkmate::assertFlag(self$armByTimeInteraction, add = errorMessages)
       checkmate::assertChoice(self$msmWeights, c("unstabilized", "stabilized"), add = errorMessages)
-      checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased"), add = errorMessages)
+      checkmate::assertChoice(self$varianceEstimator, c("robust", "bootstrap", "modelBased", "stackedSandwich"), add = errorMessages)
       checkmate::assertChoice(self$robustVarianceEngine, c("cyclops", "ccw"), add = errorMessages)
       checkmate::assertChoice(self$fineGrayCensoring, c("natural", "finegray"), add = errorMessages)
       checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
@@ -1283,6 +1288,9 @@ FitOutcomeModelArgs <- R6Class(
       }
       if (self$stratified) {
         stop("Not yet supported in this version: stratified = TRUE")
+      }
+      if (self$varianceEstimator == "stackedSandwich" && self$modelType == "fineGray") {
+        stop("varianceEstimator = \"stackedSandwich\" is not available for modelType = \"fineGray\", whose censoring survival G also depends on the weights")
       }
     },
     fromList = function(list, requireTyping) {
@@ -1392,6 +1400,9 @@ CcwAnalysis <- R6Class(
         public = c("horizons", "timeBasis", "varianceEstimator", "bootstrapArgs"), add = errorMessages
       )
       checkmate::reportAssertions(collection = errorMessages)
+      if (self$fitOutcomeModelArgs$varianceEstimator == "stackedSandwich" && self$fitCensoringModelsArgs$hazardModelType == "cox") {
+        stop("varianceEstimator = \"stackedSandwich\" does not yet support the Cox censoring model: use hazardModelType = \"logistic\"")
+      }
     },
     fromList = function(list, requireTyping) {
       super$fromList(list)

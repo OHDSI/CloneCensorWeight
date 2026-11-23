@@ -277,11 +277,11 @@
     build <- function(k) matrix(as.numeric(k), ncol = 1)
     labels <- 1L
   } else {
-    sample <- rep(intervals, .sumBy(multiplicity, match(interval, intervals), nDistinct))
+    times <- .sumBy(multiplicity, match(interval, intervals), nDistinct)
     if (timeBasis$type == "polynomial") {
-      basis <- stats::poly(sample, degree = min(timeBasis$degree, nDistinct - 1), raw = timeBasis$raw)
+      basis <- stats::poly(rep(intervals, times), degree = min(timeBasis$degree, nDistinct - 1), raw = timeBasis$raw)
     } else {
-      basis <- splines::ns(sample, df = min(timeBasis$df, nDistinct - 1))
+      basis <- .naturalSplineOfCounts(intervals, times, min(timeBasis$df, nDistinct - 1))
     }
     build <- function(k) matrix(unclass(stats::predict(basis, k)), nrow = length(k))
     labels <- seq_len(ncol(basis))
@@ -291,4 +291,47 @@
     build = function(k) build(k)[, keep, drop = FALSE],
     labels = labels[keep]
   ))
+}
+
+# splines::ns(rep(values, times), df) without forming that sample (`values` sorted and distinct, `times`
+# truncated as rep() does): the same knots, Boundary.knots and so the same predict(). The interior knots
+# are the sample's type 7 quantiles (as quantile() takes them, from the order statistics found on the
+# cumulative counts), moved inside the boundary as ns() moves them when they match a boundary knot.
+.naturalSplineOfCounts <- function(values, times, df) {
+  times <- trunc(times)
+  values <- values[times > 0]
+  times <- times[times > 0]
+  boundary <- range(values)
+  nKnots <- df - 1L
+  knots <- NULL
+  if (nKnots > 0) {
+    probs <- seq.int(from = 0, to = 1, length.out = nKnots + 2L)[-c(1L, nKnots + 2L)]
+    ends <- cumsum(times)
+    orderStatistic <- function(j) values[findInterval(j - 1, ends) + 1L]
+    index <- 1 + max(ends[length(ends)] - 1, 0) * probs
+    lo <- floor(index)
+    knots <- orderStatistic(lo)
+    upper <- orderStatistic(ceiling(index))
+    i <- which(index > lo & upper != knots)
+    h <- (index - lo)[i]
+    knots[i] <- (1 - h) * knots[i] + h * upper[i]
+    if (any(atBoundary <- range(knots) %in% boundary)) {
+      if (atBoundary[1L]) {
+        i <- knots == (pivot <- boundary[1L])
+        if (all(i)) {
+          stop("all interior knots match left boundary knot")
+        }
+        knots[i] <- knots[i] + (min(knots[knots > pivot]) - pivot) / 8
+      }
+      if (atBoundary[2L]) {
+        i <- knots == (pivot <- boundary[2L])
+        if (all(i)) {
+          stop("all interior knots match right boundary knot")
+        }
+        knots[i] <- knots[i] - (pivot - max(knots[knots < pivot])) / 8
+      }
+      warning("shoving 'interior' knots matching boundary knots to inside")
+    }
+  }
+  return(splines::ns(values, knots = knots, Boundary.knots = boundary))
 }

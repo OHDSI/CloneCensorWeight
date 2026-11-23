@@ -848,7 +848,7 @@ runCcwAnalyses <- function(connectionDetails = NULL,
       threads = if (is.null(params$bootstrapThreads)) 1 else params$bootstrapThreads
     )
   } else {
-    outcomeModel <- fitOutcomeModel(weightedClones, fitOutcomeModelArgs)
+    outcomeModel <- fitOutcomeModel(weightedClones, fitOutcomeModelArgs, cloneCensorWeightData = data)
   }
   outcomeModel$diagnostics <- .computeOutcomeDiagnostics(
     clones = clones,

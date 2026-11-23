@@ -660,6 +660,54 @@ test_that("The pooled logistic sandwich does not depend on the person block size
   expect_equal(.jointSandwich(fits, nPersons, maxEntries = 1), oneBlock, tolerance = 1e-12)
 })
 
+test_that("Segment- and row-level influences sum by person to the person-level influences", {
+  fixture <- createM4Fixture(n = 200, riskStart = 1, competingEvents = "death", seed = 5)
+  weightedClones <- createM4WeightedClones(fixture)
+  on.exit(close(weightedClones))
+  data <- .getOutcomeData(weightedClones)
+  nPersons <- length(data$personSeqIds)
+  sumByPerson <- function(influence, personIndex) apply(as.matrix(influence), 2, .sumBy, index = personIndex, n = nPersons)
+  segments <- data$segments[data$segments$weight > 0, ]
+  times <- .eventTimes(segments)
+  segments <- .indexSegments(segments, times)
+
+  # The Aalen-Johansen risk and area of one strategy at one horizon:
+  hazards <- .strategyHazards(segments, 1, length(times), competing = TRUE)
+  functionals <- .strategyFunctionals(hazards, times, tau = 10)
+  gradientY <- cbind(functionals$gradRiskY, functionals$gradAucY)
+  gradientD <- cbind(functionals$gradRiskD, functionals$gradAucD)
+  bySegment <- .strategyInfluence(hazards, gradientY, gradientD, nPersons, bySegment = TRUE)
+  expect_equal(dim(bySegment), c(nrow(hazards$segments), 2L))
+  expect_equal(sumByPerson(bySegment, hazards$segments$personIndex), .strategyInfluence(hazards, gradientY, gradientD, nPersons), tolerance = 1e-12)
+
+  # The Cox coefficient (at any value of it):
+  outcome <- .breslow(segments, segments$outcome == 1, 0.3, length(times))
+  bySegment <- .coxCoefficientInfluence(segments, outcome, nPersons, bySegment = TRUE)
+  expect_equal(sumByPerson(bySegment, segments$personIndex)[, 1], .coxCoefficientInfluence(segments, outcome, nPersons), tolerance = 1e-12)
+
+  # The pooled logistic outcome and death models, whose person sums give their joint sandwich:
+  rows <- .expandToIntervals(data$segments, 2)
+  rows <- rows[rows$weight > 0, ]
+  basis <- .timeBasisColumns(createTimeBasis("polynomial", intervalLength = 2, degree = 2), rows$interval)
+  nIntervals <- max(rows$interval) + 1
+  design <- .pooledDesign(rep(0:1, each = nIntervals), basis$build(rep(seq_len(nIntervals) - 1, 2)), sprintf("time%d", basis$labels), TRUE)
+  rows$cell <- as.integer(rows$x * nIntervals + rows$interval + 1)
+  noDeath <- rows$death == 0
+  fits <- list(
+    .fitPooledModel(rows[noDeath, ], rows$y[noDeath], design, Cyclops::createPrior("none"), m4Control, "outcome", "robust"),
+    .fitPooledModel(rows, rows$death, design, Cyclops::createPrior("none"), m4Control, "death", "robust")
+  )
+  rowInfluence <- function(fit, rows, y) {
+    factors <- .pooledRowInfluence(fit, rows, y)
+    return(factors$residual * factors$loading[rows$cell, , drop = FALSE])
+  }
+  personInfluence <- cbind(
+    sumByPerson(rowInfluence(fits[[1]], rows[noDeath, ], rows$y[noDeath]), rows$personIndex[noDeath]),
+    sumByPerson(rowInfluence(fits[[2]], rows, rows$death), rows$personIndex)
+  )
+  expect_equal(unname(crossprod(personInfluence)), .jointSandwich(fits, nPersons), tolerance = 1e-10)
+})
+
 # Properties ------------------------------------------------------------------------------------------
 
 test_that("Robust SEs are unchanged when all weights are multiplied by a constant", {
@@ -945,4 +993,30 @@ test_that("plotCumulativeIncidence returns a ggplot", {
   expect_true(file.exists(fileName))
   unlink(fileName)
   expect_error(plotCumulativeIncidence(curves, labels = "A"), "labels")
+})
+
+test_that("The natural spline basis from interval counts is identical to ns() on the copied intervals", {
+  # The basis of the copied intervals, as .timeBasisColumns() formed it from the sample:
+  reference <- function(interval, multiplicity, df, k) {
+    intervals <- sort(unique(interval))
+    basis <- splines::ns(rep(intervals, .sumBy(multiplicity, match(interval, intervals), length(intervals))), df = min(df, length(intervals) - 1))
+    build <- function(k) matrix(unclass(stats::predict(basis, k)), nrow = length(k))
+    return(build(k)[, colSums(build(intervals) != 0) > 0, drop = FALSE])
+  }
+  k <- 0:12
+  cases <- list(
+    list(interval = 0:9, multiplicity = c(5, 1, 1, 2, 3, 1, 1, 1, 1, 4), df = 4), # interpolated knots
+    list(interval = c(0, 0, 1, 3, 3, 3, 7), multiplicity = rep(1, 7), df = 3), # rows sharing an interval
+    list(interval = 0:3, multiplicity = c(1.5, 2.7, 0.5, 3), df = 2), # counts truncated as rep() does
+    list(interval = 0:5, multiplicity = c(1, 1, 1, 1, 1, 1), df = 1) # no interior knot
+  )
+  for (case in cases) {
+    basis <- .timeBasisColumns(createTimeBasis("naturalSpline", df = case$df), case$interval, case$multiplicity)
+    expect_identical(basis$build(k), reference(case$interval, case$multiplicity, case$df, k))
+  }
+  # Knots at both boundary knots are moved inside, with ns()'s warning:
+  interval <- 0:5
+  multiplicity <- c(40, 1, 1, 1, 1, 30)
+  expect_warning(basis <- .timeBasisColumns(createTimeBasis("naturalSpline", df = 3), interval, multiplicity), "shoving")
+  expect_identical(basis$build(k), suppressWarnings(reference(interval, multiplicity, 3, k)))
 })
