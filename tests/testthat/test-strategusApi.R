@@ -151,7 +151,14 @@ test_that("The module settings are formals of runCcwAnalyses and convert in both
   expect_equal(attr(jsonCovariateSettings[[2]], "fun"), "getDbCohortBasedCovariatesData")
   expect_null(jsonCovariateSettings[[2]]$covariateCohortTable)
   fromJson <- convertUntypedListToCcwAnalysesSpecifications(loaded$ccwAnalysesSpecifications)
-  expect_equal(fromJson$toList(), specifications$toList())
+  # ParallelLogger writes 4 decimals, so the default profileBounds (log(0.1), log(10)) come back as
+  # -2.3026 and 2.3026, as CohortMethod's do in Strategus; every other setting comes back as it was:
+  fromJsonList <- fromJson$toList()
+  specificationsList <- specifications$toList()
+  expect_equal(fromJsonList$ccwAnalysisList[[1]]$fitOutcomeModelArgs$profileBounds, c(log(0.1), log(10)), tolerance = 1e-4)
+  fromJsonList$ccwAnalysisList[[1]]$fitOutcomeModelArgs$profileBounds <- NULL
+  specificationsList$ccwAnalysisList[[1]]$fitOutcomeModelArgs$profileBounds <- NULL
+  expect_equal(fromJsonList, specificationsList)
 
   # The likely mistakes stop with a message that names them:
   expect_error(convertUntypedListToCcwAnalysesSpecifications(specifications), "pass its `\\$toList\\(\\)`")

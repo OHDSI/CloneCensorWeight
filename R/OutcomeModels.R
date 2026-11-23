@@ -146,7 +146,16 @@
 #'   model used (`msmWeights`), their `cap` on that scale (`NA` when they were not truncated on their own
 #'   scale, see `truncateMsmWeights` in [createComputeWeightsArgs()]), `maxWeight`, the largest weight
 #'   used (the effective maximum), and `truncatedShare`, the share of the strategy's clones whose weight
-#'   was truncated.
+#'   was truncated;
+#' - `logLikelihoodProfile` (`"cox"`, `"fineGray"`, `"logistic"`): the likelihood profile of the log
+#'   `hr`, `shr` or `or` (`point`, `value`, `derivative`; see `profileGrid` in
+#'   [createFitOutcomeModelArgs()]), also for fits that did not converge; absent when not computed.
+#'   The profile is the weighted pseudo-likelihood of the model, as CohortMethod's profile is under
+#'   IPTW: the weights are treated as frequencies, and their estimation is ignored. Its curvature is
+#'   the model-based information, not the person-clustered robust variance. The profile is therefore
+#'   narrower than the reported robust or bootstrap SE implies (and narrower than the stacked-sandwich
+#'   SE, once that estimator lands). Under the bootstrap, a synthesis from the profile discards exactly
+#'   the weight-estimation uncertainty that the bootstrap exists to capture.
 #'
 #' @references
 #' Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.
@@ -196,7 +205,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   start <- Sys.time()
 
   data <- .getOutcomeData(weightedClones)
-  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = TRUE)
+  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = TRUE, computeProfile = TRUE)
   metaData <- attr(weightedClones, "metaData")
   result <- list(
     modelType = fitOutcomeModelArgs$modelType,
@@ -214,6 +223,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
       args = fitOutcomeModelArgs$toList()
     )
   )
+  result$logLikelihoodProfile <- model$logLikelihoodProfile
   if (fitOutcomeModelArgs$modelType != "km") {
     result$metaData$msmWeightSummary <- .summarizeMsmWeights(data, fitOutcomeModelArgs$msmWeights)
   }
@@ -233,8 +243,9 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # collected only once (`weightedClones` is then not used). The variance estimator in
 # `fitOutcomeModelArgs` is ignored; its `msmWeights` is used, as in fitOutcomeModel(). Returns a list
 # with `estimates` (a tibble with estimand, estimate and logEstimate, in the same order as
-# fitOutcomeModel()) and `coefficients`.
-.fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL, outcomeData = NULL) {
+# fitOutcomeModel()), `coefficients`, and, with `computeProfile = TRUE` and profiling enabled in
+# `fitOutcomeModelArgs`, `logLikelihoodProfile` (see fitOutcomeModel()).
+.fitOutcomeModelPoint <- function(weightedClones, fitOutcomeModelArgs, personCounts = NULL, outcomeData = NULL, computeProfile = FALSE) {
   errorMessages <- checkmate::makeAssertCollection()
   if (is.null(outcomeData)) {
     .assertCcwClones(weightedClones, weighted = TRUE, add = errorMessages)
@@ -252,10 +263,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (!is.null(personCounts)) {
     data <- .applyPersonCounts(data, personCounts)
   }
-  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = FALSE)
+  model <- .fitOutcomeModelCore(data, fitOutcomeModelArgs, computeVariance = FALSE, computeProfile = computeProfile)
   return(list(
     estimates = model$estimates[, c("estimand", "estimate", "logEstimate")],
-    coefficients = model$coefficients
+    coefficients = model$coefficients,
+    logLikelihoodProfile = model$logLikelihoodProfile
   ))
 }
 
@@ -404,7 +416,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 
 # Models ------------------------------------------------------------------------------------------
 
-.fitOutcomeModelCore <- function(data, fitOutcomeModelArgs, computeVariance) {
+.fitOutcomeModelCore <- function(data, fitOutcomeModelArgs, computeVariance, computeProfile = FALSE) {
   segments <- data$segments
   if (!all(1:2 %in% segments$strategyId[segments$weight > 0])) {
     stop("Both strategies must have clones with positive weights")
@@ -422,7 +434,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (fitOutcomeModelArgs$modelType == "cox") {
     # The hazard ratio of the Cox MSM, and the rows of "km" for the horizons (Phase1Contracts section
     # 10.5), with their IJ standard errors only under the robust variance:
-    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance)
+    model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, computeProfile = computeProfile)
     km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
     return(model)
@@ -436,16 +448,16 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     # can; this package's own robust sandwich ("ccw") needs the expanded rows.
     ccwSandwich <- variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "ccw"
     if (.cyclopsHasFineGray() && !ccwSandwich) {
-      model <- .fitFineGrayMsm(msmData, fitOutcomeModelArgs, variance)
+      model <- .fitFineGrayMsm(msmData, fitOutcomeModelArgs, variance, computeProfile = computeProfile)
     } else {
       segments <- .fineGraySegments(msmData, fitOutcomeModelArgs$fineGrayCensoring)
-      model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, segments = segments, estimand = "shr")
+      model <- .fitCoxMsm(msmData, fitOutcomeModelArgs, variance, segments = segments, estimand = "shr", computeProfile = computeProfile)
     }
     km <- .fitKm(data, horizons, competing, computeVariance = variance == "robust")
     model$estimates <- dplyr::bind_rows(model$estimates, km$estimates)
     return(model)
   }
-  return(.fitLogisticMsm(msmData, fitOutcomeModelArgs, competing, variance))
+  return(.fitLogisticMsm(msmData, fitOutcomeModelArgs, competing, variance, computeProfile = computeProfile))
 }
 
 # Kaplan-Meier / Aalen-Johansen ------------------------------------------------------------------
@@ -505,14 +517,22 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # Fits a Cyclops model of an outcome model with `control`. When that fit fails (an error, or a status
 # other than SUCCESS, such as MAX_ITERATIONS), it is refitted with Cyclops' default algorithm and
 # convergence criterion (the other settings of `control` kept), with a warning. Returns the fit, or NULL
-# with a warning when both fail. The covariates `unpenalizedIds` (the target indicator, the time basis
+# with a warning when both fail. With `keepFailedFit = TRUE` (for a likelihood profile, which CohortMethod
+# also computes on fits that did not converge), it instead returns the fit of the last attempt that did
+# not throw an error (the retry's, or else the first attempt's), with attribute "failure" (the failure
+# message); NULL only when both attempts threw. Both attempts share one Cyclops engine (the data's), so a
+# profile of the kept fit is computed on the engine as the retry left it. stats::coef() and
+# stats::vcov() fail on such a fit. The covariates `unpenalizedIds` (the target indicator, the time basis
 # and their interactions) are excluded from the prior, as CohortMethod excludes the treatment variable.
 # `startingCoefficients` (optional) are passed to Cyclops::fitCyclopsModel().
-.fitOutcomeCyclopsModel <- function(cyclopsData, prior, control, unpenalizedIds, description, startingCoefficients = NULL) {
+.fitOutcomeCyclopsModel <- function(cyclopsData, prior, control, unpenalizedIds, description, startingCoefficients = NULL,
+                                    keepFailedFit = FALSE) {
   if (prior$priorType != "none") {
     prior$exclude <- unique(c(prior$exclude, unpenalizedIds))
   }
   attempt <- .tryFitCyclopsModel(cyclopsData, prior, control, startingCoefficients)
+  # The fit of the last attempt that did not throw an error:
+  failedFit <- if (is.character(attempt$fit)) NULL else attempt$fit
   if (!is.null(attempt$failure)) {
     defaultControl <- control
     defaultControl[c("algorithm", "convergenceType", "tolerance", "maxIterations")] <- list(NULL)
@@ -520,6 +540,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     if (is.null(retry$failure)) {
       warning(sprintf("Fitting the %s failed (%s), so it was fitted with Cyclops' default algorithm and convergence criterion", description, attempt$failure))
       attempt <- retry
+    } else if (!is.character(retry$fit)) {
+      failedFit <- retry$fit
     }
   }
   for (message in attempt$warnings) {
@@ -527,6 +549,10 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
   if (!is.null(attempt$failure)) {
     warning(sprintf("Fitting the %s failed: %s", description, attempt$failure))
+    if (keepFailedFit && !is.null(failedFit)) {
+      attr(failedFit, "failure") <- attempt$failure
+      return(failedFit)
+    }
     return(NULL)
   }
   return(attempt$fit)
@@ -553,8 +579,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # Fits the weighted counting-process Cox model with the target indicator (covariate 1) as the only
 # covariate, using Cyclops cox_counting (Breslow ties), with `subjectId` (one per segment, for
 # vcov(type = "robust")) as the Cyclops subjects when given. Returns the fit, or NULL (with a warning)
-# when there are no events or the fit fails.
-.fitCyclopsCox <- function(segments, y, prior, control, label, subjectId = NULL, fineGrayCensoring = NULL) {
+# when there are no events or the fit fails (see `keepFailedFit` of .fitOutcomeCyclopsModel()).
+.fitCyclopsCox <- function(segments, y, prior, control, label, subjectId = NULL, fineGrayCensoring = NULL, keepFailedFit = FALSE) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s Cox model", label, label))
     return(NULL)
@@ -579,28 +605,34 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     cyclopsData <- Cyclops::convertToCyclopsData(outcomes, covariates, modelType = "cox_counting", addIntercept = FALSE,
                                                  quiet = TRUE, fineGrayCensoring = fineGrayCensoring)
   }
-  return(.fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label)))
+  return(.fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = 1, description = sprintf("%s Cox model", label),
+                                 keepFailedFit = keepFailedFit))
 }
 
 # The hazard ratio row of the weighted Cox MSM of the outcome, with competing events treated as
 # censoring, its coefficient, and its (robust or model-based) variance. Risks from this model are not
 # reported (see fitOutcomeModel()). The Fine-Gray model passes its own rows as `segments`, and
-# `estimand = "shr"`.
-.fitCoxMsm <- function(data, fitOutcomeModelArgs, variance, segments = data$segments, estimand = "hr") {
+# `estimand = "shr"`. With `computeProfile = TRUE` and profiling enabled in `fitOutcomeModelArgs`, also
+# returns the likelihood profile of the log hazard ratio (also of a fit that did not converge).
+.fitCoxMsm <- function(data, fitOutcomeModelArgs, variance, segments = data$segments, estimand = "hr", computeProfile = FALSE) {
   segments <- segments[segments$weight > 0, ]
   times <- .eventTimes(segments)
   segments <- .indexSegments(segments, times)
 
   # Cyclops' robust variance clusters on the subjects of the data, so the persons are the subjects:
   cyclopsRobust <- variance == "robust" && fitOutcomeModelArgs$robustVarianceEngine == "cyclops"
+  profile <- .profileRequested(fitOutcomeModelArgs, computeProfile)
   fit <- .fitCyclopsCox(
     segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome",
-    subjectId = if (cyclopsRobust) segments$personIndex else NULL
+    subjectId = if (cyclopsRobust) segments$personIndex else NULL, keepFailedFit = profile
   )
-  beta <- if (is.null(fit)) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
+  logLikelihoodProfile <- if (profile) .likelihoodProfile(fit, 1, fitOutcomeModelArgs) else NULL
+  failed <- is.null(fit) || !is.null(attr(fit, "failure"))
+  beta <- if (failed) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
   coefficients <- c(target = beta)
   if (is.na(beta)) {
-    return(list(estimates = .ratioRow(estimand, NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
+    return(list(estimates = .ratioRow(estimand, NA_real_, NA_real_), coefficients = coefficients, vcov = NULL,
+                logLikelihoodProfile = logLikelihoodProfile))
   }
   outcome <- .breslow(segments, segments$outcome == 1, beta, length(times))
   if (cyclopsRobust) {
@@ -616,7 +648,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     dimnames(vcov) <- list(names(coefficients), names(coefficients))
   }
   hr <- .ratioRow(estimand, beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1]))
-  return(list(estimates = hr, coefficients = coefficients, vcov = vcov))
+  return(list(estimates = hr, coefficients = coefficients, vcov = vcov, logLikelihoodProfile = logLikelihoodProfile))
 }
 
 # Fine-Gray --------------------------------------------------------------------------------------
@@ -626,12 +658,49 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   return("fineGrayCensoring" %in% names(formals(Cyclops::convertToCyclopsData)))
 }
 
+# Likelihood profiles ------------------------------------------------------------------------------
+
+# The estimand whose log is profiled, per model type.
+.profiledEstimands <- c(cox = "hr", fineGray = "shr", logistic = "or")
+
+# Whether the installed Cyclops has getCyclopsProfileLogLikelihood(maxDrop = ) (develop f5e02ce0; not in tags
+# v4.0.1 or v4.0.2, and the version number cannot tell the builds apart).
+.cyclopsHasMaxDrop <- function() {
+  return("maxDrop" %in% names(formals(Cyclops::getCyclopsProfileLogLikelihood)))
+}
+
+# Whether a likelihood profile is to be computed: requested by the caller, and enabled in the settings.
+.profileRequested <- function(fitOutcomeModelArgs, computeProfile) {
+  return(computeProfile && !(is.null(fitOutcomeModelArgs$profileGrid) && is.null(fitOutcomeModelArgs$profileBounds)))
+}
+
+# The likelihood profile of coefficient `parm` (a Cyclops covariate ID) of `fit`, in CohortMethod's form
+# (CohortMethod R/OutcomeModels.R, Apache 2.0): point, value (log likelihood, penalty included, not
+# normalized) and derivative. It is the model's weighted pseudo-likelihood whatever the variance estimator.
+# `fit` may be a failed fit (attr "failure"): Cyclops profiles it without calling coef(). NULL when there is
+# no fit, and NULL with a warning when Cyclops cannot profile (CohortMethod lets that error stop the fit).
+.likelihoodProfile <- function(fit, parm, fitOutcomeModelArgs) {
+  if (is.null(fit)) {
+    return(NULL)
+  }
+  args <- list(object = fit, parm = parm, x = fitOutcomeModelArgs$profileGrid, bounds = fitOutcomeModelArgs$profileBounds,
+               tolerance = 0.1, includePenalty = TRUE, returnDerivatives = TRUE)
+  if (.cyclopsHasMaxDrop()) {
+    args$maxDrop <- 50
+  }
+  return(tryCatch(do.call(Cyclops::getCyclopsProfileLogLikelihood, args), error = function(e) {
+    warning(sprintf("The likelihood profile could not be computed: %s", conditionMessage(e)), call. = FALSE)
+    NULL
+  }))
+}
+
 # The subdistribution hazard ratio row of the weighted Fine-Gray MSM, its coefficient and its (robust or
 # model-based) variance, fitted by Cyclops on the segments with positive weight: each clone's death segment
 # is a Fine-Gray row of its strategy, whose censoring survival G (.fineGrayCensoringSurvival()) is passed as
 # a step function. The same likelihood as the expanded rows of .fineGraySegments(), without them. Both
-# variances are Cyclops' (the robust one clustered on person, as for "cox").
-.fitFineGrayMsm <- function(data, fitOutcomeModelArgs, variance) {
+# variances are Cyclops' (the robust one clustered on person, as for "cox"). The likelihood profile as
+# in .fitCoxMsm().
+.fitFineGrayMsm <- function(data, fitOutcomeModelArgs, variance, computeProfile = FALSE) {
   segments <- data$segments[data$segments$weight > 0, ]
   segments$fineGrayGroup <- ifelse(segments$competing == 1, segments$strategyId, 0L)
   censoring <- do.call(rbind, lapply(sort(unique(segments$strategyId)), function(strategyId) {
@@ -639,14 +708,18 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     data.frame(fineGrayGroup = rep(as.integer(strategyId), length(survival$times)), time = survival$times, survival = survival$after(survival$times))
   }))
   robust <- variance == "robust"
+  profile <- .profileRequested(fitOutcomeModelArgs, computeProfile)
   fit <- .fitCyclopsCox(
     segments, segments$outcome, fitOutcomeModelArgs$prior, fitOutcomeModelArgs$control, "outcome",
-    subjectId = if (robust) segments$personIndex else NULL, fineGrayCensoring = censoring
+    subjectId = if (robust) segments$personIndex else NULL, fineGrayCensoring = censoring, keepFailedFit = profile
   )
-  beta <- if (is.null(fit)) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
+  logLikelihoodProfile <- if (profile) .likelihoodProfile(fit, 1, fitOutcomeModelArgs) else NULL
+  failed <- is.null(fit) || !is.null(attr(fit, "failure"))
+  beta <- if (failed) NA_real_ else as.numeric(stats::coef(fit)[["1"]])
   coefficients <- c(target = beta)
   if (is.na(beta)) {
-    return(list(estimates = .ratioRow("shr", NA_real_, NA_real_), coefficients = coefficients, vcov = NULL))
+    return(list(estimates = .ratioRow("shr", NA_real_, NA_real_), coefficients = coefficients, vcov = NULL,
+                logLikelihoodProfile = logLikelihoodProfile))
   }
   vcov <- if (robust) {
     unname(stats::vcov(fit, type = "robust"))
@@ -658,7 +731,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   if (!is.null(vcov)) {
     vcov <- matrix(vcov, 1, 1, dimnames = list(names(coefficients), names(coefficients)))
   }
-  return(list(estimates = .ratioRow("shr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1])), coefficients = coefficients, vcov = vcov))
+  return(list(estimates = .ratioRow("shr", beta, if (is.null(vcov)) NA_real_ else sqrt(vcov[1, 1])), coefficients = coefficients, vcov = vcov,
+              logLikelihoodProfile = logLikelihoodProfile))
 }
 
 # The rows of the weighted Fine-Gray MSM: the segments with positive weight, plus, for each clone that
@@ -842,8 +916,11 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
 # (`fixedHazard`, NA for the other cells), as the censoring models do. The coefficients that only these
 # cells inform are NA (their estimates are infinite), without a warning. Unless `variance` is "none", also
 # returns the bread (inverse weighted information) and the score residuals summed by person and cell.
-# Returns NULL (with a warning) if the model cannot be fitted.
-.fitPooledModel <- function(rows, y, design, prior, control, label, variance, groups = NULL) {
+# With `profileArgs` (a FitOutcomeModelArgs with profiling enabled), also returns `logLikelihoodProfile`,
+# the likelihood profile of the target coefficient (NULL when it is not identified). Returns NULL (with
+# a warning) if the model cannot be fitted; with `profileArgs`, a fit that did not converge instead
+# returns list(failed = TRUE) with the profile, `fixedHazard` and `estimable`.
+.fitPooledModel <- function(rows, y, design, prior, control, label, variance, groups = NULL, profileArgs = NULL) {
   if (!any(y == 1)) {
     warning(sprintf("No %s events: cannot fit the %s pooled logistic model", label, label))
     return(NULL)
@@ -883,9 +960,15 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   )
   cyclopsData <- Cyclops::convertToCyclopsData(outcomes[, c("rowId", "y", "weights")], covariates, modelType = "lr", addIntercept = TRUE, quiet = TRUE)
   # 0 is the intercept:
-  fit <- .fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = c(0, kept[-1]), description = sprintf("%s pooled logistic model", label))
+  fit <- .fitOutcomeCyclopsModel(cyclopsData, prior, control, unpenalizedIds = c(0, kept[-1]), description = sprintf("%s pooled logistic model", label),
+                                 keepFailedFit = !is.null(profileArgs))
   if (is.null(fit)) {
     return(NULL)
+  }
+  # The target indicator is design column (and Cyclops covariate) 2:
+  profile <- if (!is.null(profileArgs) && 2 %in% kept) .likelihoodProfile(fit, 2, profileArgs) else NULL
+  if (!is.null(attr(fit, "failure"))) {
+    return(list(failed = TRUE, logLikelihoodProfile = profile, fixedHazard = fixedHazard, estimable = identification$estimable))
   }
   estimates <- stats::coef(fit)
   coefficients <- stats::setNames(rep(NA_real_, ncol(design)), colnames(design))
@@ -903,7 +986,8 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     kept = kept,
     estimable = identification$estimable,
     fixedHazard = fixedHazard,
-    design = design[, kept, drop = FALSE]
+    design = design[, kept, drop = FALSE],
+    logLikelihoodProfile = profile
   )
   if (variance != "none") {
     probability <- stats::plogis(as.vector(result$design %*% coefficients[kept]))
@@ -1050,7 +1134,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   invisible(NULL)
 }
 
-.fitLogisticMsm <- function(data, fitOutcomeModelArgs, competing, variance) {
+.fitLogisticMsm <- function(data, fitOutcomeModelArgs, competing, variance, computeProfile = FALSE) {
   timeBasis <- fitOutcomeModelArgs$timeBasis
   intervalLength <- timeBasis$intervalLength
   horizons <- fitOutcomeModelArgs$horizons
@@ -1087,11 +1171,26 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
   }
 
   outcomeRows <- if (competing) rows$death == 0 else rep(TRUE, nrow(rows))
-  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance, groups))
+  # The likelihood profile is that of the outcome model's target coefficient (the death model's
+  # coefficients are not estimands):
+  profileArgs <- if (.profileRequested(fitOutcomeModelArgs, computeProfile)) fitOutcomeModelArgs else NULL
+  models <- list(.fitPooledModel(rows[outcomeRows, ], rows$y[outcomeRows], design, prior, control, "outcome", variance, groups,
+                                 profileArgs = profileArgs))
   # The rows and response column of each model, for Cyclops' robust variance:
   modelRows <- list(list(subset = outcomeRows, response = "y"))
-  if (is.null(models[[1]])) {
-    return(.naEstimates("or", horizons, coefficientNames = colnames(design)))
+  # With the arm-by-time interaction, the target coefficient is the log odds ratio of the first interval
+  # only when the first-interval cells of both strategies are in the fit. When one of them has a fixed
+  # hazard (no events, or only events) or is not identified, that odds ratio is 0, infinite or undefined,
+  # and the target coefficient is the log odds ratio of whichever interval the column pivoting of
+  # .identifiedColumns() made the reference, so the odds ratio (and its profile) is NA:
+  reference <- c(1, nIntervals + 1)
+  orUndefined <- !is.null(models[[1]]) && fitOutcomeModelArgs$armByTimeInteraction &&
+    !all(is.na(models[[1]]$fixedHazard[reference]) & models[[1]]$estimable[reference])
+  logLikelihoodProfile <- if (orUndefined) NULL else models[[1]]$logLikelihoodProfile
+  if (is.null(models[[1]]) || isTRUE(models[[1]]$failed)) {
+    result <- .naEstimates("or", horizons, coefficientNames = colnames(design))
+    result$logLikelihoodProfile <- logLikelihoodProfile
+    return(result)
   }
   deathFailed <- FALSE
   if (competing && any(rows$death == 1)) {
@@ -1130,21 +1229,18 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     vcov[names(theta), names(theta)] <- thetaVcov
   }
 
-  # With the arm-by-time interaction, the target coefficient is the log odds ratio of the first interval
-  # only when the first-interval cells of both strategies are in the fit. When one of them has a fixed
-  # hazard (no events, or only events) or is not identified, that odds ratio is 0, infinite or undefined,
-  # and the target coefficient is the log odds ratio of whichever interval the column pivoting of
-  # .identifiedColumns() made the reference, so the odds ratio is NA:
+  # The odds ratio is NA when it is undefined (see above):
   logOr <- coefficients[["target"]]
   seLogOr <- if (is.null(vcov)) NA_real_ else .standardError(vcov["target", "target"], thetaVcov)
-  reference <- c(1, nIntervals + 1)
-  if (fitOutcomeModelArgs$armByTimeInteraction && !all(is.na(models[[1]]$fixedHazard[reference]) & models[[1]]$estimable[reference])) {
+  if (orUndefined) {
     logOr <- NA_real_
     seLogOr <- NA_real_
   }
   estimates <- list(.ratioRow("or", logOr, seLogOr))
   if (deathFailed) {
-    return(.withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design))))
+    result <- .withoutRisks(estimates, horizons, coefficients, vcov, paste0("death:", colnames(design)))
+    result$logLikelihoodProfile <- logLikelihoodProfile
+    return(result)
   }
   horizonIntervals <- .pooledHorizonIntervals(horizons, data$riskStart, intervalLength, nIntervals)
   riskFunction <- function(theta) .pooledRisks(theta, layout, horizonIntervals)
@@ -1161,7 +1257,7 @@ fitOutcomeModel <- function(weightedClones, fitOutcomeModelArgs = createFitOutco
     gradients <- if (is.null(jacobian)) NULL else jacobian[2 * i - c(1, 0), , drop = FALSE]
     estimates[[length(estimates) + 1]] <- .deltaContrastRows(horizons[i], risks[, i], gradients, thetaVcov, competing)
   }
-  return(list(estimates = dplyr::bind_rows(estimates), coefficients = coefficients, vcov = vcov))
+  return(list(estimates = dplyr::bind_rows(estimates), coefficients = coefficients, vcov = vcov, logLikelihoodProfile = logLikelihoodProfile))
 }
 
 # Methods ------------------------------------------------------------------------------------------

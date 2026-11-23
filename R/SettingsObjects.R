@@ -1155,6 +1155,18 @@ BootstrapArgs <- R6Class(
 #' when the outcome model is converged, as with the default `control`; with a loose convergence
 #' criterion the refit moves the estimates, and the two differ accordingly.
 #'
+#' For likelihood profiling, either specify `profileGrid` for a user-defined grid, or `profileBounds`
+#' for an adaptive grid. Both are on the log scale of the model's relative effect: the log hazard ratio
+#' (`"hr"`) of `"cox"`, the log subdistribution hazard ratio (`"shr"`) of `"fineGray"`, or the log odds
+#' ratio (`"or"`) of `"logistic"`. When both are `NULL`, profiling is disabled. `"km"` has no profile.
+#' As in CohortMethod, the profile is that of the model likelihood whatever the variance estimator.
+#' Here that is the weighted pseudo-likelihood, with the weights treated as frequencies. It is narrower
+#' than the reported robust or bootstrap standard error implies (see [fitOutcomeModel()]). Wide
+#' user-set bounds can reveal weighted event counts through the end derivatives; the export applies no
+#' minimum cell count, as in CohortMethod. Where the installed Cyclops supports it, the adaptive grid
+#' drops points more than 50 below the maximum log likelihood (`maxDrop = 50`); with a Cyclops without
+#' `maxDrop`, profiling takes much longer on large data and gives more points.
+#'
 #' @param modelType            The outcome model: `"cox"` (the hazard ratio of a weighted Cox model,
 #'                             with the risks of `"km"`), `"logistic"` (pooled logistic), `"km"`
 #'                             (weighted Kaplan-Meier, or Aalen-Johansen with competing events), or
@@ -1201,6 +1213,10 @@ BootstrapArgs <- R6Class(
 #'                             [createBootstrapArgs()], used by [bootstrapCcwAnalysis()].
 #' @param useCovariates        Add the baseline covariates to the outcome model?
 #' @param stratified           Fit a stratified model?
+#' @param profileGrid          A one-dimensional grid of points on the log(relative risk) scale where
+#'                             the likelihood for coefficient of variables is sampled. See details.
+#' @param profileBounds        The bounds (on the log relative risk scale) for the adaptive sampling
+#'                             of the likelihood function. See details.
 #' @param prior                The prior used to fit the model. See [Cyclops::createPrior()]. The target
 #'                             indicator, the time basis and their interactions are never regularized
 #'                             (they are added to the prior's `exclude`), as CohortMethod excludes the
@@ -1230,6 +1246,8 @@ createFitOutcomeModelArgs <- function(modelType = "cox",
                                       bootstrapArgs = createBootstrapArgs(),
                                       useCovariates = FALSE,
                                       stratified = FALSE,
+                                      profileGrid = NULL,
+                                      profileBounds = c(log(0.1), log(10)),
                                       prior = Cyclops::createPrior("none"),
                                       control = Cyclops::createControl(algorithm = "newton",
                                                                        convergenceType = "gradient",
@@ -1260,6 +1278,8 @@ FitOutcomeModelArgs <- R6Class(
     bootstrapArgs = NULL,
     useCovariates = NULL,
     stratified = NULL,
+    profileGrid = NULL,
+    profileBounds = NULL,
     prior = NULL,
     control = NULL,
     validate = function() {
@@ -1275,9 +1295,14 @@ FitOutcomeModelArgs <- R6Class(
       checkmate::assertR6(self$bootstrapArgs, "BootstrapArgs", add = errorMessages)
       checkmate::assertFlag(self$useCovariates, add = errorMessages)
       checkmate::assertFlag(self$stratified, add = errorMessages)
+      checkmate::assertNumeric(self$profileGrid, any.missing = FALSE, finite = TRUE, unique = TRUE, min.len = 1, null.ok = TRUE, add = errorMessages)
+      checkmate::assertNumeric(self$profileBounds, any.missing = FALSE, finite = TRUE, unique = TRUE, sorted = TRUE, len = 2, null.ok = TRUE, add = errorMessages)
       checkmate::assertClass(self$prior, "cyclopsPrior", add = errorMessages)
       checkmate::assertClass(self$control, "cyclopsControl", add = errorMessages)
       checkmate::reportAssertions(collection = errorMessages)
+      if (!is.null(self$profileGrid) && !is.null(self$profileBounds)) {
+        stop("Can't specify both a grid and bounds for likelihood profiling")
+      }
       if (self$useCovariates) {
         stop("Not yet supported in this version: useCovariates = TRUE")
       }

@@ -20,8 +20,66 @@
   the weights when combined with `weights`), and `coxph()` on hand-built Fine-Gray rows for both
   options.
 
+* Likelihood profiles in CohortMethod's form (owner decision 2026-11-23): `createFitOutcomeModelArgs()`
+  has CohortMethod's `profileGrid = NULL` and `profileBounds = c(log(0.1), log(10))` (on by default),
+  and `fitOutcomeModel()` returns `logLikelihoodProfile` (`point`, `value`, `derivative`, from
+  `Cyclops::getCyclopsProfileLogLikelihood(tolerance = 0.1, includePenalty = TRUE, returnDerivatives =
+  TRUE)`) for the log `hr` of `"cox"`, the log `shr` of `"fineGray"` and the log `or` of `"logistic"`;
+  `"km"` and `rr_<h>`, `rd_<h>`, risks and RMST, which are not model coefficients, have none. As in
+  CohortMethod, fits that did not converge keep their profile (their estimate is NA); a profile that
+  Cyclops cannot compute gives a warning and no profile, not an error. The bootstrap keeps the profile
+  of the full-data fit; `computeCcwSensitivity()` computes none. `exportToCsv()` writes them to the new
+  table `ccw_likelihood_profile` (CohortMethod's `cm_likelihood_profile` columns, with `estimand` and the
+  strategy IDs in the key; `log_likelihood` normalized to a maximum of 0), for every outcome, controls
+  included, without a minimum cell count, and without contrasts that are null by design (standard error
+  0, or below 1e-6: the robust variance of Cyclops leaves rounding noise of the order of 1e-7). Stored
+  through Strategus, whose ParallelLogger writes 4 decimals, `profileBounds` come back as -2.3026 and
+  2.3026, as CohortMethod's do. Where Cyclops has `getCyclopsProfileLogLikelihood(maxDrop = )` (develop after f5e02ce0; not in
+  v4.0.1 or v4.0.2), points more than 50 below the maximum are dropped: on 2e5 rows, 85 points in 0.33
+  s instead of 1,218 in 4.2 s. Sites whose Cyclops lacks it pay roughly 40 times the profile time and
+  get more points. Caveat: the profile is the weighted pseudo-likelihood of the model, as CohortMethod's
+  profile is under IPTW: the weights are treated as frequencies, and their estimation is ignored. Its
+  curvature is the model-based information, not the person-clustered robust variance. The profile is
+  therefore narrower than the reported robust or bootstrap SE implies (and narrower than the
+  stacked-sandwich SE, once that estimator lands). Under the bootstrap, a synthesis from the profile
+  discards exactly the weight-estimation uncertainty that the bootstrap exists to capture.
+
+* `ccw_result` (and `getResultsSummary()`) has an `ease` column: the expected absolute systematic error
+  of each calibrated estimand (`ccw_diagnostics_summary` keeps the largest).
+
+* The curves that `runCcwAnalyses()` saves, and `ccw_cumulative_incidence`, also have rows every 30
+  days from day 0 and at the horizons (on or after the first day at risk, through the last horizon), so
+  the at-risk counts on those days are exact. The rows of the days with events are kept, and can run
+  past the last horizon.
+
 Changes that alter results of existing code, or of settings saved before them (which load with the
 new defaults):
+
+* `"shr"` is a ratio estimand: `getResultsSummary()` and `ccw_result` fill its `logRr` / `log_rr`,
+  `seLogRr` / `se_log_rr` and `oneSidedP` / `one_sided_p` (the bootstrap standard error on the log
+  scale, as for `"hr"`), and it is calibrated as `"or"` is, with the negative controls only. Its EASE
+  now counts toward `ease` / `ease_diagnostic` of `ccw_diagnostics_summary`, and so toward `unblind`.
+  The bootstrap limits and p of `"shr"` are now computed on the log scale.
+
+* The default `createFitOutcomeModelArgs()` now carries `profileBounds` (also for `"km"`), so for an
+  output folder created before it, `runCcwAnalyses()` finds that the analysis settings have changed: in
+  an interactive session it asks before deleting; otherwise it deletes the whole output folder and
+  recomputes every stage, censoring models included. Settings saved before `profileGrid` and
+  `profileBounds` existed load with profiling off.
+
+* `ccw_likelihood_profile` has `log_rr` in its primary key, as `cm_likelihood_profile`. A re-run whose
+  adaptive grid differs (other data, another Cyclops build) adds its points to the old ones on upload
+  unless the site is purged: re-upload with `uploadResults(purgeSiteDataBeforeUploading = TRUE)` (the
+  default; the Strategus modules upload with `FALSE`).
+
+* `ccw_censoring_model_dist` has `horizon` in its primary key (`CreateResultsDataModel.sql` edited in
+  place, before the first release), so the two `hazard` models of an `initiateWithin` strategy with
+  `graceStart > 0` no longer collide; each density uses the predictions of its own horizon.
+
+* Output folders that `runCcwAnalyses()` summarized before `ease`, the `"shr"` ratio columns and the
+  30-day curve rows existed are not updated by running it again with the same specifications, and
+  `exportToCsv()` stops on them (no `ease` column): delete `resultsSummary.rds`,
+  `diagnosticsSummary.rds` and the outcome model files first.
 
 * `createFitCensoringModelsArgs(pooledLogisticEngine = "plr")` is now the default: the pooled logistic
   initiation hazard model is fit by Cyclops' pooled logistic regression, which keeps the covariates one

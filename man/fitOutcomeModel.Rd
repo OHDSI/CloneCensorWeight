@@ -45,7 +45,16 @@ and, for \code{"cox"} and \code{"logistic"}, \code{msmWeightSummary}: per strate
 model used (\code{msmWeights}), their \code{cap} on that scale (\code{NA} when they were not truncated on their own
 scale, see \code{truncateMsmWeights} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}), \code{maxWeight}, the largest weight
 used (the effective maximum), and \code{truncatedShare}, the share of the strategy's clones whose weight
-was truncated.
+was truncated;
+\item \code{logLikelihoodProfile} (\code{"cox"}, \code{"fineGray"}, \code{"logistic"}): the likelihood profile of the log
+\code{hr}, \code{shr} or \code{or} (\code{point}, \code{value}, \code{derivative}; see \code{profileGrid} in
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), also for fits that did not converge; absent when not computed.
+The profile is the weighted pseudo-likelihood of the model, as CohortMethod's profile is under
+IPTW: the weights are treated as frequencies, and their estimation is ignored. Its curvature is
+the model-based information, not the person-clustered robust variance. The profile is therefore
+narrower than the reported robust or bootstrap SE implies (and narrower than the stacked-sandwich
+SE, once that estimator lands). Under the bootstrap, a synthesis from the profile discards exactly
+the weight-estimation uncertainty that the bootstrap exists to capture.
 }
 }
 \description{

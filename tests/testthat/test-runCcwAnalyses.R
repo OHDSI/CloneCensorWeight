@@ -224,6 +224,8 @@ test_that("summarizeResults applies the thresholds, calibrates with the eligible
   null <- EmpiricalCalibration::fitMcmcNull(logRr = ncLogRr[1:5], seLogRr = ncSe[1:5])
   ease <- EmpiricalCalibration::computeExpectedAbsoluteSystematicError(null)$ease
   expect_equal(unique(diagnostics$ease), ease)
+  expect_equal(unique(results$ease[results$estimand == "hr"]), ease)
+  expect_true(all(is.na(results$ease[results$estimand == "rd_365"])))
   expect_equal(unique(diagnostics$easeDiagnostic), if (ease < 0.25) "PASS" else "FAIL")
   hr <- results[results$outcomeId == 1 & results$estimand == "hr", ]
   expect_equal(hr$calibratedP, EmpiricalCalibration::calibrateP(null, 0.4, 0.15)$p)

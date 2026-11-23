@@ -127,6 +127,46 @@ test_that("Fine-Gray MSM reports the Aalen-Johansen rows of \"km\" at the horizo
   expect_false(is.na(getM4Estimate(fineGray, "shr")))
 })
 
+test_that("The subdistribution hazard ratio is exported as a ratio", {
+  fixture <- createM4Fixture(riskStart = 0, competingEvents = "death", seed = 5)
+  outcomeModel <- fitM4(fixture, modelType = "fineGray", horizons = 15)
+  outcomeModel$diagnostics <- list(values = dplyr::tibble(
+    mdrr = 2, positivity = 0.2, positivityShareExtreme = 0, essFraction = 0.5, maxWeight = 4, maxWeightBeforeTruncation = 4
+  ))
+  outputFolder <- tempfile()
+  on.exit(unlink(outputFolder, recursive = TRUE))
+  dir.create(outputFolder)
+  saveRDS(outcomeModel, file.path(outputFolder, "om.rds"))
+  referenceTable <- dplyr::tibble(
+    analysisId = 1L, targetId = 4, treatmentId = 1, comparatorTreatmentId = 2, outcomeId = 3,
+    trueEffectSize = NA_real_, balanceFile = "", outcomeModelFile = "om.rds"
+  )
+  suppressMessages(summarizeResults(
+    referenceTable = referenceTable,
+    outputFolder = outputFolder,
+    mainFileName = file.path(outputFolder, "resultsSummary.rds"),
+    diagnosticsSummaryFileName = file.path(outputFolder, "diagnosticsSummary.rds"),
+    calibrationThreads = 1,
+    ccwDiagnosticThresholds = createCcwDiagnosticThresholds()
+  ))
+  targetTreatment <- dplyr::tibble(targetId = 4, treatmentId = 1, comparatorTreatmentId = 2, targetTreatmentId = 1L)
+  strategyIds <- dplyr::tibble(analysisId = 1L, targetStrategyId = 1L, comparatorStrategyId = 2L)
+  suppressMessages(.exportResults(outputFolder, targetTreatment, strategyIds, outputFolder, "db", minCellCount = 0))
+  results <- readr::read_csv(file.path(outputFolder, "ccw_result.csv"), col_types = readr::cols())
+  shr <- results[results$estimand == "shr", ]
+  expect_equal(shr$log_rr, getM4Estimate(outcomeModel, "shr", "logEstimate"))
+  expect_equal(shr$se_log_rr, getM4Estimate(outcomeModel, "shr", "seLogEstimate"))
+  expect_false(is.na(shr$se_log_rr) || is.na(shr$one_sided_p))
+  expect_true(is.na(shr$se))
+
+  # The bootstrap summarizes the replicates of the ratio on the log scale:
+  t0 <- dplyr::tibble(estimand = "shr", estimate = 1.25, logEstimate = log(1.25))
+  replicates <- cbind(shr = c(1.1, 1.3, 1.2, 1.5))
+  estimates <- .bootstrapEstimates(t0, replicates, "percentile")
+  expect_equal(estimates$seLogEstimate, sd(log(replicates[, "shr"])))
+  expect_true(is.na(estimates$se))
+})
+
 test_that("Fine-Gray MSM needs competing death and a valid censoring distribution", {
   fixture <- createM4Fixture(riskStart = 0, competingEvents = "none")
   expect_error(fitM4(fixture, modelType = "fineGray"), "competingEvents = \"death\"")
@@ -135,4 +175,24 @@ test_that("Fine-Gray MSM needs competing death and a valid censoring distributio
   restored <- FitOutcomeModelArgs$new(json = args$toJson())
   expect_equal(restored$fineGrayCensoring, "finegray")
   expect_equal(restored$modelType, "fineGray")
+})
+
+test_that("The Fine-Gray likelihood profile is the same on native and expanded rows, and is coxph's on hand-built rows", {
+  skip_if_not_installed("survival")
+  fixture <- createM4Fixture(n = 150, riskStart = 0, competingEvents = "death", seed = 3)
+  grid <- c(-0.3, 0, 0.3)
+  native <- fitM4(fixture, modelType = "fineGray", horizons = 10, profileGrid = grid, profileBounds = NULL)
+  # The ccw robust engine fits the expanded rows:
+  expanded <- fitM4(fixture, modelType = "fineGray", horizons = 10, profileGrid = grid, profileBounds = NULL, robustVarianceEngine = "ccw")
+  rows <- handBuiltFineGrayRows(fixture, "natural")
+  reference <- vapply(grid, function(point) {
+    fit <- survival::coxph(
+      survival::Surv(startTime, stopTime, status) ~ x,
+      data = rows, weights = weight, ties = "breslow", init = point, control = survival::coxph.control(iter.max = 0)
+    )
+    return(tail(fit$loglik, 1))
+  }, numeric(1))
+  expect_equal(native$logLikelihoodProfile$value, reference, tolerance = 1e-8)
+  expect_equal(expanded$logLikelihoodProfile$value, reference, tolerance = 1e-8)
+  expect_equal(native$logLikelihoodProfile$derivative, expanded$logLikelihoodProfile$derivative, tolerance = 1e-8)
 })

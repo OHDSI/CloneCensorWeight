@@ -358,6 +358,26 @@ test_that("BootstrapArgs and FitOutcomeModelArgs round trip and validation", {
   expect_error(createFitOutcomeModelArgs(stratified = TRUE), "Not yet supported")
 })
 
+test_that("FitOutcomeModelArgs likelihood profile settings, as CohortMethod's", {
+  # Profiling is on by default, with CohortMethod's adaptive bounds:
+  defaults <- createFitOutcomeModelArgs()
+  expect_null(defaults$profileGrid)
+  expect_equal(defaults$profileBounds, c(log(0.1), log(10)))
+  expectRoundTrip(createFitOutcomeModelArgs(profileGrid = c(-0.5, 0, 0.5), profileBounds = NULL), FitOutcomeModelArgs)
+  expect_error(createFitOutcomeModelArgs(profileGrid = 0), "Can't specify both a grid and bounds")
+  expect_error(createFitOutcomeModelArgs(profileBounds = c(-1, 0, 1)), "profileBounds")
+  expect_error(createFitOutcomeModelArgs(profileBounds = c(1, 0)), "profileBounds")
+  expect_error(createFitOutcomeModelArgs(profileGrid = c(0, NA), profileBounds = NULL), "profileGrid")
+  expect_error(createFitOutcomeModelArgs(profileGrid = c(0, 0, 0.1), profileBounds = NULL), "profileGrid")
+  # Settings saved before these fields existed load with profiling off, without a message:
+  untypedList <- jsonlite::fromJSON(defaults$toJson(), simplifyDataFrame = FALSE)
+  untypedList$profileGrid <- NULL
+  untypedList$profileBounds <- NULL
+  expect_no_message(loaded <- FitOutcomeModelArgs$new(untypedList = untypedList))
+  expect_null(loaded$profileGrid)
+  expect_null(loaded$profileBounds)
+})
+
 test_that("CcwAnalysis round trip with nested CohortMethod, Cyclops and FeatureExtraction settings", {
   expectRoundTrip(createTestAnalysis(), CcwAnalysis)
   expectRoundTrip(

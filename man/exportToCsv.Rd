@@ -47,6 +47,11 @@ adds them to \verb{Results_<databaseId>.zip} in \code{exportFolder}, for sharing
 \code{target_comparator_id}), and \code{ccw_target_treatment_outcome}.
 \item For every analysis and target-treatment-outcome combination: \code{ccw_result} (one row per
 estimand, see \code{\link[=getResultsSummary]{getResultsSummary()}}) and \code{ccw_diagnostics_summary} (see \code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}).
+Also \code{ccw_likelihood_profile}, as CohortMethod's \code{cm_likelihood_profile}: the likelihood profile of
+the log \code{hr}, \code{shr} or \code{or} (\code{logLikelihoodProfile} of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}), with \code{log_likelihood}
+normalized to a maximum of 0 and \code{gradient} as is, also for fits that did not converge, but not for
+contrasts that are null by design (standard error 0 up to rounding: below 1e-6). No minimum cell
+count applies to it.
 \item For outcomes of interest: \code{ccw_attrition}, \code{ccw_follow_up_dist}, \code{ccw_covariate_balance} (at the
 end of the grace periods, see \code{\link[=computeCovariateBalance]{computeCovariateBalance()}}), \code{ccw_censoring_model} (the non-zero
 coefficients) and \code{ccw_censoring_model_dist} (the density of the predicted probability of
