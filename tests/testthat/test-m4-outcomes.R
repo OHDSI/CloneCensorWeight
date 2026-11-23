@@ -946,3 +946,74 @@ test_that("plotCumulativeIncidence returns a ggplot", {
   unlink(fileName)
   expect_error(plotCumulativeIncidence(curves, labels = "A"), "labels")
 })
+
+# Likelihood profiles -----------------------------------------------------------------------------
+
+test_that("The Cox likelihood profile is coxph's weighted partial log likelihood, in CohortMethod's form", {
+  skip_if_not_installed("survival")
+  fixture <- createM4Fixture(n = 150, riskStart = 0, competingEvents = "none")
+  model <- fitM4(fixture, modelType = "cox", horizons = 10)
+  b <- getM4Estimate(model, "hr", "logEstimate")
+  # The default adaptive profile peaks at the log hazard ratio:
+  profile <- model$logLikelihoodProfile
+  expect_named(profile, c("point", "value", "derivative"))
+  expect_equal(unname(profile$point[which.max(profile$value)]), b, tolerance = 1e-6)
+
+  grid <- b + c(-0.3, -1e-4, 0, 1e-4, 0.3)
+  onGrid <- fitM4(fixture, modelType = "cox", horizons = 10, profileGrid = grid, profileBounds = NULL)$logLikelihoodProfile
+  data <- toSurvivalData(fixture$segments)
+  reference <- vapply(grid, function(point) {
+    fit <- survival::coxph(
+      survival::Surv(startTime, stopTime, outcome) ~ x,
+      data = data, weights = weight, ties = "breslow", init = point, control = survival::coxph.control(iter.max = 0)
+    )
+    return(tail(fit$loglik, 1))
+  }, numeric(1))
+  expect_equal(onGrid$point, grid)
+  expect_equal(onGrid$value, reference, tolerance = 1e-8)
+  expect_equal(onGrid$derivative[3], (onGrid$value[4] - onGrid$value[2]) / 2e-4, tolerance = 1e-5)
+  # The ccw engine (fitted without the persons as Cyclops subjects) gives the same profile:
+  ccw <- fitM4(fixture, modelType = "cox", horizons = 10, robustVarianceEngine = "ccw", profileGrid = grid, profileBounds = NULL)
+  expect_equal(ccw$logLikelihoodProfile, onGrid)
+  # Without a grid and bounds there is no profile:
+  expect_null(fitM4(fixture, modelType = "cox", horizons = 10, profileBounds = NULL)$logLikelihoodProfile)
+})
+
+test_that("The pooled logistic likelihood profile is the weighted binomial log likelihood with the target term as an offset", {
+  fixture <- createM4Fixture(n = 150, riskStart = 0, competingEvents = "none")
+  timeBasis <- createTimeBasis("linear", intervalLength = 3)
+  model <- fitM4(fixture, modelType = "logistic", horizons = 8, timeBasis = timeBasis)
+  b <- getM4Estimate(model, "or", "logEstimate")
+  grid <- b + c(-0.3, -1e-4, 0, 1e-4, 0.3)
+  profile <- fitM4(fixture, modelType = "logistic", horizons = 8, timeBasis = timeBasis, profileGrid = grid, profileBounds = NULL)$logLikelihoodProfile
+  rows <- expandM4Rows(fixture$segments, 3)
+  reference <- vapply(grid, function(point) {
+    fit <- glm(y ~ k + offset(point * x), data = rows, weights = weight, family = quasibinomial(), control = glm.control(epsilon = 1e-14, maxit = 100))
+    return(sum(rows$weight * dbinom(rows$y, 1, fitted(fit), log = TRUE)))
+  }, numeric(1))
+  expect_equal(profile$point, grid)
+  expect_equal(profile$value, reference, tolerance = 1e-8)
+  expect_equal(profile$derivative[3], (profile$value[4] - profile$value[2]) / 2e-4, tolerance = 1e-5)
+  expect_equal(unname(model$logLikelihoodProfile$point[which.max(model$logLikelihoodProfile$value)]), b, tolerance = 1e-6)
+})
+
+test_that("Fits that did not converge keep their likelihood profile, as in CohortMethod", {
+  # No outcomes in the target strategy: the log hazard ratio and log odds ratio are -Inf.
+  fixture <- createM4Fixture(n = 150, riskStart = 0, competingEvents = "none")
+  fixture$segments$outcome[fixture$segments$strategyId == 1] <- 0L
+  warnings <- capture_warnings(cox <- fitM4(fixture, modelType = "cox", horizons = 10))
+  expect_match(warnings, "Fitting the outcome Cox model failed", all = FALSE)
+  expect_true(is.na(getM4Estimate(cox, "hr")))
+  expect_gt(nrow(cox$logLikelihoodProfile), 0)
+  expect_true(all(diff(cox$logLikelihoodProfile$value) <= 1e-8))
+  warnings <- capture_warnings(logistic <- fitM4(fixture, modelType = "logistic", horizons = 8, timeBasis = createTimeBasis("linear", intervalLength = 3)))
+  expect_match(warnings, "Fitting the outcome pooled logistic model failed", all = FALSE)
+  expect_true(is.na(getM4Estimate(logistic, "or")))
+  expect_gt(nrow(logistic$logLikelihoodProfile), 0)
+  expect_true(all(diff(logistic$logLikelihoodProfile$value) <= 1e-8))
+  # Without profiling, the failed fit is dropped as before:
+  warnings <- capture_warnings(withoutProfile <- fitM4(fixture, modelType = "cox", horizons = 10, profileBounds = NULL))
+  expect_match(warnings, "Fitting the outcome Cox model failed", all = FALSE)
+  expect_true(is.na(getM4Estimate(withoutProfile, "hr")))
+  expect_null(withoutProfile$logLikelihoodProfile)
+})

@@ -295,6 +295,13 @@ test_that("The bootstrap runs for km, cox and logistic outcome models", {
     # print, coef and confint work on the result:
     expect_equal(coef(result), stats::setNames(result$estimates$estimate, result$estimates$estimand))
     expect_equal(unname(confint(result)[, 1]), result$estimates$lb95)
+    # The likelihood profile is that of the full-data fit:
+    if (modelType == "cox") {
+      profile <- result$logLikelihoodProfile
+      expect_equal(unname(profile$point[which.max(profile$value)]), full$estimates$logEstimate[1], tolerance = 1e-6)
+    } else if (modelType == "km") {
+      expect_null(result$logLikelihoodProfile)
+    }
   }
   # The same seed draws the same persons, so the cox bootstrap bootstraps the hazard ratio and exactly
   # the Kaplan-Meier rows of the km bootstrap:

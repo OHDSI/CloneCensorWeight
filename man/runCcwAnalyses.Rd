@@ -105,8 +105,8 @@ every bootstrap replicate refits them on its own study population without an out
 full data. The saved \code{CcwOutcomeModel} also holds
 \code{diagnostics}: the \code{\link[=computeMdrr]{computeMdrr()}} result, \code{\link[=computePositivity]{computePositivity()}} of the censoring models, and,
 for outcomes of interest, \code{\link[=computeWeightSummary]{computeWeightSummary()}} of the weighted clones (whose values the
-diagnostics use for every outcome) and \code{curves}, from
-\code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every event time, \code{attrition} (that of the clones) and
+diagnostics use for every outcome) and \code{curves}, from \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every
+event time, every 30 days and the horizons, \code{attrition} (that of the clones) and
 \code{followUpDistribution} (quantiles of the days of follow-up of the clones of each strategy).
 \code{diagnostics$values} holds the values that the summary compares with the diagnostic thresholds.
 \item \strong{Summary} (\code{resultsSummary.rds}, \code{diagnosticsSummary.rds}): see \code{\link[=getResultsSummary]{getResultsSummary()}} and

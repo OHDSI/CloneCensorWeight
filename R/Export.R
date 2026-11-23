@@ -33,6 +33,11 @@
 #'   `target_comparator_id`), and `ccw_target_treatment_outcome`.
 #' - For every analysis and target-treatment-outcome combination: `ccw_result` (one row per
 #'   estimand, see [getResultsSummary()]) and `ccw_diagnostics_summary` (see [getDiagnosticsSummary()]).
+#'   Also `ccw_likelihood_profile`, as CohortMethod's `cm_likelihood_profile`: the likelihood profile of
+#'   the log `hr`, `shr` or `or` (`logLikelihoodProfile` of [fitOutcomeModel()]), with `log_likelihood`
+#'   normalized to a maximum of 0 and `gradient` as is, also for fits that did not converge, but not for
+#'   contrasts that are null by design (standard error 0 up to rounding: below 1e-6). No minimum cell
+#'   count applies to it.
 #' - For outcomes of interest: `ccw_attrition`, `ccw_follow_up_dist`, `ccw_covariate_balance` (at the
 #'   end of the grace periods, see [computeCovariateBalance()]), `ccw_censoring_model` (the non-zero
 #'   coefficients) and `ccw_censoring_model_dist` (the density of the predicted probability of
@@ -108,7 +113,8 @@ exportToCsv <- function(outputFolder,
     .exportDiagnosticsSummary(outputFolder, targetTreatment, strategyIds, exportFolder, databaseId),
     .exportCovariateBalance(outputFolder, reference, specifications, exportFolder, databaseId, minCellCount),
     .exportCensoringModels(outputFolder, reference, exportFolder, databaseId),
-    .exportFromOutcomeModels(outputFolder, reference, exportFolder, databaseId, minCellCount)
+    .exportFromOutcomeModels(outputFolder, reference, exportFolder, databaseId, minCellCount),
+    .exportLikelihoodProfiles(outputFolder, reference, exportFolder, databaseId)
   )
 
   message("Adding results to zip file")
@@ -333,6 +339,7 @@ exportToCsv <- function(outputFolder,
       "calibratedOneSidedP",
       "calibratedLogRr",
       "calibratedSeLogRr",
+      "ease",
       "targetSubjects",
       "comparatorSubjects",
       "targetClones",
@@ -559,13 +566,57 @@ exportToCsv <- function(outputFolder,
   ))
 }
 
+# ccw_likelihood_profile, as CohortMethod's cm_likelihood_profile (CohortMethod R/Export.R,
+# exportLikelihoodProfiles(), Apache 2.0): the likelihood profile of the log hr, shr or or of every outcome
+# model (controls included, and fits that did not converge), with the log likelihood normalized to a
+# maximum of 0 and the gradient as is, without a minimum cell count. Unlike CohortMethod, a contrast that
+# is null by design (standard error 0 up to rounding) is left out, and so are non-finite points.
+.exportLikelihoodProfiles <- function(outputFolder, reference, exportFolder, databaseId) {
+  message("- ccw_likelihood_profile table")
+  reference <- reference[reference$outcomeModelFile != "", ]
+  profiles <- list()
+  for (i in seq_len(nrow(reference))) {
+    refRow <- reference[i, ]
+    outcomeModel <- readRDS(file.path(outputFolder, refRow$outcomeModelFile))
+    profile <- outcomeModel$logLikelihoodProfile
+    if (is.null(profile)) {
+      next
+    }
+    estimand <- .profiledEstimands[[outcomeModel$modelType]]
+    # A contrast that is null by design has a peaked pseudo-likelihood but no information. Its standard
+    # error is 0, or rounding noise (of the order of 1e-7 with Cyclops' robust variance); a log ratio with a
+    # standard error below 1e-6 would need of the order of 1e12 events:
+    if (isTRUE(outcomeModel$estimates$seLogEstimate[outcomeModel$estimates$estimand == estimand] < 1e-6)) {
+      next
+    }
+    profile <- profile[is.finite(profile$point) & is.finite(profile$value), ]
+    if (nrow(profile) == 0) {
+      next
+    }
+    profiles[[length(profiles) + 1]] <- tibble(
+      databaseId = databaseId,
+      analysisId = as.integer(refRow$analysisId),
+      targetTreatmentId = refRow$targetTreatmentId,
+      outcomeId = refRow$outcomeId,
+      targetStrategyId = refRow$targetStrategyId,
+      comparatorStrategyId = refRow$comparatorStrategyId,
+      estimand = estimand,
+      logRr = profile$point,
+      logLikelihood = profile$value - max(profile$value),
+      gradient = profile$derivative
+    )
+  }
+  return(.writeToCsv(dplyr::bind_rows(profiles), "ccw_likelihood_profile", exportFolder))
+}
+
 # The density of the predicted probability of starting the treatment of each censoring model, on 100
 # points from 0 to 1, as CohortMethod's preference score distribution. Models whose predictions do not
 # vary are left out.
 .censoringModelDensities <- function(positivity) {
   predictions <- attr(positivity, "predictions")
   densities <- lapply(seq_len(nrow(positivity)), function(i) {
-    probability <- predictions$probability[predictions$strategyId == positivity$strategyId[i] & predictions$model == positivity$model[i]]
+    probability <- predictions$probability[predictions$strategyId == positivity$strategyId[i] & predictions$model == positivity$model[i] &
+      predictions$day == positivity$day[i]]
     probability <- probability[!is.na(probability)]
     if (length(probability) < 2 || min(probability) == max(probability)) {
       return(NULL)

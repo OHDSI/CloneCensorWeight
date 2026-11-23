@@ -1045,6 +1045,9 @@ computeCcwSensitivity <- function(clones,
   settings <- list()
   for (name in names(variants)) {
     args <- .applyVariant(base, variants[[name]], name)
+    # The sensitivity variants report estimates only, so their likelihood profiles are not computed:
+    args$fitOutcomeModelArgs$profileGrid <- NULL
+    args$fitOutcomeModelArgs$profileBounds <- NULL
     censoringKey <- as.character(args$fitCensoringModelsArgs$toJson())
     if (is.null(censoringModels[[censoringKey]])) {
       fitted <- .fitCensoringModelsWithFits(clones, cloneCensorWeightData, args$fitCensoringModelsArgs, fits = fits, warnDay0CovariateWindows = warnDay0CovariateWindows, warnNaturalGrace = warnNaturalGrace)

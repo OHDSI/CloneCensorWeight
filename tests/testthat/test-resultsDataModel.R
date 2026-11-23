@@ -93,6 +93,52 @@ test_that(".enforceMinCellValue censors counts below the minimum, as CohortMetho
   expect_message(.enforceMinCellValue(data, "x", 5), "censoring 2 values")
 })
 
+test_that("Censoring-model densities are keyed by horizon", {
+  # An initiateWithin strategy with graceStart > 0 has two hazard models, at two horizons:
+  positivity <- dplyr::tibble(strategyId = 1L, model = c("hazard", "hazard"), day = c(6L, 30L))
+  attr(positivity, "predictions") <- dplyr::tibble(
+    strategyId = 1L, model = "hazard", day = rep(c(6L, 30L), each = 4), probability = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.9)
+  )
+  densities <- .censoringModelDensities(positivity)
+  keys <- specifications$columnName[specifications$tableName == "ccw_censoring_model_dist" & specifications$primaryKey == "Yes"]
+  keys <- SqlRender::snakeCaseToCamelCase(setdiff(keys, c("database_id", "analysis_id", "target_treatment_id", "outcome_id")))
+  expect_true("horizon" %in% keys)
+  expect_true(anyDuplicated(densities[, setdiff(keys, "horizon")]) > 0)
+  expect_false(anyDuplicated(densities[, keys]) > 0)
+  # Each horizon's density uses its own predictions:
+  expect_false(isTRUE(all.equal(densities$density[densities$horizon == 6], densities$density[densities$horizon == 30])))
+})
+
+test_that("Likelihood profiles are exported as CohortMethod's, without contrasts null by design", {
+  outputFolder <- tempfile()
+  dir.create(outputFolder)
+  on.exit(unlink(outputFolder, recursive = TRUE))
+  profile <- data.frame(point = c(-1, 0, 1), value = c(-3, -1, -2), derivative = c(2, 0, -1))
+  estimates <- function(se) tibble(estimand = "hr", seLogEstimate = se)
+  saveRDS(list(modelType = "cox", estimates = estimates(0.2)), file.path(outputFolder, "none.rds"))
+  saveRDS(list(modelType = "cox", estimates = estimates(0), logLikelihoodProfile = profile), file.path(outputFolder, "null.rds"))
+  # Cyclops' robust variance leaves rounding noise in the standard error of a contrast null by design:
+  saveRDS(list(modelType = "cox", estimates = estimates(2.4e-7), logLikelihoodProfile = profile), file.path(outputFolder, "noise.rds"))
+  saveRDS(list(modelType = "cox", estimates = estimates(0.2), logLikelihoodProfile = profile), file.path(outputFolder, "profile.rds"))
+  reference <- tibble(
+    analysisId = 1:5, targetTreatmentId = 5, outcomeId = 3, targetStrategyId = 1L, comparatorStrategyId = 2L,
+    outcomeModelFile = c("none.rds", "null.rds", "noise.rds", "", "profile.rds")
+  )
+  # (a) no profile, (b) a contrast null by design, with a standard error of 0 or of rounding noise, (c) no
+  # outcome model:
+  fileName <- quietly(.exportLikelihoodProfiles(outputFolder, reference[1:4, ], outputFolder, "db"))
+  expect_equal(csvColumns(file.path(outputFolder, fileName)), specifications$columnName[specifications$tableName == "ccw_likelihood_profile"])
+  expect_equal(nrow(readr::read_csv(file.path(outputFolder, fileName), col_types = readr::cols())), 0)
+  # A profile, with the log likelihood normalized to a maximum of 0 and the gradient as is:
+  quietly(.exportLikelihoodProfiles(outputFolder, reference, outputFolder, "db"))
+  exported <- readr::read_csv(file.path(outputFolder, fileName), col_types = readr::cols())
+  expect_equal(exported$analysis_id, rep(5, 3))
+  expect_equal(exported$estimand, rep("hr", 3))
+  expect_equal(exported$log_rr, profile$point)
+  expect_equal(exported$log_likelihood, c(-2, 0, -1))
+  expect_equal(exported$gradient, profile$derivative)
+})
+
 test_that("createResultsDataModel creates the specified tables, and migrations run from an empty schema", {
   skip_if_not_installed("RSQLite")
   connectionDetails <- newSqlite()
@@ -144,6 +190,17 @@ test_that("The shipped Results_Eunomia.zip has the specified columns and uploads
       csvColumns(file.path(unzipFolder, paste0(tableName, ".csv"))),
       specifications$columnName[specifications$tableName == tableName],
       info = tableName
+    )
+  }
+  # The ratio estimands carry the EASE of their null distribution; the summary keeps the largest per analysis:
+  results <- readr::read_csv(file.path(unzipFolder, "ccw_result.csv"), col_types = readr::cols())
+  diagnostics <- readr::read_csv(file.path(unzipFolder, "ccw_diagnostics_summary.csv"), col_types = readr::cols())
+  expect_true(all(!is.na(results$ease[results$estimand %in% c("hr", "rr_365")])))
+  expect_true(all(is.na(results$ease[!results$estimand %in% c("hr", "rr_365")])))
+  for (analysisId in unique(results$analysis_id)) {
+    expect_equal(diagnostics$ease[diagnostics$analysis_id == analysisId],
+      rep(max(results$ease[results$analysis_id == analysisId], na.rm = TRUE), sum(diagnostics$analysis_id == analysisId)),
+      tolerance = 1e-6, info = analysisId
     )
   }
 
@@ -269,6 +326,7 @@ test_that("exportToCsv writes every table with exactly the specified columns", {
   expect_equal(results$estimate, summary$estimate, tolerance = 1e-10)
   expect_equal(results$se_log_rr, summary$seLogRr, tolerance = 1e-10)
   expect_equal(results$se, summary$se, tolerance = 1e-10)
+  expect_equal(as.numeric(results$ease), summary$ease, tolerance = 1e-10)
   # A missing standard error is NA, never 0:
   expect_true(all(is.na(results$se_log_rr[!results$estimand %in% c("hr", "rr_365")])))
   diagnostics <- readExported(exportFolder, "ccw_diagnostics_summary")
@@ -286,12 +344,29 @@ test_that("exportToCsv writes every table with exactly the specified columns", {
   incidence <- readExported(exportFolder, "ccw_cumulative_incidence")
   outcomeModel <- readRDS(file.path(outputFolder, getFileReference(outputFolder)$outcomeModelFile[1]))
   expect_equal(incidence$risk, outcomeModel$curves$risk, tolerance = 1e-10)
+  # Rows every 30 days from day 0 and at the horizon (365), through the horizon:
+  gridDays <- c(seq(0, 360, by = 30), 365)
+  for (strategyId in c(7, 8)) {
+    days <- incidence$time_day[incidence$strategy_id == strategyId]
+    expect_true(all(gridDays[gridDays > min(days)] %in% days))
+    expect_true(max(days) <= 365)
+  }
   censoringModel <- readExported(exportFolder, "ccw_censoring_model")
   expect_setequal(unique(censoringModel$model), c("binary", "hazard"))
   expect_true(all(censoringModel$coefficient != 0))
   balance <- readExported(exportFolder, "ccw_covariate_balance")
   expect_true(all(balance$covariate_id %in% readExported(exportFolder, "ccw_covariate")$covariate_id))
   expect_equal(unique(balance$target_strategy_id), 7)
+
+  # The likelihood profiles of the hazard ratio, of every outcome (controls included), normalized to a
+  # maximum of 0 per key, for keys of ccw_result:
+  profiles <- readExported(exportFolder, "ccw_likelihood_profile")
+  expect_equal(unique(profiles$estimand), "hr")
+  expect_setequal(unique(profiles$outcome_id), c(3, 101))
+  profileKeys <- c("database_id", "analysis_id", "target_treatment_id", "outcome_id", "target_strategy_id", "comparator_strategy_id", "estimand")
+  maxima <- dplyr::summarise(dplyr::group_by(profiles, dplyr::across(dplyr::all_of(profileKeys))), maximum = max(.data$log_likelihood), .groups = "drop")
+  expect_equal(maxima$maximum, rep(0, nrow(maxima)))
+  expect_equal(nrow(dplyr::anti_join(maxima, results, by = profileKeys)), 0)
 })
 
 test_that("exportToCsv enforces the minimum cell count", {

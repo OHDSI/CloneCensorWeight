@@ -131,10 +131,10 @@ CREATE TABLE @database_schema.@table_prefixccw_censoring_model_dist (
 	outcome_id BIGINT NOT NULL,
 	strategy_id INT NOT NULL,
 	model VARCHAR(20) NOT NULL,
-	horizon INT,
+	horizon INT NOT NULL,
 	probability FLOAT NOT NULL,
 	density FLOAT,
-	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, model, probability)
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, model, horizon, probability)
 );
 
 CREATE TABLE @database_schema.@table_prefixccw_weight_dist (
@@ -202,6 +202,7 @@ CREATE TABLE @database_schema.@table_prefixccw_result (
 	calibrated_one_sided_p FLOAT,
 	calibrated_log_rr FLOAT,
 	calibrated_se_log_rr FLOAT,
+	ease FLOAT,
 	target_subjects INT,
 	comparator_subjects INT,
 	target_clones INT,
@@ -217,6 +218,20 @@ CREATE TABLE @database_schema.@table_prefixccw_result (
 	target_weighted_outcomes FLOAT,
 	comparator_weighted_outcomes FLOAT,
 	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_likelihood_profile (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	estimand VARCHAR(50) NOT NULL,
+	log_rr FLOAT NOT NULL,
+	log_likelihood FLOAT,
+	gradient FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand, log_rr)
 );
 
 CREATE TABLE @database_schema.@table_prefixccw_diagnostics_summary (

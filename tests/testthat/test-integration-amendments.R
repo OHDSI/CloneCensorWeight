@@ -682,8 +682,8 @@ test_that("When only the pooled logistic death model fails, the odds ratio is ke
   )
   realPooled <- .fitPooledModel
   local_mocked_bindings(
-    .fitPooledModel = function(rows, y, design, prior, control, label, variance, groups = NULL) {
-      if (label == "death") NULL else realPooled(rows, y, design, prior, control, label, variance, groups)
+    .fitPooledModel = function(rows, y, design, prior, control, label, variance, groups = NULL, profileArgs = NULL) {
+      if (label == "death") NULL else realPooled(rows, y, design, prior, control, label, variance, groups, profileArgs)
     }
   )
   for (modelType in names(full)) {

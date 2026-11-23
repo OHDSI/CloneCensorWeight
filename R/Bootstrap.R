@@ -266,7 +266,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     fitCensoringModelsArgs = fitCensoringModelsArgs,
     computeWeightsArgs = computeWeightsArgs,
     fitOutcomeModelArgs = fitOutcomeModelArgs,
-    censoringModels = censoringModels
+    censoringModels = censoringModels,
+    computeProfile = TRUE
   ), warning = function(w) {
     fullWarnings <<- c(fullWarnings, conditionMessage(w))
   })
@@ -413,13 +414,16 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   if (returnCounts) {
     result$bootstrapCounts <- counts
   }
+  # The likelihood profile is that of the full-data fit (see fitOutcomeModel()):
+  result$logLikelihoodProfile <- full$logLikelihoodProfile
   class(result) <- "CcwOutcomeModel"
   delta <- Sys.time() - start
   message(paste("Bootstrapping the analysis took", signif(delta, 3), attr(delta, "units")))
   return(result)
 }
 
-# The analysis of one (full or resampled) data set, up to the point estimates of the outcome model.
+# The analysis of one (full or resampled) data set, up to the point estimates of the outcome model (and,
+# with `computeProfile = TRUE`, its likelihood profile).
 .runBootstrapAnalysis <- function(cloneCensorWeightData,
                                   outcomeId,
                                   createStudyPopulationArgs,
@@ -431,7 +435,8 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
                                   fixedPriorVariances = NULL,
                                   sourcePersonSeqIds = NULL,
                                   censoringWithoutOutcome = FALSE,
-                                  subsampleSeed = NULL) {
+                                  subsampleSeed = NULL,
+                                  computeProfile = FALSE) {
   population <- createStudyPopulation(
     cloneCensorWeightData = cloneCensorWeightData,
     outcomeId = outcomeId,
@@ -457,10 +462,11 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
   outcomeTimeBasis <- if (fitOutcomeModelArgs$modelType == "logistic") fitOutcomeModelArgs$timeBasis else NULL
   weightedClones <- computeCensoringWeights(clones, censoringModels, computeWeightsArgs, outcomeTimeBasis = outcomeTimeBasis)
   on.exit(close(weightedClones), add = TRUE)
-  point <- .fitOutcomeModelPoint(weightedClones, fitOutcomeModelArgs)
+  point <- .fitOutcomeModelPoint(weightedClones, fitOutcomeModelArgs, computeProfile = computeProfile)
   return(list(
     estimates = point$estimates,
     coefficients = point$coefficients,
+    logLikelihoodProfile = point$logLikelihoodProfile,
     censoringModels = censoringModels,
     counts = .getOutcomeCounts(weightedClones),
     metaData = attr(weightedClones, "metaData"),
@@ -755,7 +761,7 @@ bootstrapCcwAnalysis <- function(cloneCensorWeightData,
     estimand <- t0$estimand[i]
     estimate <- t0$estimate[i]
     t <- replicates[, estimand]
-    if (grepl("^(hr|or|rr_.*)$", estimand)) {
+    if (grepl("^(hr|shr|or|rr_.*)$", estimand)) {
       logEstimate <- log(estimate)
       logT <- log(t)
       seLogEstimate <- .bootstrapSe(logT)

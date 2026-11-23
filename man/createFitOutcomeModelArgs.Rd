@@ -16,6 +16,8 @@ createFitOutcomeModelArgs(
   bootstrapArgs = createBootstrapArgs(),
   useCovariates = FALSE,
   stratified = FALSE,
+  profileGrid = NULL,
+  profileBounds = c(log(0.1), log(10)),
   prior = Cyclops::createPrior("none"),
   control = Cyclops::createControl(algorithm = "newton", convergenceType = "gradient",
     tolerance = 1e-10, noiseLevel = "silent")
@@ -78,6 +80,12 @@ that time.}
 \item{useCovariates}{Add the baseline covariates to the outcome model?}
 
 \item{stratified}{Fit a stratified model?}
+
+\item{profileGrid}{A one-dimensional grid of points on the log(relative risk) scale where
+the likelihood for coefficient of variables is sampled. See details.}
+
+\item{profileBounds}{The bounds (on the log relative risk scale) for the adaptive sampling
+of the likelihood function. See details.}
 
 \item{prior}{The prior used to fit the model. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}. The target
 indicator, the time basis and their interactions are never regularized
@@ -183,6 +191,18 @@ sandwich in R from the score residuals summed by person, at the reported estimat
 refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
 when the outcome model is converged, as with the default \code{control}; with a loose convergence
 criterion the refit moves the estimates, and the two differ accordingly.
+
+For likelihood profiling, either specify \code{profileGrid} for a user-defined grid, or \code{profileBounds}
+for an adaptive grid. Both are on the log scale of the model's relative effect: the log hazard ratio
+(\code{"hr"}) of \code{"cox"}, the log subdistribution hazard ratio (\code{"shr"}) of \code{"fineGray"}, or the log odds
+ratio (\code{"or"}) of \code{"logistic"}. When both are \code{NULL}, profiling is disabled. \code{"km"} has no profile.
+As in CohortMethod, the profile is that of the model likelihood whatever the variance estimator.
+Here that is the weighted pseudo-likelihood, with the weights treated as frequencies. It is narrower
+than the reported robust or bootstrap standard error implies (see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}). Wide
+user-set bounds can reveal weighted event counts through the end derivatives; the export applies no
+minimum cell count, as in CohortMethod. Where the installed Cyclops supports it, the adaptive grid
+drops points more than 50 below the maximum log likelihood (\code{maxDrop = 50}); with a Cyclops without
+\code{maxDrop}, profiling takes much longer on large data and gives more points.
 }
 \examples{
 args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))

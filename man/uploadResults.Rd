@@ -50,6 +50,11 @@ Requires that the results data model tables have been created using \code{\link[
 Uses \code{\link[ResultModelManager:uploadResults]{ResultModelManager::uploadResults()}}. Rows of the site-specific tables replace the rows of the
 same site with the same primary key. Rows of the definition tables whose primary key is already in
 the database are not uploaded, unless \code{forceOverWriteOfSpecifications = TRUE}.
+
+The primary key of \code{ccw_likelihood_profile} includes \code{log_rr}, the point where the likelihood is
+sampled, as in CohortMethod's \code{cm_likelihood_profile}. A re-run whose adaptive grid differs (other
+data, another Cyclops build) therefore adds its points to the old ones instead of replacing them.
+Re-upload the results of a site with \code{purgeSiteDataBeforeUploading = TRUE}.
 }
 \examples{
 \dontrun{

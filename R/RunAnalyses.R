@@ -160,8 +160,8 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
 #'    full data. The saved `CcwOutcomeModel` also holds
 #'    `diagnostics`: the [computeMdrr()] result, [computePositivity()] of the censoring models, and,
 #'    for outcomes of interest, [computeWeightSummary()] of the weighted clones (whose values the
-#'    diagnostics use for every outcome) and `curves`, from
-#'    [computeCumulativeIncidence()] at every event time, `attrition` (that of the clones) and
+#'    diagnostics use for every outcome) and `curves`, from [computeCumulativeIncidence()] at every
+#'    event time, every 30 days and the horizons, `attrition` (that of the clones) and
 #'    `followUpDistribution` (quantiles of the days of follow-up of the clones of each strategy).
 #'    `diagnostics$values` holds the values that the summary compares with the diagnostic thresholds.
 #' 7. **Summary** (`resultsSummary.rds`, `diagnosticsSummary.rds`): see [getResultsSummary()] and
@@ -859,12 +859,32 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     keepWeightSummary = params$outcomeOfInterest
   )
   if (params$outcomeOfInterest) {
-    outcomeModel$curves <- computeCumulativeIncidence(weightedClones)
+    outcomeModel$curves <- .computeCurves(weightedClones, fitOutcomeModelArgs$horizons)
     outcomeModel$attrition <- attr(clones, "metaData")$attrition
     outcomeModel$followUpDistribution <- .computeFollowUpDistribution(clones)
   }
   .saveFile(outcomeModel, params$outcomeModelFile)
   return(NULL)
+}
+
+# The curves of computeCumulativeIncidence() at every event time (which can be after the last horizon),
+# plus rows every 30 days from day 0 and at the horizons, through the last horizon (days before riskStart
+# left out), so that the at-risk counts on those days are exact. `events` stays the weighted number of outcomes since the previous row.
+.computeCurves <- function(weightedClones, horizons) {
+  curves <- computeCumulativeIncidence(weightedClones)
+  riskStart <- min(curves$day) + 1
+  gridDays <- sort(unique(c(seq(0, max(horizons), by = 30), horizons)))
+  grid <- computeCumulativeIncidence(weightedClones, horizons = gridDays[gridDays >= riskStart])
+  cumulativeEvents <- function(curve) stats::ave(curve$events, curve$strategyId, FUN = cumsum)
+  curves$cumulativeEvents <- cumulativeEvents(curves)
+  grid$cumulativeEvents <- cumulativeEvents(grid)
+  grid <- grid[!paste(grid$strategyId, grid$day) %in% paste(curves$strategyId, curves$day), ]
+  merged <- dplyr::bind_rows(curves, grid)
+  merged <- merged[order(merged$strategyId, merged$day), ]
+  merged$events <- stats::ave(merged$cumulativeEvents, merged$strategyId, FUN = function(x) diff(c(0, x)))
+  merged$cumulativeEvents <- NULL
+  attr(merged, "strategyLabels") <- attr(curves, "strategyLabels")
+  return(merged)
 }
 
 # The quantiles of the days of follow-up (survivalTime) of the clones of each strategy.
@@ -963,18 +983,19 @@ getFileReference <- function(outputFolder) {
 #'
 #' @details
 #' One row per analysis, target-treatment-outcome combination, and estimand of the outcome model
-#' (`"hr"`, `"or"`, `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`,
+#' (`"hr"`, `"shr"`, `"or"`, `"risk_target_<h>"`, `"risk_comparator_<h>"`, `"rd_<h>"`, `"rr_<h>"`,
 #' `"rmst_<h>"`, `"rmtl_<h>"`; see [fitOutcomeModel()]), with the counts per strategy (the target
 #' strategy is strategy 1, the comparator strategy 2): `targetSubjects` (persons), `targetClones`,
 #' `targetDays` (days of follow-up), `targetOutcomes`, `targetCompetingEvents`, `targetWeightedDays`
 #' and `targetWeightedOutcomes` (weighted by the weights of [computeCensoringWeights()]), and the same
 #' for the comparator; and `estimate`, `ci95Lb`, `ci95Ub`, `p`, and `se` (additive estimands), or `logRr` and
-#' `seLogRr` (ratio estimands), as in [fitOutcomeModel()]. Ratio estimands (`"hr"`, `"or"`, `"rr_<h>"`)
+#' `seLogRr` (ratio estimands), as in [fitOutcomeModel()]. Ratio estimands (`"hr"`, `"shr"`, `"or"`, `"rr_<h>"`)
 #' also have `oneSidedP` (for a ratio above 1) and, when there are at least 5 negative controls (outcomes
 #' with `trueEffectSize = 1`) with a standard error whose diagnostics allow calibration (see
 #' [getDiagnosticsSummary()]), the empirically calibrated `calibratedRr`, `calibratedCi95Lb`,
-#' `calibratedCi95Ub`, `calibratedP`, `calibratedOneSidedP`, `calibratedLogRr` and
-#' `calibratedSeLogRr`, as in CohortMethod: each estimand of each analysis and target-treatment
+#' `calibratedCi95Ub`, `calibratedP`, `calibratedOneSidedP`, `calibratedLogRr`,
+#' `calibratedSeLogRr` and `ease` (the expected absolute systematic error of the estimand's null
+#' distribution), as in CohortMethod: each estimand of each analysis and target-treatment
 #' combination is calibrated with its own negative controls, using
 #' [EmpiricalCalibration::fitMcmcNull()] (with the `calibrationSeed` of
 #' [createCcwAnalysesSpecifications()]), and, for `"hr"` with at least 5 positive controls (outcomes

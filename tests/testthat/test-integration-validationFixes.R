@@ -91,6 +91,8 @@ test_that("The first-interval odds ratio is NA when the first interval has no ou
   estimates <- as.data.frame(logistic$estimates)
   rownames(estimates) <- estimates$estimand
   expect_true(all(is.na(unlist(estimates["or", c("estimate", "logEstimate", "seLogEstimate", "lb95", "ub95", "p")]))))
+  # The target coefficient is another interval's log odds ratio, so it has no likelihood profile either:
+  expect_null(logistic$logLikelihoodProfile)
   # The risks are not affected, and equal the weighted Kaplan-Meier risks:
   kmEstimates <- as.data.frame(km$estimates)
   rownames(kmEstimates) <- kmEstimates$estimand
