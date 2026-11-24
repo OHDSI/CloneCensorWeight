@@ -2,51 +2,68 @@
 % Please edit documentation in R/ResultsDataModel.R
 \name{uploadResults}
 \alias{uploadResults}
-\title{Upload analysis results to the results data model}
+\title{Upload results to the database server}
 \usage{
 uploadResults(
-  connection,
-  databaseSchema,
-  analysisId,
-  results,
-  tablePrefix = ""
+  connectionDetails,
+  schema,
+  zipFileName,
+  forceOverWriteOfSpecifications = FALSE,
+  purgeSiteDataBeforeUploading = TRUE,
+  tempFolder = tempdir(),
+  tablePrefix = "",
+  ...
 )
 }
 \arguments{
-\item{connection}{A \code{DatabaseConnector} connection object.}
+\item{connectionDetails}{An object of type \code{ConnectionDetails} as created using
+\code{\link[DatabaseConnector:createConnectionDetails]{DatabaseConnector::createConnectionDetails()}}.}
 
-\item{databaseSchema}{Schema containing the results tables.}
+\item{schema}{The schema on the server where the tables have been created.}
 
-\item{analysisId}{A character string uniquely identifying this analysis run.}
+\item{zipFileName}{The name of the zip file created by \code{\link[=exportToCsv]{exportToCsv()}}.}
 
-\item{results}{A named list of data frames as described above.}
+\item{forceOverWriteOfSpecifications}{If \code{TRUE}, the rows of the definition tables (analyses,
+strategies, and target-treatment-outcome combinations) that
+already exist in the database are overwritten. Only use this if
+these definitions have changed since the last upload.}
 
-\item{tablePrefix}{Optional table-name prefix matching the one used in
-\code{\link[=createResultsDataModel]{createResultsDataModel()}}.}
+\item{purgeSiteDataBeforeUploading}{If \code{TRUE}, all the data of the site (\code{database_id}) is deleted
+before uploading. This assumes the zip file contains the full
+data of that site, and needs the \code{databaseIdentifierFile} of
+\code{\link[ResultModelManager:uploadResults]{ResultModelManager::uploadResults()}} (passed through \code{...}).}
+
+\item{tempFolder}{A folder on the local file system where the zip file is extracted
+to. It is cleaned up when the function is finished.}
+
+\item{tablePrefix}{(Optional) A string to insert before the table names.}
+
+\item{...}{Other arguments of \code{\link[ResultModelManager:uploadResults]{ResultModelManager::uploadResults()}}.}
 }
 \value{
-Invisibly \code{NULL}.  Called for its side-effect.
+Does not return anything. Is called for its side effect of uploading the results.
 }
 \description{
-Inserts a named list of result data frames — typically produced by
-\code{\link[=runCcwAnalyses]{runCcwAnalyses()}} — into the corresponding \verb{ccw_*} tables.  The \code{analysisId}
-is stamped onto every row before insertion so results from multiple studies
-can coexist in the same schema.
+Requires that the results data model tables have been created using \code{\link[=createResultsDataModel]{createResultsDataModel()}}.
 }
 \details{
-Supported list names (all optional; omitted elements are skipped):
-\describe{
-\item{\code{analysis}}{Single-row data frame with fields matching
-\code{ccw_analysis} (minus \code{analysis_id}).}
-\item{\code{cohortDefinition}}{Data frame matching \code{ccw_cohort_definition}.}
-\item{\code{cohortCount}}{Data frame matching \code{ccw_cohort_count}.}
-\item{\code{outcomeModel}}{\code{outcomeModel$summary} from \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}, or
-the calibrated summary from \code{\link[=calibrateEstimates]{calibrateEstimates()}}.}
-\item{\code{standardizedDifference}}{Data frame from
-\code{\link[=computeStandardizedDifferences]{computeStandardizedDifferences()}}.}
-\item{\code{kaplanMeier}}{Data frame from \code{\link[=computeKaplanMeier]{computeKaplanMeier()}}.}
-\item{\code{powerMdrr}}{Data frame from \code{\link[=computeMdrr]{computeMdrr()}}.}
-\item{\code{negativeControl}}{Data frame with \code{logRr} and \code{seLogRr}, and
-optionally a \code{controlId} column.}
+Uses \code{\link[ResultModelManager:uploadResults]{ResultModelManager::uploadResults()}}. Rows of the site-specific tables replace the rows of the
+same site with the same primary key. Rows of the definition tables whose primary key is already in
+the database are not uploaded, unless \code{forceOverWriteOfSpecifications = TRUE}.
+
+The primary key of \code{ccw_likelihood_profile} includes \code{log_rr}, the point where the likelihood is
+sampled, as in CohortMethod's \code{cm_likelihood_profile}. A re-run whose adaptive grid differs (other
+data, another Cyclops build) therefore adds its points to the old ones instead of replacing them.
+Re-upload the results of a site with \code{purgeSiteDataBeforeUploading = TRUE}.
 }
+\examples{
+\dontrun{
+uploadResults(
+  connectionDetails = connectionDetails,
+  schema = "main",
+  zipFileName = "export/Results_MyDatabase.zip",
+  purgeSiteDataBeforeUploading = FALSE
+)
+}
+
 }

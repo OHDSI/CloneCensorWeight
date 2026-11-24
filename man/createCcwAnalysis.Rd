@@ -2,56 +2,76 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{createCcwAnalysis}
 \alias{createCcwAnalysis}
-\title{Create a CCW analysis specification}
+\title{Create a clone-censor-weight analysis specification}
 \usage{
 createCcwAnalysis(
   analysisId,
   description = "",
-  getDbCloneCensorWeightDataArgs = NULL,
-  createStudyPopulationArgs = NULL,
-  createClonesAndCensorArgs = NULL,
-  createCensoringWeightsArgs = NULL,
-  fitOutcomeModelArgs = NULL
+  getDbCloneCensorWeightDataArgs,
+  createStudyPopulationArgs,
+  createClonesArgs,
+  fitCensoringModelsArgs,
+  computeWeightsArgs,
+  computeCovariateBalanceArgs = NULL,
+  fitOutcomeModelArgs
 )
 }
 \arguments{
-\item{analysisId}{A unique character identifier for this analysis.}
+\item{analysisId}{An integer that will be used later to refer to this specific
+set of analysis choices.}
 
-\item{description}{A human-readable description.}
+\item{description}{A short description of the analysis.}
 
-\item{getDbCloneCensorWeightDataArgs}{A
-\code{\link[=createGetDbCloneCensorWeightDataArgs]{createGetDbCloneCensorWeightDataArgs()}} object.}
+\item{getDbCloneCensorWeightDataArgs}{An object of type \code{GetDbCloneCensorWeightDataArgs} as created
+using \code{\link[=createGetDbCloneCensorWeightDataArgs]{createGetDbCloneCensorWeightDataArgs()}}.}
 
-\item{createStudyPopulationArgs}{A \code{\link[=createCreateStudyPopulationArgs]{createCreateStudyPopulationArgs()}}
-object.}
+\item{createStudyPopulationArgs}{An object of type \code{CreateStudyPopulationArgs} as created using
+\code{\link[CohortMethod:createCreateStudyPopulationArgs]{CohortMethod::createCreateStudyPopulationArgs()}}.}
 
-\item{createClonesAndCensorArgs}{A \code{\link[=createCreateClonesAndCensorArgs]{createCreateClonesAndCensorArgs()}}
-object.}
+\item{createClonesArgs}{An object of type \code{CreateClonesArgs} as created using
+\code{\link[=createCreateClonesArgs]{createCreateClonesArgs()}}.}
 
-\item{createCensoringWeightsArgs}{A \code{\link[=createCreateCensoringWeightsArgs]{createCreateCensoringWeightsArgs()}}
-object.}
+\item{fitCensoringModelsArgs}{An object of type \code{FitCensoringModelsArgs} as created using
+\code{\link[=createFitCensoringModelsArgs]{createFitCensoringModelsArgs()}}.}
 
-\item{fitOutcomeModelArgs}{A \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}} object.}
+\item{computeWeightsArgs}{An object of type \code{ComputeWeightsArgs} as created using
+\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.}
+
+\item{computeCovariateBalanceArgs}{An object of type \code{ComputeCovariateBalanceArgs} as created using
+\code{\link[CohortMethod:createComputeCovariateBalanceArgs]{CohortMethod::createComputeCovariateBalanceArgs()}}, or \code{NULL}
+to skip covariate balance.}
+
+\item{fitOutcomeModelArgs}{An object of type \code{FitOutcomeModelArgs} as created using
+\code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}.}
 }
 \value{
-A \code{CcwAnalysis} object.
+An object of type \code{CcwAnalysis}.
 }
 \description{
-Combines all step-level argument objects into a single, serializable
-analysis specification that can be passed to \code{\link[=runCcwAnalyses]{runCcwAnalyses()}}.
+Create a clone-censor-weight analysis specification
+}
+\details{
+Create a set of analysis choices. The specification can be saved and loaded (see
+\code{\link[=saveCcwAnalysisList]{saveCcwAnalysisList()}}), and \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} runs a list of them.
 }
 \examples{
-arm1 <- createArmDefinition("treated",  "initiateWithin", gracePeriod = 90)
-arm2 <- createArmDefinition("deferred", "deferBeyond",    gracePeriod = 90)
-
 analysis <- createCcwAnalysis(
-  analysisId                 = "main",
-  description                = "Primary analysis, 90-day grace period",
-  createClonesAndCensorArgs  = createCreateClonesAndCensorArgs(list(arm1, arm2)),
-  createStudyPopulationArgs  = createCreateStudyPopulationArgs(riskWindowEnd = 730,
-                                                               endAnchor = "cohort start"),
-  createCensoringWeightsArgs = createCreateCensoringWeightsArgs(),
-  fitOutcomeModelArgs        = createFitOutcomeModelArgs()
+  analysisId = 1,
+  description = "Initiate vs do not initiate within 7 days",
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 365,
+    endAnchor = "cohort start"
+  ),
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Do not initiate within 7 days", "notInitiateWithin", graceEnd = 7)
+    )
+  ),
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+  computeWeightsArgs = createComputeWeightsArgs(),
+  fitOutcomeModelArgs = createFitOutcomeModelArgs()
 )
 
 }

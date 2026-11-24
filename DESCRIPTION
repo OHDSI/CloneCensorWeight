@@ -3,9 +3,12 @@ Type: Package
 Title: Clone-Censor-Weight Target Trial Emulation
 Version: 0.1.0
 Authors@R:
-    c(person("William J.", "O'Brien",
-             email = "wobrien8@its.jnj.com",
+    c(person("Marc A.", "Suchard",
+             email = "msuchard@ucla.edu",
              role  = c("aut", "cre")),
+      person("William J.", "O'Brien",
+             email = "wobrien8@its.jnj.com",
+             role  = "aut"),
       person("Patrick", "Ryan",
              email = "ryan@ohdsi.org",
              role  = "ctb"),
@@ -14,45 +17,72 @@ Authors@R:
 Description: Implements clone-censor-weight target trial emulation for
     observational studies in the OMOP Common Data Model. The package
     follows the OHDSI HADES framework and provides data extraction,
-    cloning, artificial and classical inverse probability of censoring
-    weighting, clustered-variance outcome models, covariate balance
-    diagnostics, and empirical calibration.
+    cloning, inverse probability weighting for artificial censoring
+    (deviation from the treatment strategies), weighted outcome models
+    with person-clustered robust and bootstrap variances, covariate
+    balance diagnostics, and a simulator with known true risks.
 License: Apache License (>= 2) | file LICENSE
 Encoding: UTF-8
 LazyData: false
 Roxygen: list(markdown = TRUE)
 Depends:
     R (>= 4.1.0),
-    Andromeda (>= 0.6.3)
+    Andromeda (>= 1.2.2)
 Imports:
     checkmate,
-    Cyclops (>= 3.6.0),
+    CohortMethod (>= 6.0.3),
+    Cyclops (>= 4.0.2),
     DatabaseConnector (>= 6.0.0),
+    DBI,
+    digest,
     dplyr,
-    EmpiricalCalibration (>= 3.1.0),
+    EmpiricalCalibration,
     FeatureExtraction (>= 3.5.0),
     jsonlite,
     methods,
-    ParallelLogger (>= 3.4.2),
+    ParallelLogger,
     R6,
     readr,
+    ResultModelManager,
     rlang,
+    splines,
     SqlRender (>= 1.18.0),
-    survival,
-    utils
+    stats,
+    utils,
+    withr
 Suggests:
+    boot,
     Capr,
+    ccwr (>= 0.0.2),
     CohortGenerator,
     Eunomia,
+    geex (>= 1.1.1),
+    geepack (>= 1.3.13),
     ggplot2,
+    glmnet (>= 5.0),
+    ipw (>= 1.3.2),
+    ipwCoxCSV (>= 1.2),
     knitr,
-    PhenotypeLibrary,
-    ResultModelManager,
+    pkgload,
     rmarkdown,
+    RSQLite,
+    sandwich (>= 3.1-0),
+    simcausal (>= 0.5.7),
+    survival (>= 3.8-6),
     testthat (>= 3.0.0),
-    withr
+    trtswitch (>= 0.2.8),
+    TTE (>= 1.1.2),
+    WeightIt (>= 2.1.0),
+    zip
+Remotes:
+    ohdsi/Andromeda@develop,
+    ohdsi/Cyclops@develop,
+    ohdsi/CohortMethod@left-censored
 VignetteBuilder: knitr
 Config/testthat/edition: 3
+Config/testthat/parallel: true
+Config/testthat/start-first: runCcwAnalyses, integration-bootstrap, integration-designChoicesDiagnostics,
+    integration-designChoicesSensitivity, resultsDataModel, strategusApi, m3-weights-weights
 URL: https://ohdsi.github.io/CloneCensorWeight
 BugReports: https://github.com/ohdsi/CloneCensorWeight/issues
 Config/roxygen2/version: 8.1.1

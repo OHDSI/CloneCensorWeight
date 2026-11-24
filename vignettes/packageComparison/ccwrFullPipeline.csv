@@ -1,0 +1,5 @@
+"quantity","ccwr","ccwrBootstrapSd","ccw","ccwRobustSe","ccwBootstrapSd","differenceInBootstrapSd","bootstrapSdRatio"
+"1-year risk, surgery",0.184,,0.1828,0.03374,0.03295,-0.03797,
+"1-year risk, control",0.3047,,0.3034,0.05121,0.04944,-0.02663,
+"1-year RD",-0.1207,0.05736,-0.1206,0.05572,0.05502,0.001191,0.9591
+"log HR",-0.4988,0.2499,-0.5144,0.2464,0.2472,-0.06337,0.9892

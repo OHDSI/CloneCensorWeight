@@ -2,91 +2,189 @@
 % Please edit documentation in R/RunAnalyses.R
 \name{runCcwAnalyses}
 \alias{runCcwAnalyses}
-\title{Run a full suite of CCW target trial emulation analyses}
+\title{Run a list of clone-censor-weight analyses}
 \usage{
 runCcwAnalyses(
-  connectionDetails,
+  connectionDetails = NULL,
   cdmDatabaseSchema,
   tempEmulationSchema = getOption("sqlRenderTempEmulationSchema"),
-  targetDatabaseSchema,
-  targetTable,
-  outcomeDatabaseSchema,
-  outcomeTable,
-  exposureDatabaseSchema,
-  exposureTable,
+  exposureDatabaseSchema = cdmDatabaseSchema,
+  exposureTable = "cohort",
+  outcomeDatabaseSchema = cdmDatabaseSchema,
+  outcomeTable = "cohort",
+  outputFolder = "./CloneCensorWeightOutput",
+  multiThreadingSettings = createCcwMultiThreadingSettings(),
   ccwAnalysesSpecifications,
-  outputFolder,
-  databaseId = "unknown",
-  databaseName = databaseId,
-  negativeControlOutcomeIds = integer(0),
-  cdmVersion = "5"
+  connection = NULL
 )
 }
 \arguments{
-\item{connectionDetails}{A \code{ConnectionDetails} object from
-\code{\link[DatabaseConnector:createConnectionDetails]{DatabaseConnector::createConnectionDetails()}}.}
+\item{connectionDetails}{An R object of type \code{connectionDetails} created using the
+\code{\link[DatabaseConnector:createConnectionDetails]{DatabaseConnector::createConnectionDetails()}} function. Either
+\code{connectionDetails} or \code{connection} must be provided.}
 
-\item{cdmDatabaseSchema}{Schema containing the OMOP CDM tables.}
+\item{cdmDatabaseSchema}{The name of the database schema that contains the OMOP CDM instance.
+Requires read permissions to this database. On SQL Server, this
+should specify both the database and the schema, so for example
+'cdm_instance.dbo'.}
 
-\item{tempEmulationSchema}{Schema for temp-table emulation (Oracle,
-BigQuery).  Defaults to \code{getOption("sqlRenderTempEmulationSchema")}.}
+\item{tempEmulationSchema}{Some database platforms like Oracle and Impala do not truly support
+temp tables. To emulate temp tables, provide a schema with write
+privileges where temp tables can be created.}
 
-\item{targetDatabaseSchema}{Schema containing the target cohort table.}
+\item{exposureDatabaseSchema}{The name of the database schema that contains the eligible (target)
+and treatment cohorts.}
 
-\item{targetTable}{Target cohort table name.}
+\item{exposureTable}{The name of the table that contains the eligible (target) and
+treatment cohorts, in the format of the CDM \code{cohort} table.}
 
-\item{outcomeDatabaseSchema}{Schema containing the outcome cohort table.}
+\item{outcomeDatabaseSchema}{The name of the database schema that contains the outcome cohorts.}
 
-\item{outcomeTable}{Outcome cohort table name.}
+\item{outcomeTable}{The name of the table that contains the outcome cohorts, in the
+format of the CDM \code{cohort} table.}
 
-\item{exposureDatabaseSchema}{Schema containing the exposure cohort table.}
+\item{outputFolder}{Name of the folder where all the outputs will be written to.}
 
-\item{exposureTable}{Exposure cohort table name.}
+\item{multiThreadingSettings}{An object of type \code{CcwMultiThreadingSettings} as created using
+\code{\link[=createCcwMultiThreadingSettings]{createCcwMultiThreadingSettings()}} or
+\code{\link[=createDefaultCcwMultiThreadingSettings]{createDefaultCcwMultiThreadingSettings()}}.}
 
-\item{ccwAnalysesSpecifications}{A \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecifications()}}
-object defining the analyses to run.}
+\item{ccwAnalysesSpecifications}{An object of type \code{CcwAnalysesSpecifications} as created using
+\code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecifications()}}.}
 
-\item{outputFolder}{Path to the directory that will receive CSV results.
-Created if absent.}
-
-\item{databaseId}{Short identifier for the data source stamped onto every
-result row.}
-
-\item{databaseName}{Human-readable data source name.}
-
-\item{negativeControlOutcomeIds}{Integer vector of outcome IDs (a subset of
-the \code{outcomeIds} in each \code{TargetComparatorOutcome}) to treat as negative controls
-for empirical calibration.  Leave empty to skip calibration.}
-
-\item{cdmVersion}{OMOP CDM version string passed to FeatureExtraction.}
+\item{connection}{An open connection created using \code{\link[DatabaseConnector:connect]{DatabaseConnector::connect()}},
+instead of \code{connectionDetails}. It is not closed when the function
+returns.}
 }
 \value{
-Invisibly, the path to \code{outputFolder}.
+A tibble with, for each analysis and target-treatment-outcome combination, the files of each stage
+relative to \code{outputFolder} (\code{""} when the stage does not apply), as \code{\link[=getFileReference]{getFileReference()}} returns.
 }
 \description{
-Iterates over every combination of \code{TargetComparatorOutcome} × \code{CcwAnalysis} ×
-outcome in \code{ccwAnalysesSpecifications}, executes the full clone-censor-weight
-pipeline for each, and appends results to CSV files in \code{outputFolder}.
+Run a list of clone-censor-weight analyses
 }
 \details{
-\strong{Pipeline per combination}
+Runs every analysis in \code{ccwAnalysesSpecifications$ccwAnalysisList} against every
+target-treatment-outcome combination in \code{ccwAnalysesSpecifications$targetTreatmentOutcomesList},
+except those in \code{analysesToExclude} (see \code{\link[=createCcwAnalysesSpecifications]{createCcwAnalysesSpecifications()}}). The work is done in
+stages, each of which writes files to \code{outputFolder}. A file is computed once and shared by every
+analysis whose settings for that stage (and the stages before it) are the same:
 \enumerate{
-\item Extract data from the CDM via \code{\link[=getDbCloneCensorWeightData]{getDbCloneCensorWeightData()}}.
-\item Apply study population restrictions via \code{\link[=createStudyPopulation]{createStudyPopulation()}}.
-\item Clone and censor via \code{\link[=createClonesAndCensor]{createClonesAndCensor()}}.
-\item Discretize person-time via \code{\link[=discretizePersonTime]{discretizePersonTime()}}.
-\item Compute IPCW weights via \code{\link[=createCensoringWeights]{createCensoringWeights()}}.
-\item Fit the outcome model via \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}.
-\item Compute covariate balance via \code{\link[=computeStandardizedDifferences]{computeStandardizedDifferences()}}.
-\item Compute weighted Kaplan-Meier via \code{\link[=computeKaplanMeier]{computeKaplanMeier()}}.
-\item Compute MDRR via \code{\link[=computeMdrr]{computeMdrr()}}.
-\item Calibrate using negative control outcomes (when supplied).
+\item \strong{Data} (\verb{CcwData_l<l>_t<t>_tr<tr>[_c<c>].zip}): \code{\link[=getDbCloneCensorWeightData]{getDbCloneCensorWeightData()}} per
+\code{getDbCloneCensorWeightDataArgs} and target, treatment and comparator treatment cohort, with all
+outcomes of the combinations that use it. The \code{excludedCovariateConceptIds} and
+\code{includedCovariateConceptIds} of the target-treatment-outcomes are added to the covariate
+settings.
+\item \strong{Study populations} (\verb{StudyPop_l<l>_s<s>_..._o<o>.rds}): \code{\link[=createStudyPopulation]{createStudyPopulation()}} per data,
+study population settings and outcome, for outcomes of interest. The \code{priorOutcomeLookback},
+\code{riskWindowStart}, \code{startAnchor}, \code{riskWindowEnd} and \code{endAnchor} of an outcome (see
+\code{\link[CohortMethod:createOutcome]{CohortMethod::createOutcome()}}) override those of the analysis, as in CohortMethod. Populations
+of other outcomes (negative controls) are created when they are needed and not saved.
+\item \strong{Censoring models} (\verb{CensModel_l<l>_s<s>_m<m>_..[_o<o>].rds}): \code{\link[=fitCensoringModels]{fitCensoringModels()}} per data,
+censoring population, censoring settings (\code{m}: the strategies' types, treatments and grace
+periods, \code{sameDayOrdering}, \code{competingEvents} and \code{fitCensoringModelsArgs}). With
+\code{refitCensoringModelsForEveryOutcome = FALSE} (the default), the censoring population is the
+study population without an outcome: persons with a prior outcome are not removed, and the risk
+sets do not end at the outcome. The models are then fit once and shared by every outcome.
+With \code{refitCensoringModelsForEveryOutcome = TRUE}, the models are fit on the clones of each
+outcome's study population (\verb{_o<o>}). The models of one censoring population are fit by one
+thread, and a model shared by strategies of different analyses is fit once: for example the
+binary model of an \code{initiateWithin(G)} strategy, whether the comparator is
+\code{notInitiateWithin(G)} or \code{neverInitiate}.
+\item \strong{Weights} are computed by \code{\link[=computeCensoringWeights]{computeCensoringWeights()}} when needed and not saved.
+\item \strong{Covariate balance} (\verb{Balance_l<l>_s<s>_m<m>_w<w>_b<b>_..[_o<o>].rds}):
+\code{\link[=computeCovariateBalance]{computeCovariateBalance()}} at the end of the grace periods, on the weighted clones of the
+censoring population, per censoring models, \code{computeWeightsArgs} (\code{w}) and
+\code{computeCovariateBalanceArgs} (\code{b}). Only for analyses with \code{computeCovariateBalanceArgs} and a
+strategy with a grace period. With shared censoring models it is shared by all outcomes;
+otherwise it is computed for outcomes of interest only.
+\item \strong{Outcome models} (\verb{Analysis_<a>/om_t<t>_tr<tr>[_c<c>]_o<o>.rds}): \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}, or
+\code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}} when \code{fitOutcomeModelArgs$varianceEstimator = "bootstrap"}, on the
+weighted clones of the outcome's study population. With censoring models shared across outcomes,
+every bootstrap replicate refits them on its own study population without an outcome, as for the
+full data. The saved \code{CcwOutcomeModel} also holds
+\code{diagnostics}: the \code{\link[=computeMdrr]{computeMdrr()}} result, \code{\link[=computePositivity]{computePositivity()}} of the censoring models, and,
+for outcomes of interest, \code{\link[=computeWeightSummary]{computeWeightSummary()}} of the weighted clones (whose values the
+diagnostics use for every outcome) and \code{curves}, from \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}} at every
+event time, every 30 days and the horizons, \code{attrition} (that of the clones) and
+\code{followUpDistribution} (quantiles of the days of follow-up of the clones of each strategy).
+\code{diagnostics$values} holds the values that the summary compares with the diagnostic thresholds.
+\item \strong{Summary} (\code{resultsSummary.rds}, \code{diagnosticsSummary.rds}): see \code{\link[=getResultsSummary]{getResultsSummary()}} and
+\code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}.
 }
 
-\strong{Resume support} — If \code{outputFolder} already contains a
-\code{ccw_outcome_model.csv} file, any composite analysis ID already present in
-that file is skipped.
+File names hold the IDs of the settings (\code{l}, \code{s}, \code{m}, \code{w}, \code{b}, numbered in order of first use)
+and the cohort IDs (\code{t} target, \code{tr} treatment, \code{c} comparator treatment, \code{o} outcome). Every stage
+computes only the files that do not exist yet, so an interrupted run resumes where it stopped, and
+deleting a file recomputes it. Files are written under a temporary name and then renamed, so a file
+that exists is complete. The summary is recomputed when an outcome model was (re)computed or when
+it is missing.
 
-\strong{Composite analysis ID} — Each combination is uniquely identified by
-\code{"{ccwAnalysis$analysisId}_t{targetId}_o{outcomeId}"}.
+The specifications are saved in \code{outputFolder} (\code{ccwAnalysesSpecifications.rds}). If the folder
+already holds outputs of different specifications, then in an interactive session the function asks
+whether to delete them (answering no keeps them, and cancelling returns without running); outside an
+interactive session, as when called by a Strategus module, it deletes them with a message and
+recomputes everything. CohortMethod's \code{runCmAnalyses()} asks with \code{\link[utils:askYesNo]{utils::askYesNo()}} in both cases,
+whose default answer outside an interactive session is also to delete. Kept files are reused by
+name, as in CohortMethod, and the settings IDs in the names are numbered in order of first use in the
+new specifications, so a kept file can stand for other settings than those it was computed with.
+Answer no only when the kept files are known to be valid for the new specifications.
+
+Thread counts come only from \code{multiThreadingSettings}. \code{censoringModelCvThreads} and
+\code{outcomeCvThreads} set the \code{threads} of the Cyclops control of the censoring and outcome models,
+which does not change the fits. Stages run in clusters made by \code{\link[ParallelLogger:makeCluster]{ParallelLogger::makeCluster()}}; a
+stage with 1 thread runs in the main R session. With an open \code{connection}, the data are extracted in
+the main R session whatever \code{getDbCcwDataThreads} is.
+
+After completion, a tibble with the files of each combination is available from
+\code{\link[=getFileReference]{getFileReference()}}, the results from \code{\link[=getResultsSummary]{getResultsSummary()}}, and the diagnostics from
+\code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}.
+}
+\examples{
+\dontrun{
+connectionDetails <- Eunomia::getEunomiaConnectionDetails()
+Eunomia::createCohorts(connectionDetails)
+analysis <- createCcwAnalysis(
+  analysisId = 1,
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(
+    covariateSettings = FeatureExtraction::createCovariateSettings(
+      useDemographicsGender = TRUE,
+      useDemographicsAgeGroup = TRUE,
+      endDays = -1
+    )
+  ),
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 365,
+    endAnchor = "cohort start"
+  ),
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Celecoxib within 30 days", "initiateWithin", graceEnd = 30),
+      createTreatmentStrategy(2, "No celecoxib within 30 days", "notInitiateWithin", graceEnd = 30)
+    )
+  ),
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+  computeWeightsArgs = createComputeWeightsArgs(),
+  computeCovariateBalanceArgs = CohortMethod::createComputeCovariateBalanceArgs(),
+  fitOutcomeModelArgs = createFitOutcomeModelArgs()
+)
+specifications <- createCcwAnalysesSpecifications(
+  ccwAnalysisList = list(analysis),
+  targetTreatmentOutcomesList = list(createTargetTreatmentOutcomes(
+    targetId = 4,
+    treatmentId = 1,
+    comparatorTreatmentId = 2,
+    outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
+  ))
+)
+runCcwAnalyses(
+  connectionDetails = connectionDetails,
+  cdmDatabaseSchema = "main",
+  outputFolder = "output",
+  multiThreadingSettings = createDefaultCcwMultiThreadingSettings(4),
+  ccwAnalysesSpecifications = specifications
+)
+getResultsSummary("output")
+}
+
 }

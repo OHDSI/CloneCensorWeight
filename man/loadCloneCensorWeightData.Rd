@@ -2,16 +2,33 @@
 % Please edit documentation in R/CloneCensorWeightData.R
 \name{loadCloneCensorWeightData}
 \alias{loadCloneCensorWeightData}
-\title{Load clone-censor-weight data}
+\title{Load the clone-censor-weight data from a file}
 \usage{
 loadCloneCensorWeightData(file)
 }
 \arguments{
-\item{file}{A path created by \code{\link[=saveCloneCensorWeightData]{saveCloneCensorWeightData()}}.}
+\item{file}{The name of the file containing the data.}
 }
 \value{
-A \code{CloneCensorWeightData} object.
+An object of type \link{CloneCensorWeightData}.
 }
 \description{
-Load clone-censor-weight data
+Loads an object of type \link{CloneCensorWeightData} from a file in the file system.
+}
+\examples{
+data <- createCloneCensorWeightData(
+  cohorts = data.frame(
+    rowId = 1L, personSeqId = 1L, personId = "1", cohortStartDate = as.Date("2020-01-01"),
+    daysFromObsStart = 400L, daysToCohortEnd = 0L, daysToObsEnd = 365L, daysToDeath = NA_integer_
+  ),
+  outcomes = NULL,
+  treatments = NULL,
+  metaData = list(targetId = 1, treatmentIds = c(treatment = 2))
+)
+file <- tempfile(fileext = ".zip")
+saveCloneCensorWeightData(data, file)
+data <- loadCloneCensorWeightData(file)
+close(data)
+unlink(file)
+
 }

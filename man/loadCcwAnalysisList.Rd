@@ -2,22 +2,37 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{loadCcwAnalysisList}
 \alias{loadCcwAnalysisList}
-\title{Load a list of CCW analyses from a JSON file}
+\title{Load a list of CcwAnalysis from file}
 \usage{
 loadCcwAnalysisList(file)
 }
 \arguments{
-\item{file}{Path to a JSON file created by \code{\link[=saveCcwAnalysisList]{saveCcwAnalysisList()}}.}
+\item{file}{The name of the file.}
 }
 \value{
-A list of \code{CcwAnalysis} objects.
+A list of objects of type \code{CcwAnalysis}.
 }
 \description{
-Load a list of CCW analyses from a JSON file
+Load a list of objects of type \code{CcwAnalysis} from file. The file is in JSON format.
 }
 \examples{
-\dontrun{
-analysisList <- loadCcwAnalysisList("analyses.json")
-}
+analysis <- createCcwAnalysis(
+  analysisId = 1,
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+    )
+  ),
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+  computeWeightsArgs = createComputeWeightsArgs(),
+  fitOutcomeModelArgs = createFitOutcomeModelArgs()
+)
+file <- tempfile(fileext = ".json")
+saveCcwAnalysisList(list(analysis), file)
+analysisList <- loadCcwAnalysisList(file)
+unlink(file)
 
 }

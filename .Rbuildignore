@@ -7,3 +7,8 @@
 ^\.Rproj\.user$
 ^NEWS\.md$
 ^\.agent-shell$
+^\.github$
+^_pkgdown\.yml$
+^vignettes/DeveloperGuide\.Rmd$
+^vignettes/Simulation\.Rmd$
+^\.claude$

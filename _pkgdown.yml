@@ -28,7 +28,9 @@ articles:
     contents:
       - SingleStudy
       - MultipleAnalyses
+      - ResultsSchema
       - Simulation
+      - PackageComparison
   - title: "Developer documentation"
     navbar: ~
     contents:
@@ -64,12 +66,23 @@ reference:
       - computeKaplanMeier
       - computeMdrr
       - computeWeightDistribution
+      - computeCensoringModelCalibration
+      - computeGracePeriodSelection
+      - computePositivity
+      - computeWeightSummary
+      - computeCcwSensitivity
+      - computeCcwDiagnostics
       - getAttritionTable
       - plotLovePlot
       - plotCovariateBalance
       - plotKaplanMeier
       - plotMdrr
       - plotWeightDistribution
+      - plotCensoringModelCalibration
+      - plotGracePeriodSelection
+      - plotPositivity
+      - plotWeightSummary
+      - plotCcwSensitivity
       - plotCalibration
 
   - title: "Multi-Analysis Runner"
@@ -77,6 +90,11 @@ reference:
     contents:
       - runCcwAnalyses
       - runCcwAnalysesOnData
+      - createCcwMultiThreadingSettings
+      - createDefaultCcwMultiThreadingSettings
+      - getFileReference
+      - getResultsSummary
+      - getDiagnosticsSummary
 
   - title: "Simulation"
     desc: "Synthetic data generation and Monte Carlo power analysis."
@@ -89,11 +107,12 @@ reference:
     desc: "Write results to CSV files and upload to a results database."
     contents:
       - exportToCsv
-      - importFromCsv
-      - uploadResults
+      - getResultsDataModelSpecifications
       - createResultsDataModel
-      - dropResultsDataModel
-      - getResultsDataModelSpec
+      - uploadResults
+      - findResultsZipFile
+      - migrateDataModel
+      - getDataMigrator
 
   - title: "Settings Objects"
     desc: "Construct, save, and load analysis specifications."

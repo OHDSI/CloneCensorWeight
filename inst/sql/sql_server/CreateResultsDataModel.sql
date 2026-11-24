@@ -1,133 +1,300 @@
--- Create the CloneCensorWeight results data model.
---
--- Parameters (SqlRender):
--- @database_schema Target schema, e.g. 'my_results' (include the dot separator)
--- @table_prefix Optional prefix for all table names (default '')
---
--- Usage via SqlRender + DatabaseConnector:
--- sql <- SqlRender::loadRenderTranslateSql(
--- "CreateResultsDataModel.sql",
--- packageName = "CloneCensorWeight",
--- database_schema = "results.",
--- table_prefix = ""
--- )
--- DatabaseConnector::executeSql(connection, sql)
+-- The results data model of CloneCensorWeight, as created by createResultsDataModel(). This file is
+-- frozen: it creates the first version of the tables. Later changes go only through migrations in
+-- inst/sql/sql_server/migrations/ (Migration_<n>-v<version>.sql), which migrateDataModel() applies and
+-- records in ccw_migration.
+{DEFAULT @table_prefix = ''}
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_analysis', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_analysis;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_analysis (
-  analysis_id VARCHAR(50) NOT NULL,
-  description VARCHAR(255) NULL,
-  created_date DATE NOT NULL,
-  package_version VARCHAR(50) NULL,
-  database_id VARCHAR(100) NOT NULL,
-  database_name VARCHAR(255) NULL,
-  vocabulary_version VARCHAR(100) NULL,
-  min_observation_date DATE NULL,
-  max_observation_date DATE NULL,
-  PRIMARY KEY (analysis_id)
+CREATE TABLE @database_schema.@table_prefixccw_analysis (
+	analysis_id INT NOT NULL,
+	description VARCHAR,
+	definition VARCHAR,
+	PRIMARY KEY(analysis_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_cohort_definition', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_cohort_definition;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_cohort_definition (
-  analysis_id VARCHAR(50) NOT NULL,
-  cohort_definition_id INT NOT NULL,
-  cohort_name VARCHAR(255) NOT NULL,
-  PRIMARY KEY (analysis_id, cohort_definition_id)
+CREATE TABLE @database_schema.@table_prefixccw_strategy (
+	analysis_id INT NOT NULL,
+	strategy_id INT NOT NULL,
+	label VARCHAR,
+	type VARCHAR,
+	treatment VARCHAR,
+	grace_start INT,
+	grace_end INT,
+	prohibited_treatments VARCHAR,
+	definition VARCHAR,
+	PRIMARY KEY(analysis_id, strategy_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_cohort_count', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_cohort_count;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_cohort_count (
-  analysis_id VARCHAR(50) NOT NULL,
-  cohort_definition_id INT NOT NULL,
-  arm VARCHAR(100) NOT NULL,
-  n_persons INT NOT NULL,
-  n_events INT NULL,
-  PRIMARY KEY (analysis_id, cohort_definition_id, arm)
+CREATE TABLE @database_schema.@table_prefixccw_target_treatment (
+	target_treatment_id BIGINT NOT NULL,
+	target_id BIGINT,
+	treatment_id BIGINT,
+	comparator_treatment_id BIGINT,
+	PRIMARY KEY(target_treatment_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_outcome_model', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_outcome_model;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_outcome_model (
-  analysis_id VARCHAR(50) NOT NULL,
-  model_type VARCHAR(50) NOT NULL,
-  estimand VARCHAR(100) NOT NULL,
-  variance_estimator VARCHAR(50) NOT NULL,
-  arm1 VARCHAR(100) NOT NULL,
-  arm2 VARCHAR(100) NOT NULL,
-  estimate FLOAT NOT NULL,
-  lower_95 FLOAT NOT NULL,
-  upper_95 FLOAT NOT NULL,
-  p_value FLOAT NULL,
-  log_likelihood FLOAT NULL,
-  calibrated_p FLOAT NULL,
-  calibrated_lower_95 FLOAT NULL,
-  calibrated_upper_95 FLOAT NULL,
-  PRIMARY KEY (analysis_id)
+CREATE TABLE @database_schema.@table_prefixccw_target_treatment_outcome (
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	outcome_of_interest INT,
+	true_effect_size FLOAT,
+	PRIMARY KEY(target_treatment_id, outcome_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_standardized_difference', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_standardized_difference;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_standardized_difference (
-  analysis_id VARCHAR(50) NOT NULL,
-  covariate_id INT NOT NULL,
-  weighted INT NOT NULL,
-  covariate VARCHAR(255) NOT NULL,
-  mean_arm1 FLOAT NOT NULL,
-  sd_arm1 FLOAT NULL,
-  mean_arm2 FLOAT NOT NULL,
-  sd_arm2 FLOAT NULL,
-  smd FLOAT NOT NULL,
-  abs_smd FLOAT NOT NULL,
-  PRIMARY KEY (analysis_id, covariate_id, weighted)
+CREATE TABLE @database_schema.@table_prefixccw_attrition (
+	sequence_number INT NOT NULL,
+	description VARCHAR,
+	subjects INT,
+	strategy_id INT NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	database_id VARCHAR NOT NULL,
+	PRIMARY KEY(sequence_number, strategy_id, analysis_id, target_treatment_id, outcome_id, database_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_kaplan_meier', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_kaplan_meier;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_kaplan_meier (
-  analysis_id VARCHAR(50) NOT NULL,
-  arm VARCHAR(100) NOT NULL,
-  time FLOAT NOT NULL,
-  survival FLOAT NOT NULL,
-  lower FLOAT NULL,
-  upper FLOAT NULL,
-  n_risk FLOAT NULL,
-  n_event FLOAT NOT NULL,
-  PRIMARY KEY (analysis_id, arm, time)
+CREATE TABLE @database_schema.@table_prefixccw_follow_up_dist (
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	min_days FLOAT,
+	p_10_days FLOAT,
+	p_25_days FLOAT,
+	median_days FLOAT,
+	p_75_days FLOAT,
+	p_90_days FLOAT,
+	max_days FLOAT,
+	database_id VARCHAR NOT NULL,
+	PRIMARY KEY(analysis_id, target_treatment_id, outcome_id, strategy_id, database_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_power_mdrr', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_power_mdrr;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_power_mdrr (
-  analysis_id VARCHAR(50) NOT NULL,
-  arm1 VARCHAR(100) NOT NULL,
-  arm2 VARCHAR(100) NOT NULL,
-  alpha FLOAT NOT NULL,
-  power FLOAT NOT NULL,
-  n_events_arm1 INT NOT NULL,
-  n_events_arm2 INT NOT NULL,
-  n_events_eff_arm1 FLOAT NOT NULL,
-  n_events_eff_arm2 FLOAT NOT NULL,
-  mdrr FLOAT NOT NULL,
-  PRIMARY KEY (analysis_id)
+CREATE TABLE @database_schema.@table_prefixccw_covariate (
+	covariate_id BIGINT NOT NULL,
+	covariate_name VARCHAR,
+	analysis_id INT NOT NULL,
+	covariate_analysis_id INT,
+	database_id VARCHAR NOT NULL,
+	PRIMARY KEY(covariate_id, analysis_id, database_id)
 );
 
-IF OBJECT_ID('@database_schema@{table_prefix}ccw_negative_control', 'U') IS NOT NULL
-  DROP TABLE @database_schema@{table_prefix}ccw_negative_control;
-
-CREATE TABLE @database_schema@{table_prefix}ccw_negative_control (
-  analysis_id VARCHAR(50) NOT NULL,
-  control_id VARCHAR(255) NOT NULL,
-  log_rr FLOAT NOT NULL,
-  se_log_rr FLOAT NOT NULL,
-  PRIMARY KEY (analysis_id, control_id)
+CREATE TABLE @database_schema.@table_prefixccw_covariate_analysis (
+	covariate_analysis_id INT NOT NULL,
+	covariate_analysis_name VARCHAR,
+	analysis_id INT NOT NULL,
+	database_id VARCHAR NOT NULL,
+	PRIMARY KEY(covariate_analysis_id, analysis_id, database_id)
 );
+
+CREATE TABLE @database_schema.@table_prefixccw_covariate_balance (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	covariate_id BIGINT NOT NULL,
+	target_mean_before FLOAT,
+	comparator_mean_before FLOAT,
+	mean_before FLOAT,
+	std_diff_before FLOAT,
+	std_diff_var_before FLOAT,
+	balanced_before INT,
+	target_mean_after FLOAT,
+	comparator_mean_after FLOAT,
+	mean_after FLOAT,
+	std_diff_after FLOAT,
+	std_diff_var_after FLOAT,
+	balanced_after INT,
+	target_std_diff FLOAT,
+	comparator_std_diff FLOAT,
+	target_comparator_std_diff FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, covariate_id)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_censoring_model (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	model VARCHAR(20) NOT NULL,
+	term VARCHAR NOT NULL,
+	covariate_id BIGINT,
+	coefficient FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, model, term)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_censoring_model_dist (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	model VARCHAR(20) NOT NULL,
+	horizon INT NOT NULL,
+	probability FLOAT NOT NULL,
+	density FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, model, horizon, probability)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_weight_dist (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	scale VARCHAR(20) NOT NULL,
+	truncation VARCHAR(20) NOT NULL,
+	band_start INT NOT NULL,
+	day_band VARCHAR,
+	clone_days BIGINT,
+	days INT,
+	mean_weight FLOAT,
+	min_weight FLOAT,
+	p_25_weight FLOAT,
+	median_weight FLOAT,
+	p_75_weight FLOAT,
+	p_95_weight FLOAT,
+	p_99_weight FLOAT,
+	max_weight FLOAT,
+	effective_sample_size FLOAT,
+	effective_sample_share FLOAT,
+	share_truncated FLOAT,
+	cap FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, scale, truncation, band_start)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_cumulative_incidence (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	time_day INT NOT NULL,
+	risk FLOAT,
+	risk_lb FLOAT,
+	risk_ub FLOAT,
+	at_risk_weighted FLOAT,
+	at_risk INT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, time_day)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_result (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	estimand VARCHAR(50) NOT NULL,
+	estimate FLOAT,
+	ci_95_lb FLOAT,
+	ci_95_ub FLOAT,
+	p FLOAT,
+	one_sided_p FLOAT,
+	log_rr FLOAT,
+	se_log_rr FLOAT,
+	se FLOAT,
+	calibrated_rr FLOAT,
+	calibrated_ci_95_lb FLOAT,
+	calibrated_ci_95_ub FLOAT,
+	calibrated_p FLOAT,
+	calibrated_one_sided_p FLOAT,
+	calibrated_log_rr FLOAT,
+	calibrated_se_log_rr FLOAT,
+	ease FLOAT,
+	target_subjects INT,
+	comparator_subjects INT,
+	target_clones INT,
+	comparator_clones INT,
+	target_days BIGINT,
+	comparator_days BIGINT,
+	target_outcomes INT,
+	comparator_outcomes INT,
+	target_competing_events INT,
+	comparator_competing_events INT,
+	target_weighted_days FLOAT,
+	comparator_weighted_days FLOAT,
+	target_weighted_outcomes FLOAT,
+	comparator_weighted_outcomes FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_likelihood_profile (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	estimand VARCHAR(50) NOT NULL,
+	log_rr FLOAT NOT NULL,
+	log_likelihood FLOAT,
+	gradient FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand, log_rr)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_variance_diagnostics (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	estimand VARCHAR(50) NOT NULL,
+	se_robust FLOAT,
+	se_stacked FLOAT,
+	ratio FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_variance_model_diagnostics (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	component VARCHAR(100) NOT NULL,
+	prior_type VARCHAR(20),
+	support_size INT,
+	conditional_on_support INT,
+	max_kkt_gap FLOAT,
+	rank INT,
+	condition_number FLOAT,
+	sampled INT,
+	truncated_share FLOAT,
+	other_scale_truncated_share FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, component)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_diagnostics_summary (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	max_sdm FLOAT,
+	balance_diagnostic VARCHAR(20),
+	mdrr FLOAT,
+	mdrr_diagnostic VARCHAR(20),
+	ease FLOAT,
+	ease_diagnostic VARCHAR(20),
+	ess_fraction FLOAT,
+	ess_fraction_diagnostic VARCHAR(20),
+	max_weight FLOAT,
+	max_weight_before_truncation FLOAT,
+	max_weight_diagnostic VARCHAR(20),
+	positivity FLOAT,
+	positivity_share_extreme FLOAT,
+	positivity_diagnostic VARCHAR(20),
+	unblind INT,
+	unblind_for_evidence_synthesis INT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_migration (
+	migration_file VARCHAR PRIMARY KEY,
+	migration_order INT NOT NULL UNIQUE
+);
+

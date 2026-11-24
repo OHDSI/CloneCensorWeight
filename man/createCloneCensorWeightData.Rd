@@ -6,29 +6,69 @@
 \usage{
 createCloneCensorWeightData(
   cohorts,
-  outcomes = data.frame(),
-  covariates = data.frame(),
-  covariateRef = data.frame(),
-  analysisRef = data.frame()
+  outcomes,
+  treatments,
+  covariates = NULL,
+  covariateRef = NULL,
+  analysisRef = NULL,
+  metaData
 )
 }
 \arguments{
-\item{cohorts}{A data frame with columns \code{subjectId}, \code{cohortStartDate},
-\code{cohortEndDate}, and \code{initiationDate}.}
+\item{cohorts}{A data frame with columns \code{rowId}, \code{personSeqId}, \code{personId} (character),
+\code{cohortStartDate} (Date), \code{daysFromObsStart}, \code{daysToCohortEnd}, \code{daysToObsEnd},
+and \code{daysToDeath} (\code{NA} if no death), and optionally \code{treatment} (always 1).}
 
-\item{outcomes}{A data frame of outcome occurrences.}
+\item{outcomes}{A data frame with columns \code{rowId}, \code{outcomeId}, and \code{daysToEvent}, or \code{NULL}.}
 
-\item{covariates}{A baseline covariate data frame.}
+\item{treatments}{A data frame with columns \code{rowId}, \code{treatmentId}, \code{daysToStart}, and \code{daysToEnd},
+or \code{NULL}.}
 
-\item{covariateRef}{A covariate reference data frame.}
+\item{covariates}{A data frame with columns \code{rowId}, \code{covariateId}, and \code{covariateValue}, or
+\code{NULL}.}
 
-\item{analysisRef}{An analysis reference data frame.}
+\item{covariateRef}{A data frame with the FeatureExtraction columns \code{covariateId}, \code{covariateName},
+\code{analysisId}, and \code{conceptId}, or \code{NULL}.}
+
+\item{analysisRef}{A data frame with the FeatureExtraction columns \code{analysisId}, \code{analysisName},
+\code{domainId}, \code{startDay}, \code{endDay}, \code{isBinary}, and \code{missingMeansZero}, or \code{NULL}.}
+
+\item{metaData}{A list (required). Must contain \code{targetId} (the eligible cohort ID) and
+\code{treatmentIds} (cohort IDs named by role: \code{treatment} and optionally
+\code{comparatorTreatment}).
+\code{populationSize} is set to the number of rows of \code{cohorts}; \code{outcomeIds} and
+\code{attrition} are created if absent.}
 }
 \value{
-An object of class \code{CloneCensorWeightData}. Its disk-backed tables
-are \code{cohorts}, \code{outcomes}, \code{covariates}, \code{covariateRef}, and \code{analysisRef}.
+An object of type \link{CloneCensorWeightData}.
 }
 \description{
-Creates a disk-backed \code{CloneCensorWeightData} object from normalized
-post-CDM tables.
+Creates a \link{CloneCensorWeightData} object from data frames, for example simulated data or data
+extracted by other means. Empty or \code{NULL} tables are created with the right columns. Integer-valued
+numeric columns are converted to integer where required, and columns that are all \code{NA} of type
+logical (for example \code{daysToDeath = NA} when nobody dies) are converted to the required type. The
+\code{treatment} column of \code{cohorts} is added (always 1) if absent.
+}
+\examples{
+cohorts <- data.frame(
+  rowId = 1:3,
+  personSeqId = 1:3,
+  personId = c("101", "102", "103"),
+  cohortStartDate = as.Date("2020-01-01") + 0:2,
+  daysFromObsStart = c(400, 500, 600),
+  daysToCohortEnd = c(0, 0, 0),
+  daysToObsEnd = c(365, 200, 100),
+  daysToDeath = c(NA, 150, NA)
+)
+outcomes <- data.frame(rowId = 1, outcomeId = 3, daysToEvent = 50)
+treatments <- data.frame(rowId = 2, treatmentId = 2, daysToStart = 5, daysToEnd = 35)
+data <- createCloneCensorWeightData(
+  cohorts = cohorts,
+  outcomes = outcomes,
+  treatments = treatments,
+  metaData = list(targetId = 1, treatmentIds = c(treatment = 2))
+)
+data
+close(data)
+
 }

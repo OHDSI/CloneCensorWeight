@@ -1,321 +1,430 @@
-#' Clone-censor-weight data class
+# Copyright 2026 Observational Health Data Sciences and Informatics
+#
+# This file is part of CloneCensorWeight
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+#' Clone-censor-weight data
 #'
-#' @import FeatureExtraction
-#' @import Cyclops
-#' @import DatabaseConnector
-#' @import SqlRender
-#' @import methods
-#' @importClassesFrom FeatureExtraction CovariateData
-#' @importClassesFrom Andromeda Andromeda
-#' @importFrom rlang .data
-#' @importFrom stats ave rbinom runif
+#' @description
+#' `CloneCensorWeightData` is an S4 class that inherits from
+#' [CohortMethodData][CohortMethod::CohortMethodData], so CohortMethod functions such as
+#' [CohortMethod::createStudyPopulation()] accept it as is. It is an [Andromeda][Andromeda::Andromeda]
+#' object with these tables:
+#'
+#' - `cohorts`: one row per eligible person-index, with columns `rowId`, `personSeqId`, `personId`,
+#'   `treatment` (always 1, because CohortMethod requires it), `cohortStartDate`, `daysFromObsStart`,
+#'   `daysToCohortEnd`, `daysToObsEnd`, and `daysToDeath` (`NA` if no death is observed).
+#' - `outcomes`: `rowId`, `outcomeId`, `daysToEvent`.
+#' - `treatments`: `rowId`, `treatmentId`, `daysToStart`, `daysToEnd`; every era of a treatment cohort
+#'   overlapping the prior-use lookback window and follow-up.
+#' - `covariates`, `covariateRef`, `analysisRef`: baseline covariates in FeatureExtraction format.
+#'
+#' All days are relative to the index date (`cohortStartDate`, day 0). The `metaData` attribute is a
+#' list with at least `targetId`, `treatmentIds` (named by role: `treatment` and optionally
+#' `comparatorTreatment`), `outcomeIds`, `populationSize`, and `attrition`.
+#'
+#' A `CloneCensorWeightData` is created using `getDbCloneCensorWeightData()` or
+#' [createCloneCensorWeightData()], can only be saved using [saveCloneCensorWeightData()], and loaded
+#' using [loadCloneCensorWeightData()].
+#'
+#' @name CloneCensorWeightData-class
+#' @aliases CloneCensorWeightData
+NULL
+
+#' CloneCensorWeightData class.
+#'
 #' @export
-setClass("CloneCensorWeightData", contains = "CovariateData")
+setClass("CloneCensorWeightData", contains = "CohortMethodData")
+
+.cloneCensorWeightDataTables <- c("cohorts", "outcomes", "treatments", "covariates", "covariateRef", "analysisRef")
+
+.cohortsColumns <- c(
+  rowId = "integer",
+  personSeqId = "integer",
+  personId = "character",
+  treatment = "integer",
+  cohortStartDate = "Date",
+  daysFromObsStart = "integer",
+  daysToCohortEnd = "integer",
+  daysToObsEnd = "integer",
+  daysToDeath = "integer"
+)
+
+.outcomesColumns <- c(
+  rowId = "integer",
+  outcomeId = "numeric",
+  daysToEvent = "integer"
+)
+
+.treatmentsColumns <- c(
+  rowId = "integer",
+  treatmentId = "numeric",
+  daysToStart = "integer",
+  daysToEnd = "integer"
+)
+
+.covariatesColumns <- c(
+  rowId = "integer",
+  covariateId = "numeric",
+  covariateValue = "numeric"
+)
+
+.covariateRefColumns <- c(
+  covariateId = "numeric",
+  covariateName = "character",
+  analysisId = "numeric",
+  conceptId = "numeric"
+)
+
+.analysisRefColumns <- c(
+  analysisId = "numeric",
+  analysisName = "character",
+  domainId = "character",
+  startDay = "numeric",
+  endDay = "numeric",
+  isBinary = "character",
+  missingMeansZero = "character"
+)
+
+.attritionColumns <- c("description", "targetPersons", "comparatorPersons", "targetExposures", "comparatorExposures")
+
+.prepareTable <- function(table, columnTypes, tableName, nullable = character(0)) {
+  if (is.null(table) || ncol(table) == 0) {
+    table <- .createEmptyTable(columnTypes)
+  }
+  return(.checkColumns(table, columnTypes, tableName, nullable = nullable, coerce = TRUE))
+}
 
 #' Create clone-censor-weight data
 #'
-#' Creates a disk-backed `CloneCensorWeightData` object from normalized
-#' post-CDM tables.
+#' @description
+#' Creates a [CloneCensorWeightData] object from data frames, for example simulated data or data
+#' extracted by other means. Empty or `NULL` tables are created with the right columns. Integer-valued
+#' numeric columns are converted to integer where required, and columns that are all `NA` of type
+#' logical (for example `daysToDeath = NA` when nobody dies) are converted to the required type. The
+#' `treatment` column of `cohorts` is added (always 1) if absent.
 #'
-#' @param cohorts A data frame with columns `subjectId`, `cohortStartDate`,
-#'   `cohortEndDate`, and `initiationDate`.
-#' @param outcomes A data frame of outcome occurrences.
-#' @param covariates A baseline covariate data frame.
-#' @param covariateRef A covariate reference data frame.
-#' @param analysisRef An analysis reference data frame.
+#' @param cohorts      A data frame with columns `rowId`, `personSeqId`, `personId` (character),
+#'                     `cohortStartDate` (Date), `daysFromObsStart`, `daysToCohortEnd`, `daysToObsEnd`,
+#'                     and `daysToDeath` (`NA` if no death), and optionally `treatment` (always 1).
+#' @param outcomes     A data frame with columns `rowId`, `outcomeId`, and `daysToEvent`, or `NULL`.
+#' @param treatments   A data frame with columns `rowId`, `treatmentId`, `daysToStart`, and `daysToEnd`,
+#'                     or `NULL`.
+#' @param covariates   A data frame with columns `rowId`, `covariateId`, and `covariateValue`, or
+#'                     `NULL`.
+#' @param covariateRef A data frame with the FeatureExtraction columns `covariateId`, `covariateName`,
+#'                     `analysisId`, and `conceptId`, or `NULL`.
+#' @param analysisRef  A data frame with the FeatureExtraction columns `analysisId`, `analysisName`,
+#'                     `domainId`, `startDay`, `endDay`, `isBinary`, and `missingMeansZero`, or `NULL`.
+#' @param metaData     A list (required). Must contain `targetId` (the eligible cohort ID) and
+#'                     `treatmentIds` (cohort IDs named by role: `treatment` and optionally
+#'                     `comparatorTreatment`).
+#'                     `populationSize` is set to the number of rows of `cohorts`; `outcomeIds` and
+#'                     `attrition` are created if absent.
 #'
-#' @return An object of class `CloneCensorWeightData`. Its disk-backed tables
-#'   are `cohorts`, `outcomes`, `covariates`, `covariateRef`, and `analysisRef`.
+#' @return
+#' An object of type [CloneCensorWeightData].
+#'
+#' @examples
+#' cohorts <- data.frame(
+#'   rowId = 1:3,
+#'   personSeqId = 1:3,
+#'   personId = c("101", "102", "103"),
+#'   cohortStartDate = as.Date("2020-01-01") + 0:2,
+#'   daysFromObsStart = c(400, 500, 600),
+#'   daysToCohortEnd = c(0, 0, 0),
+#'   daysToObsEnd = c(365, 200, 100),
+#'   daysToDeath = c(NA, 150, NA)
+#' )
+#' outcomes <- data.frame(rowId = 1, outcomeId = 3, daysToEvent = 50)
+#' treatments <- data.frame(rowId = 2, treatmentId = 2, daysToStart = 5, daysToEnd = 35)
+#' data <- createCloneCensorWeightData(
+#'   cohorts = cohorts,
+#'   outcomes = outcomes,
+#'   treatments = treatments,
+#'   metaData = list(targetId = 1, treatmentIds = c(treatment = 2))
+#' )
+#' data
+#' close(data)
+#'
 #' @export
 createCloneCensorWeightData <- function(cohorts,
-                                        outcomes = data.frame(),
-                                        covariates = data.frame(),
-                                        covariateRef = data.frame(),
-                                        analysisRef = data.frame()) {
-  checkmate::assertDataFrame(cohorts)
-  checkmate::assertSubset(
-    c("subjectId", "cohortStartDate", "cohortEndDate"),
-    names(cohorts)
+                                        outcomes,
+                                        treatments,
+                                        covariates = NULL,
+                                        covariateRef = NULL,
+                                        analysisRef = NULL,
+                                        metaData) {
+  errorMessages <- checkmate::makeAssertCollection()
+  checkmate::assertDataFrame(cohorts, add = errorMessages)
+  checkmate::assertDataFrame(outcomes, null.ok = TRUE, add = errorMessages)
+  checkmate::assertDataFrame(treatments, null.ok = TRUE, add = errorMessages)
+  checkmate::assertDataFrame(covariates, null.ok = TRUE, add = errorMessages)
+  checkmate::assertDataFrame(covariateRef, null.ok = TRUE, add = errorMessages)
+  checkmate::assertDataFrame(analysisRef, null.ok = TRUE, add = errorMessages)
+  checkmate::assertList(metaData, add = errorMessages)
+  checkmate::assertNumber(metaData$targetId, .var.name = "metaData$targetId", add = errorMessages)
+  checkmate::assertNumeric(metaData$treatmentIds,
+    min.len = 1, max.len = 2, any.missing = FALSE, names = "unique",
+    .var.name = "metaData$treatmentIds", add = errorMessages
   )
-  checkmate::assertDataFrame(outcomes)
-  checkmate::assertDataFrame(covariates)
-  checkmate::assertDataFrame(covariateRef)
-  checkmate::assertDataFrame(analysisRef)
+  checkmate::assertSubset(names(metaData$treatmentIds), .treatmentRoles, .var.name = "names(metaData$treatmentIds)", add = errorMessages)
+  checkmate::assertTRUE("treatment" %in% names(metaData$treatmentIds), .var.name = "metaData$treatmentIds has a 'treatment' element", add = errorMessages)
+  checkmate::assertNumeric(metaData$outcomeIds, any.missing = FALSE, null.ok = TRUE, .var.name = "metaData$outcomeIds", add = errorMessages)
+  checkmate::assertDataFrame(metaData$attrition, null.ok = TRUE, .var.name = "metaData$attrition", add = errorMessages)
+  if (!is.null(metaData$attrition)) {
+    checkmate::assertNames(colnames(metaData$attrition), must.include = .attritionColumns, .var.name = "metaData$attrition", add = errorMessages)
+  }
+  checkmate::reportAssertions(collection = errorMessages)
 
-  if (ncol(outcomes) == 0) {
-    outcomes <- data.frame(
-      subjectId   = integer(),
-      outcomeDate = as.Date(character()),
-      outcomeId   = integer()
-    )
+  if (!"treatment" %in% colnames(cohorts)) {
+    cohorts$treatment <- rep(1L, nrow(cohorts))
   }
-  if (ncol(covariates) == 0) {
-    covariates <- data.frame(rowId = integer(), covariateId = integer(), covariateValue = numeric())
+  cohorts <- .checkColumns(cohorts, .cohortsColumns, "cohorts", nullable = "daysToDeath", coerce = TRUE)
+  if (any(cohorts$treatment != 1L)) {
+    stop("Column 'treatment' of table 'cohorts' must be 1 in every row")
   }
-  if (ncol(covariateRef) == 0) {
-    covariateRef <- data.frame(
-      covariateId   = integer(),
-      covariateName = character(),
-      analysisId    = integer(),
-      conceptId     = integer()
-    )
+  if (anyDuplicated(cohorts$rowId)) {
+    stop("Column 'rowId' of table 'cohorts' must be unique")
   }
-  if (ncol(analysisRef) == 0) {
-    analysisRef <- data.frame(
-      analysisId       = integer(),
-      analysisName     = character(),
-      domainId         = character(),
-      startDay         = integer(),
-      endDay           = integer(),
-      isBinary         = character(),
-      missingMeansZero = character()
+  outcomes <- .prepareTable(outcomes, .outcomesColumns, "outcomes")
+  treatments <- .prepareTable(treatments, .treatmentsColumns, "treatments")
+  covariates <- .prepareTable(covariates, .covariatesColumns, "covariates")
+  covariateRef <- .prepareTable(covariateRef, .covariateRefColumns, "covariateRef",
+    nullable = setdiff(names(.covariateRefColumns), "covariateId")
+  )
+  analysisRef <- .prepareTable(analysisRef, .analysisRefColumns, "analysisRef",
+    nullable = setdiff(names(.analysisRefColumns), "analysisId")
+  )
+
+  metaData$populationSize <- nrow(cohorts)
+  if (is.null(metaData$outcomeIds)) {
+    metaData$outcomeIds <- sort(unique(outcomes$outcomeId))
+  }
+  if (is.null(metaData$attrition)) {
+    metaData$attrition <- tibble(
+      description = "Original cohorts",
+      targetPersons = length(unique(cohorts$personSeqId)),
+      comparatorPersons = 0L,
+      targetExposures = nrow(cohorts),
+      comparatorExposures = 0L
     )
   }
 
-  database <- Andromeda::andromeda()
-  database[["cohorts"]]     <- cohorts
-  database[["outcomes"]]    <- outcomes
-  database[["covariates"]]  <- covariates
-  database[["covariateRef"]] <- covariateRef
-  database[["analysisRef"]] <- analysisRef
-  class(database) <- "CloneCensorWeightData"
-  attr(class(database), "package") <- "CloneCensorWeight"
-  database
+  data <- Andromeda::andromeda(
+    cohorts = cohorts,
+    outcomes = outcomes,
+    treatments = treatments,
+    covariates = covariates,
+    covariateRef = covariateRef,
+    analysisRef = analysisRef
+  )
+  attr(data, "metaData") <- metaData
+  class(data) <- "CloneCensorWeightData"
+  attr(class(data), "package") <- "CloneCensorWeight"
+  return(data)
 }
 
-.readCloneCensorWeightTable <- function(cloneCensorWeightData, tableName) {
-  table <- switch(
-    tableName,
-    cohorts     = cloneCensorWeightData$cohorts,
-    outcomes    = cloneCensorWeightData$outcomes,
-    covariates  = cloneCensorWeightData$covariates,
-    covariateRef = cloneCensorWeightData$covariateRef,
-    analysisRef  = cloneCensorWeightData$analysisRef,
-    stop("Unknown CloneCensorWeightData table: ", tableName, call. = FALSE)
-  )
-  dplyr::collect(table)
-}
-
-#' Create a sample clone-censor-weight data set
+#' Save the clone-censor-weight data to file
 #'
-#' Generates a small synthetic data set useful for offline testing and
-#' demonstrations. The covariates table uses a wide format (one column per
-#' predictor) compatible with the current weighting code; it will be updated to
-#' FeatureExtraction sparse format in a later phase.
+#' @description
+#' Saves an object of type [CloneCensorWeightData] to a file. The object is closed afterwards (as with
+#' [CohortMethod::saveCohortMethodData()]), so load it with [loadCloneCensorWeightData()] to use it
+#' again.
 #'
-#' @param n Number of synthetic eligible subjects.
-#' @param seed Random seed.
-#' @return A `CloneCensorWeightData` object.
+#' @param x    An object of type [CloneCensorWeightData].
+#' @param file The name of the file where the data will be written. If the file already exists it will
+#'             be overwritten.
+#'
+#' @return
+#' Returns no output.
+#'
+#' @examples
+#' data <- createCloneCensorWeightData(
+#'   cohorts = data.frame(
+#'     rowId = 1L, personSeqId = 1L, personId = "1", cohortStartDate = as.Date("2020-01-01"),
+#'     daysFromObsStart = 400L, daysToCohortEnd = 0L, daysToObsEnd = 365L, daysToDeath = NA_integer_
+#'   ),
+#'   outcomes = NULL,
+#'   treatments = NULL,
+#'   metaData = list(targetId = 1, treatmentIds = c(treatment = 2))
+#' )
+#' file <- tempfile(fileext = ".zip")
+#' saveCloneCensorWeightData(data, file)
+#' data <- loadCloneCensorWeightData(file)
+#' close(data)
+#' unlink(file)
+#'
 #' @export
-createSampleCloneCensorWeightData <- function(n = 200, seed = 42) {
-  checkmate::assertCount(n, positive = TRUE)
-  checkmate::assertIntegerish(seed, len = 1)
-  set.seed(seed)
+saveCloneCensorWeightData <- function(x, file) {
+  errorMessages <- checkmate::makeAssertCollection()
+  .assertCloneCensorWeightData(x, add = errorMessages)
+  checkmate::assertCharacter(file, len = 1, add = errorMessages)
+  checkmate::reportAssertions(collection = errorMessages)
 
-  start        <- as.Date("2020-01-01") + sample(0:30, n, replace = TRUE)
-  followUp     <- sample(90:365, n, replace = TRUE)
-  exposureDelay <- sample(c(NA, 0:90), n, replace = TRUE,
-                          prob = c(0.35, rep(0.65 / 91, 91)))
-  outcomeDelay  <- sample(c(NA, 30:365), n, replace = TRUE,
-                          prob = c(0.65, rep(0.35 / 336, 336)))
-
-  cohorts <- data.frame(
-    subjectId       = seq_len(n),
-    cohortStartDate = start,
-    cohortEndDate   = start + followUp,
-    initiationDate  = as.Date(ifelse(
-      is.na(exposureDelay), NA,
-      as.character(start + exposureDelay)
-    )),
-    stringsAsFactors = FALSE
-  )
-
-  outcomeIdx <- which(!is.na(outcomeDelay))
-  outcomes <- data.frame(
-    subjectId   = outcomeIdx,
-    outcomeDate = start[outcomeIdx] + outcomeDelay[outcomeIdx],
-    outcomeId   = rep(1L, length(outcomeIdx)),
-    stringsAsFactors = FALSE
-  )
-
-  ageYears  <- round(runif(n, 35, 85))
-  priorCond <- rbinom(n, 1, 0.35)
-  priorDrug <- rbinom(n, 1, 0.25)
-
-  # FeatureExtraction sparse format: one row per non-zero (subject, covariate) pair.
-  # Continuous covariates (age) have an entry for every subject; binary covariates
-  # only have entries for subjects where value = 1 (missing = 0 by convention).
-  condIdx <- which(priorCond == 1L)
-  drugIdx <- which(priorDrug == 1L)
-  covariates <- data.frame(
-    rowId          = c(seq_len(n),          condIdx,              drugIdx),
-    covariateId    = c(rep(1003L, n),        rep(2001L, length(condIdx)), rep(3001L, length(drugIdx))),
-    covariateValue = c(ageYears / 10,        rep(1.0,   length(condIdx)), rep(1.0,   length(drugIdx)))
-  )
-
-  covariateRef <- data.frame(
-    covariateId   = c(1003L, 2001L, 3001L),
-    covariateName = c("age in decades", "prior condition in 365d", "prior drug in 365d"),
-    analysisId    = c(1L, 2L, 3L),
-    conceptId     = c(0L, 0L, 0L),
-    stringsAsFactors = FALSE
-  )
-
-  analysisRef <- data.frame(
-    analysisId       = c(1L, 2L, 3L),
-    analysisName     = c("Demographics", "Conditions prior to index", "Drugs prior to index"),
-    domainId         = c("Demographics", "Condition", "Drug"),
-    startDay         = c(NA_integer_, -365L, -365L),
-    endDay           = c(NA_integer_, 0L, 0L),
-    isBinary         = c("N", "Y", "Y"),
-    missingMeansZero = c("N", "Y", "Y"),
-    stringsAsFactors = FALSE
-  )
-
-  createCloneCensorWeightData(cohorts, outcomes, covariates, covariateRef, analysisRef)
+  Andromeda::saveAndromeda(x, file)
+  message("To use this CloneCensorWeightData object, you will have to load it from file (using loadCloneCensorWeightData).")
+  invisible(NULL)
 }
 
-#' Save clone-censor-weight data
-#' @param cloneCensorWeightData A `CloneCensorWeightData` object.
-#' @param file A file path.
-#' @return Invisibly returns `file`.
-#' @export
-saveCloneCensorWeightData <- function(cloneCensorWeightData, file) {
-  checkmate::assertClass(cloneCensorWeightData, "CloneCensorWeightData")
-  checkmate::assertCharacter(file, len = 1)
-  Andromeda::saveAndromeda(cloneCensorWeightData, file)
-  invisible(file)
-}
-
-#' Load clone-censor-weight data
-#' @param file A path created by [saveCloneCensorWeightData()].
-#' @return A `CloneCensorWeightData` object.
+#' Load the clone-censor-weight data from a file
+#'
+#' @description
+#' Loads an object of type [CloneCensorWeightData] from a file in the file system.
+#'
+#' @param file The name of the file containing the data.
+#'
+#' @return
+#' An object of type [CloneCensorWeightData].
+#'
+#' @inherit saveCloneCensorWeightData examples
+#'
 #' @export
 loadCloneCensorWeightData <- function(file) {
-  checkmate::assertCharacter(file, len = 1)
-  database <- Andromeda::loadAndromeda(file)
-  class(database) <- "CloneCensorWeightData"
-  attr(class(database), "package") <- "CloneCensorWeight"
-  database
+  errorMessages <- checkmate::makeAssertCollection()
+  checkmate::assertCharacter(file, len = 1, add = errorMessages)
+  checkmate::reportAssertions(collection = errorMessages)
+
+  if (!file.exists(file)) {
+    stop(sprintf("Cannot find file '%s'", file))
+  }
+  if (file.info(file)$isdir) {
+    stop(sprintf("'%s' is a folder, but should be a file", file))
+  }
+  data <- Andromeda::loadAndromeda(file)
+  class(data) <- "CloneCensorWeightData"
+  attr(class(data), "package") <- "CloneCensorWeight"
+  return(data)
 }
 
-#' Extract data for a clone-censor-weight analysis
+#' Check whether an object is a CloneCensorWeightData object
 #'
-#' Connects to an OMOP CDM database, retrieves eligible subjects, treatment
-#' initiation markers, outcomes, and baseline covariates via FeatureExtraction,
-#' and assembles them into a disk-backed `CloneCensorWeightData` object.
+#' @param x The object to check.
 #'
-#' @param connectionDetails A `ConnectionDetails` object created by
-#'   [DatabaseConnector::createConnectionDetails()].
-#' @param cdmDatabaseSchema Schema containing the OMOP CDM tables.
-#' @param tempEmulationSchema Schema for temp-table emulation on platforms
-#'   that require it (Oracle, BigQuery). Defaults to
-#'   `getOption("sqlRenderTempEmulationSchema")`.
-#' @param targetDatabaseSchema Schema containing the target cohort table.
-#' @param targetTable Target cohort table name.
-#' @param targetId Index cohort definition identifier.
-#' @param outcomeDatabaseSchema Schema containing the outcome cohort table.
-#' @param outcomeTable Outcome cohort table name.
-#' @param outcomeIds Integer vector of outcome cohort definition identifiers.
-#' @param exposureDatabaseSchema Schema containing the exposure cohort table.
-#' @param exposureTable Exposure cohort table name.
-#' @param exposureId Exposure cohort definition identifier.
-#' @param getDbCloneCensorWeightDataArgs A
-#'   `GetDbCloneCensorWeightDataArgs` object created by
-#'   [createGetDbCloneCensorWeightDataArgs()].
-#' @param cdmVersion OMOP CDM version string. Passed to FeatureExtraction.
-#' @return A `CloneCensorWeightData` object.
+#' @return
+#' A logical value.
+#'
+#' @examples
+#' isCloneCensorWeightData(data.frame())
+#'
 #' @export
-getDbCloneCensorWeightData <- function(connectionDetails,
-                                       cdmDatabaseSchema,
-                                       tempEmulationSchema = getOption("sqlRenderTempEmulationSchema"),
-                                       targetDatabaseSchema,
-                                       targetTable,
-                                       targetId,
-                                       outcomeDatabaseSchema,
-                                       outcomeTable,
-                                       outcomeIds,
-                                       exposureDatabaseSchema,
-                                       exposureTable,
-                                       exposureId,
-                                       getDbCloneCensorWeightDataArgs,
-                                       cdmVersion = "5") {
-  checkmate::assertClass(connectionDetails, "ConnectionDetails")
-  checkmate::assertCharacter(cdmDatabaseSchema, len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(targetDatabaseSchema, len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(targetTable, len = 1, any.missing = FALSE)
-  checkmate::assertIntegerish(targetId, len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(outcomeDatabaseSchema, len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(outcomeTable, len = 1, any.missing = FALSE)
-  checkmate::assertIntegerish(outcomeIds, min.len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(exposureDatabaseSchema, len = 1, any.missing = FALSE)
-  checkmate::assertCharacter(exposureTable, len = 1, any.missing = FALSE)
-  checkmate::assertIntegerish(exposureId, len = 1, any.missing = FALSE)
-  checkmate::assertR6(getDbCloneCensorWeightDataArgs, "GetDbCloneCensorWeightDataArgs")
+isCloneCensorWeightData <- function(x) {
+  return(inherits(x, "CloneCensorWeightData"))
+}
 
-  args <- getDbCloneCensorWeightDataArgs
+# show()
+#' @param object An object of type `CloneCensorWeightData`.
+#'
+#' @export
+#' @rdname CloneCensorWeightData-class
+setMethod("show", "CloneCensorWeightData", function(object) {
+  metaData <- attr(object, "metaData")
+  message("# CloneCensorWeightData object")
+  message("")
+  message(paste("Target cohort ID:", metaData$targetId))
+  message(paste(
+    "Treatment cohort ID(s):",
+    paste(sprintf("%s = %s", names(metaData$treatmentIds), metaData$treatmentIds), collapse = ", ")
+  ))
+  message(paste("Outcome cohort ID(s):", paste(metaData$outcomeIds, collapse = ",")))
+  message("")
+  message("Inherits from CovariateData:")
+  class(object) <- "CovariateData"
+  attr(class(object), "package") <- "FeatureExtraction"
+  show(object)
+})
 
-  ParallelLogger::logInfo("Connecting to database")
-  connection <- DatabaseConnector::connect(connectionDetails)
-  on.exit(DatabaseConnector::disconnect(connection), add = TRUE)
-
-  # --- Target population -----------------------------------------------------
-  ParallelLogger::logInfo("Retrieving target population")
-  cohorts <- .renderTranslateQuerySql(
-    connection               = connection,
-    sqlFile                  = "GetCohorts.sql",
-    cdm_database_schema      = cdmDatabaseSchema,
-    target_database_schema   = targetDatabaseSchema,
-    target_table             = targetTable,
-    target_id                = targetId,
-    exposure_database_schema = exposureDatabaseSchema,
-    exposure_table           = exposureTable,
-    exposure_id              = exposureId,
-    washout_period           = args$washoutPeriod
-  )
-  ParallelLogger::logInfo(sprintf("Retrieved %d subjects", nrow(cohorts)))
-
-  if (args$maxCohortSize > 0 && nrow(cohorts) > args$maxCohortSize) {
-    ParallelLogger::logInfo(sprintf(
-      "Sampling %d of %d subjects (maxCohortSize = %d)",
-      args$maxCohortSize, nrow(cohorts), args$maxCohortSize
-    ))
-    cohorts <- cohorts[sample.int(nrow(cohorts), args$maxCohortSize), ]
+# summary()
+#' @param object An object of type `CloneCensorWeightData`.
+#'
+#' @export
+#' @rdname CloneCensorWeightData-class
+setMethod("summary", "CloneCensorWeightData", function(object) {
+  if (!Andromeda::isValidAndromeda(object)) {
+    stop("Object is not valid. Probably the Andromeda object was closed.")
   }
-
-  # Upload temp cohort table (snake_case; adds cohort_definition_id = 1).
-  # Used by GetOutcomes.sql and FeatureExtraction.
-  .uploadTempCohortTable(connection, cohorts)
-
-  # --- Outcomes --------------------------------------------------------------
-  ParallelLogger::logInfo("Retrieving outcomes")
-  outcomes <- .renderTranslateQuerySql(
-    connection               = connection,
-    sqlFile                  = "GetOutcomes.sql",
-    outcome_database_schema  = outcomeDatabaseSchema,
-    outcome_table            = outcomeTable,
-    outcome_ids              = outcomeIds
+  metaData <- attr(object, "metaData")
+  cohortCounts <- .andromedaSql(object, "
+    SELECT COUNT(DISTINCT personSeqId) AS persons,
+      COUNT(*) AS indexDates,
+      COUNT(daysToDeath) AS deaths
+    FROM cohorts;")
+  outcomeCounts <- .andromedaSql(object, "
+    SELECT outcomeId,
+      COUNT(*) AS eventCount,
+      COUNT(DISTINCT rowId) AS personCount
+    FROM outcomes
+    GROUP BY outcomeId;")
+  outcomeCounts <- tibble(outcomeId = metaData$outcomeIds) |>
+    dplyr::left_join(outcomeCounts, by = "outcomeId") |>
+    dplyr::mutate(dplyr::across(c("eventCount", "personCount"), ~ dplyr::coalesce(as.numeric(.x), 0)))
+  treatmentCounts <- tibble(role = names(metaData$treatmentIds), treatmentId = as.numeric(metaData$treatmentIds)) |>
+    dplyr::left_join(
+      .andromedaSql(object, "
+        SELECT treatmentId,
+          COUNT(*) AS eraCount,
+          COUNT(DISTINCT rowId) AS personCount
+        FROM treatments
+        GROUP BY treatmentId;"),
+      by = "treatmentId"
+    ) |>
+    dplyr::mutate(dplyr::across(c("eraCount", "personCount"), ~ dplyr::coalesce(as.numeric(.x), 0)))
+  result <- list(
+    metaData = metaData,
+    persons = as.numeric(cohortCounts$persons),
+    indexDates = as.numeric(cohortCounts$indexDates),
+    deaths = as.numeric(cohortCounts$deaths),
+    outcomeCounts = outcomeCounts,
+    treatmentCounts = treatmentCounts,
+    covariateCount = as.numeric(.andromedaSql(object, "SELECT COUNT(*) AS n FROM covariateRef;")$n),
+    covariateValueCount = as.numeric(.andromedaSql(object, "SELECT COUNT(*) AS n FROM covariates;")$n)
   )
-  ParallelLogger::logInfo(sprintf("Retrieved %d outcome records", nrow(outcomes)))
+  class(result) <- "summary.CloneCensorWeightData"
+  return(result)
+})
 
-  # --- Baseline covariates (FeatureExtraction) --------------------------------
-  ParallelLogger::logInfo("Extracting baseline covariates")
-  covariateData <- FeatureExtraction::getDbCovariateData(
-    connection        = connection,
-    oracleTempSchema  = tempEmulationSchema,
-    cdmDatabaseSchema = cdmDatabaseSchema,
-    cdmVersion        = cdmVersion,
-    cohortTable       = "#ccw_cohorts",
-    cohortIds         = c(-1),
-    rowIdField        = "subject_id",
-    covariateSettings = args$covariateSettings,
-    aggregated        = FALSE
-  )
-
-  # --- Assemble --------------------------------------------------------------
-  ccwData <- createCloneCensorWeightData(cohorts, outcomes)
-  ccwData[["covariates"]]   <- covariateData$covariates
-  ccwData[["covariateRef"]] <- covariateData$covariateRef
-  ccwData[["analysisRef"]]  <- covariateData$analysisRef
-  ccwData
+#' @export
+print.summary.CloneCensorWeightData <- function(x, ...) {
+  message("CloneCensorWeightData object summary")
+  message("")
+  message(paste("Target cohort ID:", x$metaData$targetId))
+  message(paste("Persons:", x$persons))
+  message(paste("Index dates:", x$indexDates))
+  message(paste("Deaths:", x$deaths))
+  message("")
+  message("Treatment counts:")
+  for (i in seq_len(nrow(x$treatmentCounts))) {
+    message(sprintf(
+      "  %s (cohort ID %s): %s eras, %s persons",
+      x$treatmentCounts$role[i],
+      x$treatmentCounts$treatmentId[i],
+      x$treatmentCounts$eraCount[i],
+      x$treatmentCounts$personCount[i]
+    ))
+  }
+  message("")
+  message("Outcome counts:")
+  if (nrow(x$outcomeCounts) > 0) {
+    outcomeCounts <- as.data.frame(x$outcomeCounts)
+    rownames(outcomeCounts) <- outcomeCounts$outcomeId
+    outcomeCounts$outcomeId <- NULL
+    colnames(outcomeCounts) <- c("Event count", "Person count")
+    printCoefmat(outcomeCounts)
+  }
+  message("")
+  message("Covariates:")
+  message(paste("Number of covariates:", x$covariateCount))
+  message(paste("Number of non-zero covariate values:", x$covariateValueCount))
+  invisible(x)
 }

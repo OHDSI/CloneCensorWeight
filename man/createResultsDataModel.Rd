@@ -2,24 +2,42 @@
 % Please edit documentation in R/ResultsDataModel.R
 \name{createResultsDataModel}
 \alias{createResultsDataModel}
-\title{Create the results data model tables}
+\title{Create the results data model tables on a database server}
 \usage{
-createResultsDataModel(connection, databaseSchema, tablePrefix = "")
+createResultsDataModel(
+  connectionDetails = NULL,
+  databaseSchema,
+  tablePrefix = ""
+)
 }
 \arguments{
-\item{connection}{A \code{DatabaseConnector} connection object.}
+\item{connectionDetails}{An object of type \code{ConnectionDetails} as created using
+\code{\link[DatabaseConnector:createConnectionDetails]{DatabaseConnector::createConnectionDetails()}}.}
 
-\item{databaseSchema}{Schema in which to create tables, e.g.
-\code{"my_results"}.  Pass \code{""} to use the default schema (not recommended for
-production).}
+\item{databaseSchema}{The schema on the server where the tables will be created. On SQLite, this
+must be \code{"main"}.}
 
-\item{tablePrefix}{An optional string prepended to every table name, e.g.
-\code{"study1_"} yields \code{study1_ccw_analysis}, etc.  Default \code{""}.}
+\item{tablePrefix}{(Optional) A string to insert before the table names (which already start
+with \code{ccw_}).}
 }
 \value{
-Invisibly \code{NULL}.  Called for its side-effect.
+Does not return anything. Is called for its side effect of creating the tables.
 }
 \description{
-Executes the DDL that creates all \verb{ccw_*} results tables in the target
-schema.  Existing tables with the same names are \strong{dropped and recreated}.
+Create the results data model tables on a database server
+}
+\details{
+Creates the tables of \code{\link[=getResultsDataModelSpecifications]{getResultsDataModelSpecifications()}} with the DDL of the first version of the
+model, then applies the migrations to the current version with \code{\link[=migrateDataModel]{migrateDataModel()}}. Only
+PostgreSQL and SQLite servers are supported.
+}
+\examples{
+\dontrun{
+connectionDetails <- DatabaseConnector::createConnectionDetails(
+  dbms = "sqlite",
+  server = tempfile(fileext = ".sqlite")
+)
+createResultsDataModel(connectionDetails, databaseSchema = "main")
+}
+
 }

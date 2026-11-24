@@ -584,3 +584,46 @@ expect_equal(nrow(om1), nrow(om2))  # no duplication
 
 Internal (non-exported) functions are accessible via `:::` for direct unit
 testing.
+
+### Test tiers and run time
+
+`R CMD check` (and `devtools::check()`, `devtools::test()`) runs the **default tier**. It runs every
+exported function and every value of every design choice at least once, in a light form, and takes a
+few minutes:
+
+- The test files run in parallel (`Config/testthat/parallel: true` in `DESCRIPTION`). testthat starts
+  `TESTTHAT_CPUS` processes; `tests/testthat.R` sets up to 8 (the number of cores less 2, at least 2) when `NOT_CRAN=true` (as `devtools::check()`
+  sets it) and `TESTTHAT_CPUS` is unset, and otherwise (on CRAN) testthat's default of 2 applies. Set
+  `TESTTHAT_CPUS` to use another number, or `TESTTHAT_PARALLEL=false` to run the files one after the
+  other. `devtools::test()` does not run `tests/testthat.R`, so it starts 2 processes unless you first
+  run `Sys.setenv(TESTTHAT_CPUS = 8)`. Each process has its own temporary folder, so tests that write files or build a Eunomia
+  database do not collide.
+- `tests/testthat/setup-dbplyr.R` makes dbplyr 2.5.2 format the error message of a `summarise()`
+  variable only when the error is raised, as the development version of dbplyr does. Formatting it
+  up front for every `count()` took about 15% of the test time. It switches itself off once
+  dbplyr is updated.
+- `test-m3-weights-pooledLogisticEngine.R` compares the two engines of the pooled logistic hazard model
+  (`pooledLogisticEngine = "plr"` and `"lr"`) and skips those comparisons when the loaded Cyclops has
+  no plr (`modelType = "plr"`); install a Cyclops with plr first on the library path to run them.
+- Tests that share an expensive fixture (the analyses of `test-integration-msmWeights.R`, the
+  diagnostics of `test-integration-designChoicesDiagnostics.R`, the pooled logistic analyses and fits
+  of `test-integration-warnings.R`) build it once per file and do not change it.
+
+The **full tier** also runs the heavy versions: every configuration of the loops that compare with
+reference implementations, the statistical checks at large sample sizes, the bootstrap shift warning
+with 20 replicates and the Cox MSM on a million segments. Run it with
+
+```r
+Sys.setenv(CCW_FULL_TESTS = "true", TESTTHAT_CPUS = 8)
+devtools::test()
+```
+
+The multi-threaded `runCcwAnalyses()` test (in both tiers) runs its work in worker processes that load
+the installed CloneCensorWeight, so under `devtools::test()` install the current version first. `R CMD
+check` does this itself.
+
+In a test, `skipUnlessFullTests()` skips a block outside the full tier, and
+`testConfigurations(all, light)` gives the configurations a loop runs: `all` in the full tier, and
+otherwise `light`, a subset that still covers every value of each choice the loop varies (both helpers
+are in `tests/testthat/helper-foundation.R`). The cross-checks against other packages
+(`test-crossChecks-*.R`) run only with `CCW_RUN_CROSSCHECKS=true`.

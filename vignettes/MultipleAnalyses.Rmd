@@ -1,139 +1,506 @@
 ---
-title: "Multiple Clone-Censor-Weight Analyses"
-output: rmarkdown::html_vignette
+title: "Running multiple analyses at once using the CloneCensorWeight package"
+author: "Marc A. Suchard, William J. O'Brien and Patrick Ryan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
 vignette: >
-  %\VignetteIndexEntry{Multiple Clone-Censor-Weight Analyses}
-  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteIndexEntry{Multiple analyses using CloneCensorWeight}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
 ---
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
 library(CloneCensorWeight)
+library(dplyr)
+knitr::opts_chunk$set(comment = "#>")
+# Outputs of a run on the Synthea database, precomputed by
+# extras/vignetteRuns/MultipleAnalysesVignetteDataFetch.R. Counts below 11 are shown as "<11".
+dataFolder <- file.path("data", "MultipleAnalyses")
+load <- function(name) readRDS(file.path(dataFolder, paste0(name, ".rds")))
+showCounts <- function(x) ifelse(is.na(x), "<11", format(x, big.mark = ","))
+runSummary <- load("runSummary")
 ```
 
-Running multiple analysis specifications over the same data is a core
-workflow for sensitivity analyses — comparing different grace periods,
-interval lengths, variance estimators, or outcome definitions without
-re-extracting data from the CDM.
+# Introduction
 
-## Data
+In this vignette we focus on running several different analyses on several target-treatment-outcome combinations. This can be useful when we want to explore the sensitivity to analysis choices, such as the length of the grace period or the outcome model, and to include negative controls, whose estimates show the systematic error of a design and allow empirical calibration.
 
-We use the built-in sample data for illustration.  In a real study
-`createSampleCloneCensorWeightData()` is replaced by
-`getDbCloneCensorWeightData()`.
+This vignette assumes you are already familiar with the `CloneCensorWeight` package and are able to perform single studies (see the `SingleStudy` vignette). We use the same example: after a first acute myocardial infarction (AMI), start metoprolol within a grace period of $G$ days versus do not start it within $G$ days, with all-cause death within a year as the outcome. Here we compare two grace periods, $G = 1$ (start on the day of the AMI or the next day) and $G = 7$, and three outcome models, and we add 18 negative-control outcomes.
 
-```{r data}
-ccwData <- createSampleCloneCensorWeightData(n = 300, seed = 42)
+The example runs on a synthetic database: a Synthea simulation of one million persons in the OMOP Common Data Model, version 5.4. Synthea assigns treatments by rule, so the confounding in these data is artificial: the example demonstrates the software, and its results are not clinical evidence. The outputs shown were computed on `r runSummary$runDate` with `CloneCensorWeight` `r runSummary$packageVersion` (commit `r runSummary$commit`); the code that produced them is shown, but not evaluated when this vignette is built. Counts below 11 are shown as "<11".
+
+# General approach
+
+The general approach to running a set of analyses is that you specify all the function arguments of the functions you would normally call, and create sets of these function arguments. The final outcome models as well as intermediate data objects will all be saved to disk for later extraction.
+
+An analysis will be executed by calling these functions in sequence:
+
+1. `getDbCloneCensorWeightData()`
+2. `createStudyPopulation()`
+3. `createClones()`
+4. `fitCensoringModels()`
+5. `computeCensoringWeights()`
+6. `computeCovariateBalance()` (optional)
+7. `fitOutcomeModel()`
+
+When you provide several analyses to the `CloneCensorWeight` package, it will determine whether any of the analyses have anything in common, and will take advantage of this fact. For example, if we specify several analyses that only differ in the way the outcome model is fitted, then the data are extracted and the censoring models are fitted only once, and re-used in all the analyses. By default the censoring models are also shared by all outcomes: they are fitted on the study population without removing persons with a prior outcome, and their risk sets do not end at an outcome (see `refitCensoringModelsForEveryOutcome` in `createCcwAnalysesSpecifications()`).
+
+The function arguments you need to define have been divided into four groups:
+
+1. **Hypothesis of interest**: arguments that are specific to a hypothesis of interest, in the case of the clone-censor-weight method this is a combination of eligible (target) cohort, treatment, and outcome.
+2. **Analyses**: arguments that are not directly specific to a hypothesis of interest, such as the washout window, the treatment strategies and their grace periods, or the outcome model.
+3. Arguments that are the output of a previous function in the `CloneCensorWeight` package, such as the `clones` argument of the `fitCensoringModels()` function. These cannot be specified by the user.
+4. Arguments that are specific to an environment, such as the connection details for connecting to the server, and the name of the schema holding the CDM data.
+
+As in CohortMethod, the `excludedCovariateConceptIds` and `includedCovariateConceptIds` of the covariate settings can be given in groups 1 and 2, and the union of the two lists is used.
+
+# Preparation for the example
+
+We need to tell R how to connect to the server where the data are (see the `SingleStudy` vignette). In this example the Synthea database is a DuckDB file, which we attach read-only to an in-memory DuckDB database, and we pass the open connection to every function. We also tell R where to write the intermediate and result files (`folder`):
+
+```{r eval=FALSE}
+library(CloneCensorWeight)
+library(dplyr)
+folder <- "s:/temp/ccwVignette2"
+connection <- DatabaseConnector::connect(dbms = "duckdb", server = ":memory:")
+DatabaseConnector::executeSql(connection, "ATTACH 'synthetic.duckdb' AS syn (READ_ONLY);")
+cdmDatabaseSchema <- "syn.main"
+cohortDatabaseSchema <- "main"
+cohortTable <- "ccw_cohorts"
 ```
 
-## Defining multiple analysis specifications
+## Choosing a design
 
-Each `CcwAnalysis` object captures every analytical choice: arm strategy,
-interval length, IPCW settings, and outcome model.  Here we define three
-analyses varying the grace period.
+The design must allow every eligible person to follow either strategy (positivity), so that the weights stay bounded. Before running many analyses, it is worth checking this with the diagnostics of the `SingleStudy` vignette on one analysis. In this database, for example, a design of starting simvastatin within 30 or 90 days of a first diagnosis of hyperlipidemia fails: the subtype of the first diagnosis decides the treatment almost deterministically (98% of persons whose first diagnosis is "Hyperlipidemia" start within 30 days, and 2% of those whose first diagnosis is "Hypertriglyceridemia"), so the censoring models predict probabilities of starting near 0 and 1, and the binary model stops with CohortMethod's high-correlation error.
 
-```{r specs}
-makeAnalysis <- function(id, gracePeriod) {
+The AMI design passes. With covariates measured up to the day before the AMI, the predicted probability of starting metoprolol by the end of the grace period ranges from about 0.4 to 0.9 for $G = 1$ and from 0.5 to 0.95 for $G = 7$, no person has a probability below 0.01 of following either strategy, the 99th-percentile caps of the weights are below 1.5 (stabilized), and the largest standardized difference of means after weighting is below 0.1. The results below repeat these diagnostics for every analysis.
+
+## Preparing the cohorts
+
+We use the eligible, treatment and outcome cohorts of the `SingleStudy` vignette (cohort IDs 1, 2 and 3: first AMI, metoprolol eras, and death): the code below needs the `cohortDefinitionSet` created there with `Capr`.
+
+In addition to the outcome of interest, we want to include a set of negative-control outcomes: outcomes that metoprolol is not believed to cause or prevent, so that the true hazard ratio and risk ratio are 1. Their estimates show the systematic error of the design. Here we choose 18 conditions (infections, injuries and colon polyps) from the concepts whose first occurrence falls within a year after a first AMI in at least 20 persons, counting the concept itself (not its descendants) among all persons with a first AMI and a year of prior observation, before the treatment exclusions of the eligible cohort. Some are rare in the eligible cohort: with $G = 7$, fewer than 11 clones of the strategy of not starting have a fracture of the ankle, a fracture of the clavicle or a facial laceration, so their estimates are imprecise. For simplicity we define each negative control as a concept and all of its descendants. Because the descendants count, no negative control should contain another, whose estimates would then not be independent: we left out "Sinusitis" and "Laceration - injury", which contain viral and bacterial sinusitis and three of the lacerations. We generate the cohorts with `CohortGenerator`. We call its functions with the `CohortGenerator::` prefix rather than attaching the package, because `CohortGenerator` also exports `createResultsDataModel()`, `uploadResults()`, `migrateDataModel()`, `getDataMigrator()` and `getResultsDataModelSpecifications()`, which would mask those of `CloneCensorWeight` used at the end of this vignette:
+
+```{r eval=FALSE}
+negativeControlConceptIds <- c(
+  "Viral sinusitis" = 40481087,
+  "Acute viral pharyngitis" = 4112343,
+  "Acute bronchitis" = 260139,
+  "Polyp of colon" = 4285898,
+  "Streptococcal sore throat" = 28060,
+  "Sprain of ankle" = 81151,
+  "COVID-19" = 37311061,
+  "Concussion injury of brain" = 4001336,
+  "Recurrent rectal polyp" = 37017023,
+  "Fracture of forearm" = 4278672,
+  "Acute bacterial sinusitis" = 4294548,
+  "Injury of neck" = 24818,
+  "Fracture of ankle" = 4059173,
+  "Fracture of clavicle" = 4237458,
+  "Laceration of foot" = 4109685,
+  "Laceration of hand" = 4113008,
+  "Sprain of wrist" = 78272,
+  "Facial laceration" = 4156265
+)
+negativeControlCohorts <- tibble(
+  cohortId = 100 + seq_along(negativeControlConceptIds),
+  cohortName = names(negativeControlConceptIds),
+  outcomeConceptId = unname(negativeControlConceptIds)
+)
+
+cohortTableNames <- CohortGenerator::getCohortTableNames(cohortTable = cohortTable)
+CohortGenerator::createCohortTables(
+  connection = connection,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTableNames = cohortTableNames
+)
+CohortGenerator::generateCohortSet(
+  connection = connection,
+  cdmDatabaseSchema = cdmDatabaseSchema,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTableNames = cohortTableNames,
+  cohortDefinitionSet = cohortDefinitionSet
+)
+CohortGenerator::generateNegativeControlOutcomeCohorts(
+  connection = connection,
+  cdmDatabaseSchema = cdmDatabaseSchema,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTableNames = cohortTableNames,
+  negativeControlOutcomeCohortSet = negativeControlCohorts,
+  detectOnDescendants = TRUE
+)
+CohortGenerator::getCohortCounts(
+  connection = connection,
+  cohortDatabaseSchema = cohortDatabaseSchema,
+  cohortTable = cohortTable
+)
+```
+```{r echo=FALSE}
+cohortCounts <- load("cohortCounts")
+cohortCounts$cohortEntries <- showCounts(cohortCounts$cohortEntries)
+cohortCounts$cohortSubjects <- showCounts(cohortCounts$cohortSubjects)
+knitr::kable(cohortCounts, align = "llrr")
+```
+
+# Specifying hypotheses of interest
+
+The first group of arguments define the eligible (target) cohort, the treatment cohort, and the outcomes. Here we demonstrate how to create one set, and add that set to a list:
+
+```{r eval=FALSE}
+outcomeOfInterest <- CohortMethod::createOutcome(outcomeId = 3, outcomeOfInterest = TRUE)
+negativeControlOutcomes <- lapply(
+  negativeControlCohorts$cohortId,
+  function(outcomeId) {
+    CohortMethod::createOutcome(
+      outcomeId = outcomeId,
+      outcomeOfInterest = FALSE,
+      trueEffectSize = 1
+    )
+  }
+)
+ttos <- createTargetTreatmentOutcomes(
+  targetId = 1,
+  treatmentId = 2,
+  outcomes = append(list(outcomeOfInterest), negativeControlOutcomes),
+  excludedCovariateConceptIds = 1307046
+)
+targetTreatmentOutcomesList <- list(ttos)
+```
+
+We first define the outcome of interest (death, cohort ID 3), explicitly stating this is an outcome of interest (`outcomeOfInterest = TRUE`), meaning we want the full set of artifacts generated for this outcome. We then create the negative control outcomes. Because we specify `outcomeOfInterest = FALSE`, fewer artifacts are saved for them (for example their study populations are not saved). By specifying `trueEffectSize = 1`, we state that their true effect size is 1, which is used for empirical calibration. Metoprolol (concept 1307046) and its descendants are excluded from the covariates.
+
+A convenient way to save `targetTreatmentOutcomesList` to file is by using the `saveTargetTreatmentOutcomesList()` function, and we can load it again using the `loadTargetTreatmentOutcomesList()` function.
+
+# Specifying analyses
+
+The second group of arguments are not specific to a hypothesis of interest, and comprise the majority of arguments. They are created by the `create...Args()` functions, one for each function of the single-study pipeline. Here the extraction, study population, censoring models, weights and covariate balance are the same in all analyses:
+
+```{r eval=FALSE}
+covariateSettings <- FeatureExtraction::createDefaultCovariateSettings(
+  addDescendantsToExclude = TRUE
+)
+covariateSettings$endDays <- -1
+
+getDbArgs <- createGetDbCloneCensorWeightDataArgs(
+  washoutPeriod = 365,
+  firstOnly = TRUE,
+  priorUseLookback = 99999,
+  removeSubjectsWithPriorTreatment = TRUE,
+  covariateSettings = covariateSettings
+)
+createStudyPopArgs <- CohortMethod::createCreateStudyPopulationArgs(
+  removeSubjectsWithPriorOutcome = TRUE,
+  minDaysAtRisk = 1,
+  riskWindowStart = 0,
+  startAnchor = "cohort start",
+  riskWindowEnd = 365,
+  endAnchor = "cohort start"
+)
+fitCensoringModelsArgs <- createFitCensoringModelsArgs()
+computeWeightsArgs <- createComputeWeightsArgs()
+computeCovariateBalanceArgs <- CohortMethod::createComputeCovariateBalanceArgs()
+```
+
+Note that, when calling `createDefaultCovariateSettings()`, we do not specify the covariates to exclude. When running the analyses, `CloneCensorWeight` will automatically add the `excludedCovariateConceptIds` specified earlier when calling `createTargetTreatmentOutcomes()`. The covariate windows end on the day before the AMI (`endDays = -1`), because records made on the AMI day can follow the treatment decision.
+
+The analyses differ in the grace period of the two strategies, and in the outcome model. Each strategy has an ID, which identifies it in the results:
+
+```{r eval=FALSE}
+createClonesArgsG1 <- createCreateClonesArgs(
+  strategies = list(
+    createTreatmentStrategy(1, "Metoprolol within 1 day", "initiateWithin", graceEnd = 1),
+    createTreatmentStrategy(2, "No metoprolol within 1 day", "notInitiateWithin", graceEnd = 1)
+  ),
+  competingEvents = "none"
+)
+createClonesArgsG7 <- createCreateClonesArgs(
+  strategies = list(
+    createTreatmentStrategy(3, "Metoprolol within 7 days", "initiateWithin", graceEnd = 7),
+    createTreatmentStrategy(4, "No metoprolol within 7 days", "notInitiateWithin", graceEnd = 7)
+  ),
+  competingEvents = "none"
+)
+```
+
+We compare three outcome models:
+
+- `"cox"` (the default): the hazard ratio of a weighted Cox model, reported with the weighted Kaplan-Meier risks, risk differences and risk ratios;
+- `"logistic"`: a weighted pooled logistic model of the daily hazard of the outcome. Under a grace period the hazards of the two strategies can change abruptly at its end, which a smooth function of time cannot follow. So we use an indicator (piecewise constant) time basis on daily intervals, with strategy-by-time interactions. The intervals must be daily: the strategy of not starting censors its clones on the day of a start, on any day of the grace period, and with longer intervals a clone censored inside an interval would count as at risk for the whole interval, while the clones that remain carry the weights that make up for it (`fitOutcomeModel()` warns about this). On daily intervals its risks reproduce the weighted Kaplan-Meier risks. It also reports the odds ratio of the first interval (`"or"`), here day 0;
+- `"km"`: the weighted Kaplan-Meier risks only.
+
+```{r eval=FALSE}
+fitOutcomeModelArgsCox <- createFitOutcomeModelArgs(modelType = "cox", horizons = 365)
+fitOutcomeModelArgsLogistic <- createFitOutcomeModelArgs(
+  modelType = "logistic",
+  horizons = 365,
+  timeBasis = createTimeBasis(type = "indicator", intervalLength = 1),
+  armByTimeInteraction = TRUE
+)
+fitOutcomeModelArgsKm <- createFitOutcomeModelArgs(modelType = "km", horizons = 365)
+```
+
+Any argument that is not explicitly specified by the user will assume the default value specified in the function. We can now combine the arguments for the various functions into analyses:
+
+```{r eval=FALSE}
+createAnalysis <- function(analysisId, description, createClonesArgs, fitOutcomeModelArgs) {
   createCcwAnalysis(
-    analysisId = id,
-    description = paste("Grace period:", gracePeriod, "days"),
-    createStudyPopulationArgs = createCreateStudyPopulationArgs(
-      riskWindowEnd  = 365,
-      endAnchor      = "cohort start",
-      removeSubjectsWithPriorOutcome = FALSE
-    ),
-    createClonesAndCensorArgs = createCreateClonesAndCensorArgs(
-      arms = list(
-        createArmDefinition("initiate", "initiateWithin", gracePeriod = gracePeriod),
-        createArmDefinition("never",    "deferBeyond",    gracePeriod = gracePeriod)
-      ),
-      intervalLength = 30
-    ),
-    createCensoringWeightsArgs = createCreateCensoringWeightsArgs(),
-    fitOutcomeModelArgs        = createFitOutcomeModelArgs("cox", "robust")
+    analysisId = analysisId,
+    description = description,
+    getDbCloneCensorWeightDataArgs = getDbArgs,
+    createStudyPopulationArgs = createStudyPopArgs,
+    createClonesArgs = createClonesArgs,
+    fitCensoringModelsArgs = fitCensoringModelsArgs,
+    computeWeightsArgs = computeWeightsArgs,
+    computeCovariateBalanceArgs = computeCovariateBalanceArgs,
+    fitOutcomeModelArgs = fitOutcomeModelArgs
   )
 }
-
-analysisList <- list(
-  makeAnalysis("gp30",  gracePeriod = 30),
-  makeAnalysis("gp60",  gracePeriod = 60),
-  makeAnalysis("gp90",  gracePeriod = 90)
+ccwAnalysisList <- list(
+  createAnalysis(1, "Grace period 1 day, Cox", createClonesArgsG1, fitOutcomeModelArgsCox),
+  createAnalysis(2, "Grace period 1 day, pooled logistic", createClonesArgsG1, fitOutcomeModelArgsLogistic),
+  createAnalysis(3, "Grace period 1 day, Kaplan-Meier", createClonesArgsG1, fitOutcomeModelArgsKm),
+  createAnalysis(4, "Grace period 7 days, Cox", createClonesArgsG7, fitOutcomeModelArgsCox),
+  createAnalysis(5, "Grace period 7 days, pooled logistic", createClonesArgsG7, fitOutcomeModelArgsLogistic),
+  createAnalysis(6, "Grace period 7 days, Kaplan-Meier", createClonesArgsG7, fitOutcomeModelArgsKm)
 )
 ```
 
-The `TargetComparatorOutcome` object links the analysis to cohort IDs.
-For the sample data all subjects share `indexCohortId = 1`.
+A convenient way to save `ccwAnalysisList` to file is by using the `saveCcwAnalysisList()` function, and we can load it again using the `loadCcwAnalysisList()` function.
 
-```{r tao}
-tao <- createTargetComparatorOutcome(
-  indexCohortId      = 1L,
-  targetCohortId     = 1L,
-  comparatorCohortId = 1L,
-  outcomeIds         = c(1L)
+# Executing multiple analyses
+
+We can now run the analyses against the hypotheses of interest using the `runCcwAnalyses()` function. This function will run all specified analyses against all hypotheses of interest, meaning that the total number of outcome models is `length(ccwAnalysisList) * ` the number of outcomes, here `r runSummary$analyses` × `r runSummary$outcomes` = `r runSummary$outcomeModels`.
+
+```{r eval=FALSE}
+multiThreadingSettings <- createDefaultCcwMultiThreadingSettings(parallel::detectCores())
+
+specifications <- createCcwAnalysesSpecifications(
+  ccwAnalysisList = ccwAnalysisList,
+  targetTreatmentOutcomesList = targetTreatmentOutcomesList
 )
-
-specs <- createCcwAnalysesSpecifications(
-  ccwAnalysisList      = analysisList,
-  targetArmOutcomeList = list(tao)
+result <- runCcwAnalyses(
+  connection = connection,
+  cdmDatabaseSchema = cdmDatabaseSchema,
+  exposureDatabaseSchema = cohortDatabaseSchema,
+  exposureTable = cohortTable,
+  outcomeDatabaseSchema = cohortDatabaseSchema,
+  outcomeTable = cohortTable,
+  outputFolder = folder,
+  multiThreadingSettings = multiThreadingSettings,
+  ccwAnalysesSpecifications = specifications
 )
 ```
 
-## Running all analyses
+In the code above, we first specify how many parallel threads `CloneCensorWeight` can use. Many of the computations can be computed in parallel, and providing more than one CPU core can greatly speed up the computation. Here we specify `CloneCensorWeight` can use all the CPU cores detected in the system (using the `parallel::detectCores()` function). `createCcwMultiThreadingSettings()` sets the threads of each stage separately. On this database, with 4 cores, the run took `r round(runSummary$timingsSeconds[["runCcwAnalyses"]] / 60)` minutes (a single run on a shared machine, not a benchmark).
 
-`runCcwAnalysesOnData()` iterates over every combination of
-`TargetComparatorOutcome` × `CcwAnalysis` × outcome and appends results to CSV
-files in `outputFolder`.  Resume logic means a partially-completed run can
-be restarted without re-doing finished analyses.
+We call `runCcwAnalyses()`, providing the arguments for connecting to the database, which schemas and tables to use, as well as the analyses and hypotheses of interest. The `folder` specifies where the outcome models and intermediate files will be written. Because the analyses share their extraction, and analyses with the same grace period share their censoring models, the run computes far fewer files than it has analyses:
 
-```{r run, warning=FALSE}
-outputFolder <- tempfile("ccw_multi_")
-suppressWarnings(
-  runCcwAnalysesOnData(
-    data                      = ccwData,
-    ccwAnalysesSpecifications = specs,
-    outputFolder              = outputFolder,
-    databaseId                = "sample"
-  )
+```{r echo=FALSE}
+knitr::kable(load("sharedFiles"), col.names = c("Stage", "Files"))
+```
+
+## Restarting
+
+If for some reason the execution was interrupted, you can restart by re-issuing the `runCcwAnalyses()` command. Any intermediate and final products that have already been completed and written to disk will be skipped.
+
+# Retrieving the results
+
+The result of `runCcwAnalyses()` is a data frame with one row per target-treatment-outcome-analysis combination. It provides the file names of the intermediate and end-result files that were constructed. For example, for the outcome of interest:
+
+```{r eval=FALSE}
+result |>
+  filter(outcomeId == 3) |>
+  select(analysisId, ccwDataFile, censoringModelFile, balanceFile, outcomeModelFile)
+```
+```{r echo=FALSE}
+knitr::kable(load("fileReference") |> select(analysisId, ccwDataFile, censoringModelFile, balanceFile, outcomeModelFile))
+```
+
+Analyses 1 to 3 share their censoring models and covariate balance, as do analyses 4 to 6. We can always retrieve the file reference table again using the `getFileReference()` function:
+
+```{r eval=FALSE}
+result <- getFileReference(folder)
+```
+
+We can get a summary of the results using `getResultsSummary()`. It has one row per analysis, target-treatment-outcome combination and estimand, with the estimate, its confidence interval and p-value, the calibrated estimate, and the numbers of persons, clones and outcomes per strategy:
+
+```{r eval=FALSE}
+resultsSum <- getResultsSummary(folder)
+resultsSum |>
+  filter(outcomeId == 3)
+```
+```{r echo=FALSE}
+results <- load("outcomeOfInterestResults")
+results |>
+  mutate(
+    targetOutcomes = showCounts(targetOutcomes),
+    comparatorOutcomes = showCounts(comparatorOutcomes),
+    `estimate (95% CI)` = sprintf("%.4f (%.4f to %.4f)", estimate, ci95Lb, ci95Ub),
+    `calibrated (95% CI)` = ifelse(is.na(calibratedRr), "", sprintf("%.3f (%.3f to %.3f)", calibratedRr, calibratedCi95Lb, calibratedCi95Ub))
+  ) |>
+  select(analysisId, estimand, targetOutcomes, comparatorOutcomes, `estimate (95% CI)`, `calibrated (95% CI)`) |>
+  knitr::kable(align = "rlrrrr")
+```
+
+The estimand names give the horizon in days: `risk_target_365` and `risk_comparator_365` are the risks of death within 365 days under the two strategies, `rd_365` their difference and `rr_365` their ratio, `rmst_365` the difference in restricted mean survival time, `hr` the hazard ratio, and `or` the odds ratio of the first interval of the pooled logistic model. With $G = 1$, the strategies compare starting metoprolol on the AMI day or the next with not starting it by then; with $G = 7$, starting within a week with not starting within a week. In these synthetic data, all six analyses estimate a hazard ratio and a 365-day risk ratio close to 1, with both grace periods. The three outcome models agree on the risks: on daily intervals, the pooled logistic model with an indicator time basis and strategy-by-time interactions reproduces the weighted Kaplan-Meier risks, and the `"cox"` and `"km"` analyses report the same Kaplan-Meier risks.
+
+The `or` of death is `NA`. Its first interval is day 0, when the clones of both strategies are the same persons with the same weights (a person who starts on day 0 is still followed on that day under the strategy of not starting), and nobody dies on day 0 (or day 1) in these data, so there is no odds ratio to estimate. For an outcome that does occur on day 0, the `or` is 1 by design, with a standard error of 0 up to rounding. The `or` is not a summary of the effect over follow-up (see `createFitOutcomeModelArgs()`); the 365-day risk ratio is.
+
+## Diagnostics
+
+`CloneCensorWeight` will have automatically executed a set of diagnostics for each analysis and target-treatment-outcome combination:
+
+- **Balance**: Pass if the absolute standardized difference of means of all covariates, between the weighted clones of the two strategies under follow-up at the end of the grace periods, is smaller than 0.1.
+- **Positivity**: Pass if every person's predicted probability of following each strategy is at least 0.01.
+- **Weights**: Pass if the largest weight is smaller than 100, and if the effective sample size of each strategy is at least 10% of its number of clones.
+- **Systematic error**: Pass if the expected absolute systematic error (EASE) of the negative controls is smaller than 0.25.
+- **Power**: Pass if the minimum detectable relative risk (MDRR) is smaller than 10.
+
+These diagnostics rely on thresholds that can be specified using `createCcwDiagnosticThresholds()`, which can be used in `createCcwAnalysesSpecifications()`. We can retrieve the diagnostics:
+
+```{r eval=FALSE}
+diagnostics <- getDiagnosticsSummary(folder)
+diagnostics |>
+  filter(outcomeId == 3)
+```
+```{r echo=FALSE}
+diagnostics <- load("diagnosticsSummary")
+diagnostics |>
+  filter(outcomeId == 3) |>
+  select(analysisId, maxSdm, balanceDiagnostic, positivity, positivityDiagnostic, maxWeight,
+         maxWeightDiagnostic, essFraction, essFractionDiagnostic, ease, easeDiagnostic, mdrr,
+         mdrrDiagnostic, unblind) |>
+  knitr::kable(digits = 3)
+```
+
+The `unblind` column tells us whether we have passed all diagnostics. We can see for how many target-treatment-outcomes we pass the diagnostics per analysis:
+
+```{r eval=FALSE}
+diagnostics |>
+  group_by(analysisId) |>
+  summarise(passing = sum(unblind))
+```
+```{r echo=FALSE}
+diagnostics |>
+  group_by(analysisId) |>
+  summarise(passing = sum(unblind), .groups = "drop") |>
+  knitr::kable()
+```
+
+Every analysis passes all diagnostics, for the outcome of interest and for the negative controls. The diagnostics summary takes the largest EASE over the calibrated estimands of an analysis, here the hazard ratio and the 365-day risk ratio, whose EASE is about 0.05 to 0.06 for both grace periods. The odds ratio of the first interval (`or`) of the pooled logistic analyses is not calibrated: it is `NA` for the negative controls with no outcome on day 0, and 1 by design, with a standard error of 0 up to rounding, for the others, which leaves fewer than 5 negative controls that can calibrate it.
+
+## Empirical calibration and negative control distribution
+
+The estimates of the negative controls show the systematic error of the design. For the hazard ratio of each grace period (analyses 1 and 4), we can plot them, together with the estimate for the outcome of interest:
+
+```{r eval=FALSE}
+ncs <- resultsSum |>
+  filter(analysisId == 4, estimand == "hr", outcomeId != 3)
+oi <- resultsSum |>
+  filter(analysisId == 4, estimand == "hr", outcomeId == 3)
+EmpiricalCalibration::plotCalibrationEffect(
+  logRrNegatives = ncs$logRr,
+  seLogRrNegatives = ncs$seLogRr,
+  logRrPositives = oi$logRr,
+  seLogRrPositives = oi$seLogRr,
+  showCis = TRUE
 )
-list.files(outputFolder)
+```
+```{r echo=FALSE, out.width="80%"}
+knitr::include_graphics(file.path(dataFolder, "calibrationEffectHr_a4.png"))
 ```
 
-## Reading back results
+Each ratio estimand (the hazard ratio, the risk ratios, and the first-interval odds ratio) is calibrated separately per analysis, using the negative controls whose diagnostics allow it and that have a positive standard error, when there are at least 5 of them: the `calibrated*` columns of the results summary hold the calibrated estimates, confidence intervals and p-values, and `ease` in the diagnostics summary the expected absolute systematic error. The empirical null distribution is fitted by Markov chain Monte Carlo (`EmpiricalCalibration::fitMcmcNull()`) for each analysis and estimand, without a fixed seed, so analyses with the same estimates (the 365-day risk ratios of analyses 1, 2 and 3, for example) can show slightly different calibrated intervals, and a rerun can change the calibrated values in the third decimal. The hazard ratios of the negative controls, and their calibration:
 
-```{r read}
-results <- importFromCsv(outputFolder)
-names(results)
+```{r echo=FALSE}
+ratioResults <- load("ratioResults")
+ratioResults |>
+  filter(estimand == "hr") |>
+  mutate(
+    targetOutcomes = showCounts(targetOutcomes),
+    comparatorOutcomes = showCounts(comparatorOutcomes),
+    `HR (95% CI)` = sprintf("%.2f (%.2f to %.2f)", estimate, ci95Lb, ci95Ub),
+    `calibrated HR (95% CI)` = sprintf("%.2f (%.2f to %.2f)", calibratedRr, calibratedCi95Lb, calibratedCi95Ub)
+  ) |>
+  select(analysisId, outcomeId, targetOutcomes, comparatorOutcomes, `HR (95% CI)`, `calibrated HR (95% CI)`) |>
+  knitr::kable(align = "rrrrrr")
 ```
 
-The outcome model table has one row per analysis × outcome combination.
+# Exporting to CSV
 
-```{r om-table}
-om <- results$ccw_outcome_model
-om[, c("analysis_id", "model_type", "estimate", "lower_95", "upper_95", "p_value")]
+The results generated so far all reside in binary objects on your local file system, mixing aggregate statistics such as hazard ratios with patient-level data such as the clones and their weights. How could we share our results with others, possibly outside our organization? This is where the `exportToCsv()` function comes in. This function exports all results, including diagnostics, to CSV (comma-separated values) files. These files only contain aggregate statistics, not patient-level data. The format is the results data model described in the `ResultsSchema` vignette, and the files are added to a zip file:
+
+```{r eval=FALSE}
+zipFile <- exportToCsv(
+  folder,
+  exportFolder = file.path(folder, "export"),
+  databaseId = "Synthea",
+  minCellCount = 11
+)
 ```
 
-## Comparing estimates across grace periods
+Any person counts in the results that are smaller than the `minCellCount` argument will be blinded, by replacing the count with the negative `minCellCount`. For example, if the number of people with the outcome is 3, and `minCellCount = 11`, the count will be reported to be -11, which a viewer can display as '<11'.
 
-```{r compare}
-om$gracePeriod <- sub("gp", "", sub("_.*", "", om$analysis_id))
-om$gracePeriod <- factor(om$gracePeriod, levels = c("30", "60", "90"))
-om[order(om$gracePeriod), c("gracePeriod", "estimate", "lower_95", "upper_95")]
+Information on the data model used to generate the CSV files can be retrieved using `getResultsDataModelSpecifications()`:
+
+```{r}
+getResultsDataModelSpecifications() |>
+  distinct(tableName)
 ```
 
-## Serialising the specification
+# Uploading the results to a database
 
-The full specification can be written to JSON for sharing or version control.
+The zip file can be uploaded to a results database, for example to combine the results of several databases. `createResultsDataModel()` creates the tables, and `uploadResults()` uploads the zip file. Here we use a SQLite database:
 
-```{r save-load}
-analysisFile <- tempfile(fileext = ".json")
-saveCcwAnalysisList(analysisList, analysisFile)
-
-reloaded <- loadCcwAnalysisList(analysisFile)
-vapply(reloaded, function(a) a$analysisId, character(1))
+```{r eval=FALSE}
+resultsConnectionDetails <- DatabaseConnector::createConnectionDetails(
+  dbms = "sqlite",
+  server = file.path(folder, "results.sqlite")
+)
+createResultsDataModel(resultsConnectionDetails, databaseSchema = "main")
+uploadResults(
+  connectionDetails = resultsConnectionDetails,
+  schema = "main",
+  zipFileName = zipFile,
+  purgeSiteDataBeforeUploading = FALSE
+)
 ```
 
-```{r cleanup, include=FALSE}
-unlink(outputFolder, recursive = TRUE)
-unlink(analysisFile)
+The number of rows in each table after the upload:
+
+```{r echo=FALSE}
+knitr::kable(load("uploadCounts"), col.names = c("Table", "Rows"), format.args = list(big.mark = ","))
+```
+
+The results can then be queried with SQL, for example the hazard ratios of the outcome of interest:
+
+```{r eval=FALSE}
+resultsConnection <- DatabaseConnector::connect(resultsConnectionDetails)
+DatabaseConnector::querySql(resultsConnection, "
+  SELECT analysis_id, estimand, estimate, ci_95_lb, ci_95_ub,
+    calibrated_rr, calibrated_ci_95_lb, calibrated_ci_95_ub
+  FROM main.ccw_result
+  WHERE outcome_id = 3 AND estimand = 'hr'
+  ORDER BY analysis_id;", snakeCaseToCamelCase = TRUE)
+DatabaseConnector::disconnect(resultsConnection)
+```
+```{r echo=FALSE}
+knitr::kable(load("exampleQuery"), digits = 3)
+```
+
+# Acknowledgments
+
+Considerable work has been dedicated to provide the `CloneCensorWeight` package.
+
+```{r eval=TRUE}
+citation("CloneCensorWeight")
+```
+
+Further, `CloneCensorWeight` makes extensive use of the `Cyclops` and `CohortMethod` packages.
+
+```{r eval=TRUE}
+citation("Cyclops")
 ```

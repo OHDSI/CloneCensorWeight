@@ -7,3 +7,7 @@
 .DS_Store
 cohortmethod-reference/
 docs/
+extras
+vignettes/*.html
+vignettes/*-woven*
+.claude/

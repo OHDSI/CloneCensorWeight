@@ -2,30 +2,89 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{createCcwAnalysesSpecifications}
 \alias{createCcwAnalysesSpecifications}
-\title{Create a CCW analyses specifications object}
+\title{Create full clone-censor-weight analysis specifications}
 \usage{
-createCcwAnalysesSpecifications(ccwAnalysisList, targetComparatorOutcomeList)
+createCcwAnalysesSpecifications(
+  ccwAnalysisList,
+  targetTreatmentOutcomesList,
+  analysesToExclude = NULL,
+  refitCensoringModelsForEveryOutcome = FALSE,
+  ccwDiagnosticThresholds = createCcwDiagnosticThresholds(),
+  calibrationSeed = 1
+)
 }
 \arguments{
-\item{ccwAnalysisList}{A list of \code{CcwAnalysis} objects.}
+\item{ccwAnalysisList}{A list of objects of type \code{CcwAnalysis} as created using
+\code{\link[=createCcwAnalysis]{createCcwAnalysis()}}.}
 
-\item{targetComparatorOutcomeList}{A list of \code{TargetComparatorOutcome} objects.}
+\item{targetTreatmentOutcomesList}{A list of objects of type \code{TargetTreatmentOutcomes} as
+created using \code{\link[=createTargetTreatmentOutcomes]{createTargetTreatmentOutcomes()}}.}
+
+\item{analysesToExclude}{Analyses to exclude. See the Analyses to Exclude section
+for details.}
+
+\item{refitCensoringModelsForEveryOutcome}{Should the censoring models be fitted for every outcome,
+on the clones of that outcome's study population (whose
+risk sets end at the outcome)? If \code{FALSE}, the models are
+fitted once, on the study population without an outcome
+(no persons with a prior outcome removed, risk sets that
+do not end at an outcome), and shared across outcomes. See
+\code{\link[=runCcwAnalyses]{runCcwAnalyses()}}.}
+
+\item{ccwDiagnosticThresholds}{An object of type \code{CcwDiagnosticThresholds} as created
+using \code{\link[=createCcwDiagnosticThresholds]{createCcwDiagnosticThresholds()}}.}
+
+\item{calibrationSeed}{The random seed of the empirical calibration: the null
+distribution of each calibration group is fitted by
+\code{\link[EmpiricalCalibration:fitMcmcNull]{EmpiricalCalibration::fitMcmcNull()}}, an MCMC, with this
+seed and R's default random number kinds (whatever the
+caller's \code{\link[=RNGkind]{RNGkind()}}), so that calibrated p-values and
+confidence intervals are the same from run to run (and for
+any number of calibration threads). The random number
+stream of the caller is restored afterwards. \code{NULL} runs
+the MCMC unseeded, on the current random number stream, as
+CohortMethod does. Specifications saved without it (by an
+earlier version) load with \code{NULL}. A change of it alone
+makes \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} recompute only the summaries.}
 }
 \value{
-A \code{CcwAnalysesSpecifications} object.
+An object of type \code{CcwAnalysesSpecifications}.
 }
 \description{
-Combines a list of \code{\link[=createCcwAnalysis]{createCcwAnalysis()}} objects and a list of
-\code{\link[=createTargetComparatorOutcome]{createTargetComparatorOutcome()}} objects into a top-level specification that
-can be passed to \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} or serialized for a Strategus module.
+Create full clone-censor-weight analysis specifications
+}
+\details{
+\subsection{Analyses to Exclude}{
+
+\code{\link[=runCcwAnalyses]{runCcwAnalyses()}} runs all combinations of target-treatment-outcomes and analyses. The
+\code{analysesToExclude} argument removes some of them. It is a data frame with at least one of the
+columns \code{targetId}, \code{treatmentId}, \code{comparatorTreatmentId}, \code{outcomeId}, and \code{analysisId}. Rows of
+the reference table that match a row of \code{analysesToExclude} are skipped.
+}
 }
 \examples{
-\dontrun{
-specs <- createCcwAnalysesSpecifications(
-  ccwAnalysisList      = list(analysis1, analysis2),
-  targetComparatorOutcomeList = list(tao1)
+analysis <- createCcwAnalysis(
+  analysisId = 1,
+  getDbCloneCensorWeightDataArgs = createGetDbCloneCensorWeightDataArgs(),
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(),
+  createClonesArgs = createCreateClonesArgs(
+    strategies = list(
+      createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+      createTreatmentStrategy(2, "Never initiate", "neverInitiate")
+    )
+  ),
+  fitCensoringModelsArgs = createFitCensoringModelsArgs(),
+  computeWeightsArgs = createComputeWeightsArgs(),
+  fitOutcomeModelArgs = createFitOutcomeModelArgs()
 )
-specs$toJson()
-}
+tto <- createTargetTreatmentOutcomes(
+  targetId = 1,
+  treatmentId = 2,
+  outcomes = list(CohortMethod::createOutcome(outcomeId = 3))
+)
+specifications <- createCcwAnalysesSpecifications(
+  ccwAnalysisList = list(analysis),
+  targetTreatmentOutcomesList = list(tto)
+)
 
 }

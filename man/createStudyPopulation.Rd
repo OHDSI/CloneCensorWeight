@@ -2,44 +2,77 @@
 % Please edit documentation in R/StudyPopulation.R
 \name{createStudyPopulation}
 \alias{createStudyPopulation}
-\title{Apply study population inclusion/exclusion criteria}
+\title{Create a study population}
 \usage{
 createStudyPopulation(
   cloneCensorWeightData,
+  population = NULL,
   outcomeId,
-  createStudyPopulationArgs
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs()
 )
 }
 \arguments{
-\item{cloneCensorWeightData}{A \code{CloneCensorWeightData} object, usually
-returned by \code{\link[=getDbCloneCensorWeightData]{getDbCloneCensorWeightData()}}.}
+\item{cloneCensorWeightData}{An object of type \link{CloneCensorWeightData} as generated using
+\code{getDbCloneCensorWeightData()} or \code{\link[=createCloneCensorWeightData]{createCloneCensorWeightData()}}.}
 
-\item{outcomeId}{Integer.  Outcome cohort definition identifier used to
-test for prior occurrence.}
+\item{population}{If specified, this population will be used as the starting point
+instead of the cohorts in the \code{cloneCensorWeightData} object.}
 
-\item{createStudyPopulationArgs}{A \code{CreateStudyPopulationArgs} object
-created by \code{\link[=createCreateStudyPopulationArgs]{createCreateStudyPopulationArgs()}}.}
+\item{outcomeId}{The ID of the outcome.}
+
+\item{createStudyPopulationArgs}{An object of type \code{CreateStudyPopulationArgs} as created using
+\code{\link[CohortMethod:createCreateStudyPopulationArgs]{CohortMethod::createCreateStudyPopulationArgs()}}.}
 }
 \value{
-The input object with its \code{cohorts} table filtered and an
-\code{attrition} table added.  The modified object is returned invisibly.
+A data frame with one row per person-index, as returned by \code{\link[CohortMethod:createStudyPopulation]{CohortMethod::createStudyPopulation()}}.
+Columns used downstream: \code{rowId}, \code{personSeqId}, \code{cohortStartDate}, \code{daysFromObsStart},
+\code{daysToCohortEnd}, \code{daysToObsEnd}, \code{daysToDeath}, \code{riskStart}, \code{riskEnd}, and \code{daysToEvent}. The
+\code{metaData} attribute holds the attrition, \code{outcomeId}, and \code{nominalRiskEnd}.
 }
 \description{
-Filters a \code{CloneCensorWeightData} object to the analysis-eligible study
-population.  Filters are applied in this order:
+Create a study population
 }
 \details{
-\enumerate{
-\item \strong{Risk window}: \code{cohortStartDate} and \code{cohortEndDate} are adjusted to
-the observation window defined by \code{riskWindowStart}/\code{startAnchor} and
-\code{riskWindowEnd}/\code{endAnchor}.
-\item \strong{Prior outcome}: subjects with an occurrence of \code{outcomeId} in the
-window \verb{[cohortStartDate - priorOutcomeLookback, cohortStartDate)} are
-removed when \code{removeSubjectsWithPriorOutcome = TRUE}.
-\item \strong{Minimum days at risk}: subjects whose adjusted follow-up is shorter
-than \code{minDaysAtRisk} are removed.
-}
+Creates the study population of a clone-censor-weight analysis by calling
+\code{\link[CohortMethod:createStudyPopulation]{CohortMethod::createStudyPopulation()}} on the eligible cohort: it removes persons with a prior
+outcome, defines the risk window (\code{riskStart}, \code{riskEnd}, in days since index, with \code{riskEnd}
+capped at the end of observation), removes persons with too few days at risk, and adds the first
+outcome in the risk window (\code{daysToEvent}).
 
-The resulting attrition table is stored inside the object and can be
-retrieved with \code{\link[=getAttritionTable]{getAttritionTable()}}.
+The risk window must start relative to the cohort start (\code{startAnchor = "cohort start"}), because
+the treatment strategies are defined in days since index, and it cannot start before the index date.
+
+The rules that define the risk-window end before it is capped at the end of observation
+(\code{riskWindowEnd}, \code{endAnchor} and \code{maxDaysAtRisk}) are stored in \code{metaData$nominalRiskEnd}, so
+\code{\link[=createClones]{createClones()}} can tell a clone that reached the end of observation (\code{"observationEnd"}) from one
+that reached the end of the risk window (\code{"riskEnd"}). The outcome ID is stored in
+\code{metaData$outcomeId}.
+}
+\examples{
+data <- createCloneCensorWeightData(
+  cohorts = data.frame(
+    rowId = 1:3,
+    personSeqId = 1:3,
+    personId = c("101", "102", "103"),
+    cohortStartDate = as.Date("2020-01-01"),
+    daysFromObsStart = 400,
+    daysToCohortEnd = 0,
+    daysToObsEnd = c(365, 200, 100),
+    daysToDeath = c(NA, 150, NA)
+  ),
+  outcomes = data.frame(rowId = c(1, 3), outcomeId = 3, daysToEvent = c(50, -20)),
+  treatments = data.frame(rowId = 2, treatmentId = 21, daysToStart = 5, daysToEnd = 35),
+  metaData = list(targetId = 1, treatmentIds = c(treatment = 21))
+)
+studyPop <- createStudyPopulation(
+  cloneCensorWeightData = data,
+  outcomeId = 3,
+  createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(
+    riskWindowEnd = 180,
+    endAnchor = "cohort start"
+  )
+)
+studyPop
+close(data)
+
 }

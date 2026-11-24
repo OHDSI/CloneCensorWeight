@@ -2,37 +2,86 @@
 % Please edit documentation in R/Export.R
 \name{exportToCsv}
 \alias{exportToCsv}
-\title{Export analysis results to CSV files}
+\title{Export clone-censor-weight results to CSV files}
 \usage{
-exportToCsv(results, analysisId, exportFolder, append = FALSE)
+exportToCsv(
+  outputFolder,
+  exportFolder = file.path(outputFolder, "export"),
+  databaseId,
+  minCellCount = 5,
+  maxCores = 1
+)
 }
 \arguments{
-\item{results}{A named list of result data frames (see \code{\link[=uploadResults]{uploadResults()}}).}
+\item{outputFolder}{The folder where \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} generated all results.}
 
-\item{analysisId}{A character string that uniquely identifies this analysis
-run and is stamped onto every exported row.}
+\item{exportFolder}{The folder where the CSV files and the zip file will be written.}
 
-\item{exportFolder}{Path to the directory that will receive the CSV files.
-Created automatically if it does not exist.}
+\item{databaseId}{A unique ID for the database. It is written in the \code{database_id} column of every
+site-specific table.}
 
-\item{append}{Logical.  When \code{TRUE}, rows are appended to any existing CSV
-file of the same name (useful when accumulating results from multiple
-databases in the same folder).  When \code{FALSE} (default), existing files
-are overwritten.}
+\item{minCellCount}{To preserve privacy: the minimum count that can be included in the results. A
+count below this threshold (and above 0) is written as \code{-minCellCount}.}
+
+\item{maxCores}{How many parallel cores may be used. Kept for the arguments of CohortMethod's
+\code{exportToCsv()}; the export currently runs in one thread, because the curves
+and distributions are computed by \code{\link[=runCcwAnalyses]{runCcwAnalyses()}}.}
 }
 \value{
-Invisibly, a character vector of the file paths that were written.
+The path of the zip file, invisibly. Is called for its side effect of writing the CSV files and the
+zip file to \code{exportFolder}.
 }
 \description{
-Writes each element of a results list to a CSV file named after its
-corresponding \verb{ccw_*} results table.  An \code{analysis_id} column is stamped
-onto every row.  Files are written with column order matching the results
-data model specification so that CSVs from multiple databases can be safely
-appended and later bulk-loaded into a database.
+Export clone-censor-weight results to CSV files
 }
 \details{
-The \code{results} list accepts the same named elements as \code{\link[=uploadResults]{uploadResults()}}:
-\code{analysis}, \code{cohortDefinition}, \code{cohortCount}, \code{outcomeModel},
-\code{standardizedDifference}, \code{kaplanMeier}, \code{powerMdrr}, \code{negativeControl}.
-Unrecognised or \code{NULL} elements are silently skipped.
+This requires that \code{\link[=runCcwAnalyses]{runCcwAnalyses()}} has been executed first. It exports the results in
+\code{outputFolder} to one CSV file per table of the results data model (see
+\code{\link[=getResultsDataModelSpecifications]{getResultsDataModelSpecifications()}}), with the columns of the specification in its order, and
+adds them to \verb{Results_<databaseId>.zip} in \code{exportFolder}, for sharing with other sites and for
+\code{\link[=uploadResults]{uploadResults()}}.
+\itemize{
+\item The definition tables: \code{ccw_analysis} and \code{ccw_strategy} (the JSON of each analysis and strategy),
+\code{ccw_target_treatment} (one row per target-treatment-comparator treatment combination, whose
+\code{target_treatment_id} is a hash of the three cohort IDs, as CohortMethod's
+\code{target_comparator_id}), and \code{ccw_target_treatment_outcome}.
+\item For every analysis and target-treatment-outcome combination: \code{ccw_result} (one row per
+estimand, see \code{\link[=getResultsSummary]{getResultsSummary()}}) and \code{ccw_diagnostics_summary} (see \code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}).
+Also \code{ccw_likelihood_profile}, as CohortMethod's \code{cm_likelihood_profile}: the likelihood profile of
+the log \code{hr}, \code{shr} or \code{or} (\code{logLikelihoodProfile} of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}), with \code{log_likelihood}
+normalized to a maximum of 0 and \code{gradient} as is, also for fits that did not converge, but not for
+contrasts that are null by design (standard error 0 up to rounding: below 1e-6). No minimum cell
+count applies to it.
+With \code{varianceEstimator = "stackedSandwich"} (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), also the
+\code{varianceDiagnostics} of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}: \code{ccw_variance_diagnostics} (per estimand, keyed as
+\code{ccw_result}: the robust and stacked standard errors and their ratio) and
+\code{ccw_variance_model_diagnostics} (per strategy and censoring or numerator model). Other analyses
+have no rows in them, so the files of a site with none have only their header. No minimum cell
+count applies to them.
+\item For outcomes of interest: \code{ccw_attrition}, \code{ccw_follow_up_dist}, \code{ccw_covariate_balance} (at the
+end of the grace periods, see \code{\link[=computeCovariateBalance]{computeCovariateBalance()}}), \code{ccw_censoring_model} (the non-zero
+coefficients) and \code{ccw_censoring_model_dist} (the density of the predicted probability of
+starting the treatment, from \code{\link[=computePositivity]{computePositivity()}}), \code{ccw_weight_dist} (from
+\code{\link[=computeWeightSummary]{computeWeightSummary()}}) and \code{ccw_cumulative_incidence} (from \code{\link[=computeCumulativeIncidence]{computeCumulativeIncidence()}}).
+\item \code{ccw_covariate} and \code{ccw_covariate_analysis}: the covariates of each analysis.
+}
+
+Strategies are identified by their \code{strategyId} (see \code{\link[=createTreatmentStrategy]{createTreatmentStrategy()}}): tables per
+strategy have \code{strategy_id}, and tables that compare the two strategies of an analysis have
+\code{target_strategy_id} and \code{comparator_strategy_id}.
+
+To preserve privacy, counts in the columns flagged \code{minCellCount} in the specifications that are
+greater than 0 and smaller than \code{minCellCount} are written as \code{-minCellCount}, as in CohortMethod.
+Means of the covariate balance are censored likewise, at \code{minCellCount} divided by the number of
+clones they are computed on.
+}
+\examples{
+\dontrun{
+exportToCsv(
+  outputFolder = "output",
+  databaseId = "Eunomia",
+  minCellCount = 5
+)
+}
+
 }

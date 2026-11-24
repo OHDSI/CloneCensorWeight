@@ -2,44 +2,215 @@
 % Please edit documentation in R/SettingsObjects.R
 \name{createFitOutcomeModelArgs}
 \alias{createFitOutcomeModelArgs}
-\title{Create outcome model arguments}
+\title{Create a parameter object for fitting the outcome model}
 \usage{
 createFitOutcomeModelArgs(
   modelType = "cox",
+  horizons = c(365),
+  timeBasis = createTimeBasis(type = "naturalSpline", intervalLength = 1, df = 4),
+  armByTimeInteraction = FALSE,
+  msmWeights = "unstabilized",
   varianceEstimator = "robust",
-  nBootstraps = 200,
-  seed = 1
+  robustVarianceEngine = "cyclops",
+  fineGrayCensoring = "natural",
+  bootstrapArgs = createBootstrapArgs(),
+  useCovariates = FALSE,
+  stratified = FALSE,
+  profileGrid = NULL,
+  profileBounds = c(log(0.1), log(10)),
+  prior = Cyclops::createPrior("none"),
+  control = Cyclops::createControl(algorithm = "newton", convergenceType = "gradient",
+    tolerance = 1e-10, noiseLevel = "silent")
 )
 }
 \arguments{
-\item{modelType}{\code{"cox"} for a weighted Cox proportional hazards model, or
-\code{"logistic"} for a weighted pooled logistic model.}
+\item{modelType}{The outcome model: \code{"cox"} (the hazard ratio of a weighted Cox model,
+with the risks of \code{"km"}), \code{"logistic"} (pooled logistic), \code{"km"}
+(weighted Kaplan-Meier, or Aalen-Johansen with competing events), or
+\code{"fineGray"} (the subdistribution hazard ratio of a weighted Fine-Gray
+model, with the risks of \code{"km"}; needs competing death).}
 
-\item{varianceEstimator}{Method for computing standard errors that account
-for within-subject clone correlation:
-\itemize{
-\item \code{"robust"}: Lin-Wei-Ying sandwich estimator, clustering on subject.
-Fast and appropriate for most studies.
-\item \code{"bootstrap"}: Subject-level bootstrap. Slower but makes fewer
-distributional assumptions.
-\item \code{"conventional"}: Ignores clustering. Not recommended for publication.
-}}
+\item{horizons}{Days since index at which risks, risk differences and risk ratios are
+reported.}
 
-\item{nBootstraps}{Number of bootstrap replicates. Only used when
-\code{varianceEstimator = "bootstrap"}. Default \code{200}.}
+\item{timeBasis}{An object of type \code{TimeBasis} as created using \code{\link[=createTimeBasis]{createTimeBasis()}}, used
+by the pooled logistic model.}
 
-\item{seed}{Random seed for the bootstrap. Default \code{1}.}
+\item{armByTimeInteraction}{Add strategy-by-time interactions to the pooled logistic model? With the
+interactions, the odds ratio reported as \code{"or"} is the odds ratio where
+the time basis is 0: in the first interval for the indicator, natural
+spline, linear and raw polynomial bases (where clones of both strategies
+often have the same weights and hazards, so it is close to 1), and at no
+particular interval for an orthogonal polynomial basis. It is not a
+summary of the effect over follow-up, and it is \code{NA} when either
+strategy has no outcomes, or only outcomes, in the first interval.}
+
+\item{msmWeights}{The weights of the Cox and pooled logistic models: \code{"unstabilized"} or
+\code{"stabilized"} (see Details). The weighted Kaplan-Meier and
+Aalen-Johansen estimates (of \code{"km"}, and the rows at the horizons of
+\code{"cox"}) do not depend on it.}
+
+\item{varianceEstimator}{The variance estimator: \code{"robust"} (sandwich clustered on person, the
+default), \code{"bootstrap"} (computed by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}),
+\code{"modelBased"}, or \code{"stackedSandwich"} (the robust sandwich stacked with
+the estimating equations of the censoring models, so that it accounts
+for the estimation of the weights; \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} then needs
+\code{cloneCensorWeightData}, see its Details). \code{"stackedSandwich"} is not
+available for \code{modelType = "fineGray"}.}
+
+\item{robustVarianceEngine}{What computes the robust variance of the Cox and pooled logistic models
+(with \code{varianceEstimator = "robust"}): \code{"cyclops"} (Cyclops'
+\code{vcov(fit, type = "robust")}, fitted with the persons as subjects) or
+\code{"ccw"} (this package's own sandwich in R, the earlier behaviour). Both
+are the HC0 sandwich clustered on person and agree to rounding when the
+outcome model is converged (see Details). The standard errors of the
+Kaplan-Meier and Aalen-Johansen estimates (of \code{"km"}, and the rows at
+the horizons of \code{"cox"}) are this package's own either way.}
+
+\item{fineGrayCensoring}{The censoring survival G of \code{"fineGray"}, per strategy: \code{"natural"} (the
+default) estimates it from the clones whose follow-up ended at the end of
+observation or of the risk window, with the clones weighted by their
+weights; clones censored at a deviation from their strategy leave its risk
+set without counting as censored, because the weights already account for
+that (artificial) censoring. \code{"finegray"} estimates it as
+\code{\link[survival:finegray]{survival::finegray()}} does: unweighted, from every end that is not an
+outcome or a death, deviations included, so artificial censoring counts in
+both the weights and G; it reproduces \code{\link[survival:finegray]{survival::finegray()}} and is meant
+for comparisons. Censorings at a time follow the outcomes and deaths at
+that time.}
+
+\item{bootstrapArgs}{An object of type \code{BootstrapArgs} as created using
+\code{\link[=createBootstrapArgs]{createBootstrapArgs()}}, used by \code{\link[=bootstrapCcwAnalysis]{bootstrapCcwAnalysis()}}.}
+
+\item{useCovariates}{Add the baseline covariates to the outcome model?}
+
+\item{stratified}{Fit a stratified model?}
+
+\item{profileGrid}{A one-dimensional grid of points on the log(relative risk) scale where
+the likelihood for coefficient of variables is sampled. See details.}
+
+\item{profileBounds}{The bounds (on the log relative risk scale) for the adaptive sampling
+of the likelihood function. See details.}
+
+\item{prior}{The prior used to fit the model. See \code{\link[Cyclops:createPrior]{Cyclops::createPrior()}}. The target
+indicator, the time basis and their interactions are never regularized
+(they are added to the prior's \code{exclude}), as CohortMethod excludes the
+treatment variable. This version fits no other covariates, so the prior
+has no effect on the estimates.}
+
+\item{control}{The control object used to fit the model. See
+\code{\link[Cyclops:createControl]{Cyclops::createControl()}}.}
 }
 \value{
-A \code{FitOutcomeModelArgs} object.
+An object of type \code{FitOutcomeModelArgs}.
 }
 \description{
-Create outcome model arguments
+Create a parameter object for fitting the outcome model
+}
+\details{
+Create an object defining the parameter values for the weighted (marginal structural) outcome
+model fitted to the clones.
+
+This version requires \code{useCovariates = FALSE} and \code{stratified = FALSE}.
+
+The pooled logistic model needs weighted clones cut on its interval grid
+(\code{computeCensoringWeights(outcomeTimeBasis = timeBasis)}). Its default, daily intervals with a
+natural spline of time, uses the exact daily weights. With longer intervals, a clone whose
+follow-up ends inside an interval without the outcome (for example at the end of a grace period, or
+when it deviates) counts as at risk, without the outcome, for the whole interval, which biases that
+interval's hazard down. This bias is large when many clones end inside an interval, as at the end of
+a grace period that does not end an interval of the grid.
+
+The default \code{control} (Newton steps until the relative change of the log likelihood is below
+\code{1e-10}) fits the models to the precision of their reference implementations (\code{survival::coxph()}
+and \code{stats::glm()}), also on ill-scaled time bases, where coordinate descent stops early. The
+criterion is relative, so it is met on large data (millions of weighted rows) and on models with
+quasi-separated hazards, where a criterion on the gradient can fail to be met at the optimum. If a
+fit with \code{control} fails, \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} refits it with Cyclops' default algorithm and
+convergence criterion, with a warning.
+
+The default, \code{"cox"}, reports the hazard ratio of the weighted Cox model together with the weighted
+Kaplan-Meier (or, with competing death, Aalen-Johansen) risks, risk differences and risk ratios of
+\code{"km"} on the same weighted clones. Risks from the Cox model would assume proportional hazards,
+which a grace period violates by design: during the grace period the clones of both strategies
+follow the same course, so their true hazards are equal there. Such risks are biased, also at
+horizons within the grace period, so they are not reported. The hazard ratio is kept because
+meta-analysis and empirical calibration use it.
+
+\code{"fineGray"} (an option, not the default) needs clones created with \code{competingEvents = "death"}. It
+reports the subdistribution hazard ratio (\code{"shr"}) of a weighted Fine-Gray model: a weighted Cox
+model of the outcome in which a clone that dies stays in the risk set after its death, with its weight
+at death times G(t-) / G(T-), where T is the time of death and G the censoring survival of its
+strategy (\code{fineGrayCensoring}). Like \code{"cox"}, it reports the Aalen-Johansen risks, risk differences
+and risk ratios of \code{"km"} at the horizons, not the model-based cumulative incidence, which would
+assume proportional subdistribution hazards. Its robust variance treats the weights and G as fixed.
+
+The pooled logistic (\code{"logistic"}) risks are model-based. Without \code{armByTimeInteraction} they assume
+an odds ratio that is constant over follow-up and are biased under a grace period for the same
+reason, so use \code{armByTimeInteraction = TRUE} with a grace period. With daily intervals, an indicator
+(saturated) time basis and the interaction give the weighted Kaplan-Meier or Aalen-Johansen risks.
+A smooth time basis, such as the default natural spline, can still give biased risks with the
+interaction: each strategy's hazard can change abruptly after the grace period, when the clones of
+the two strategies start to follow different treatments, and a smooth function of time cannot follow
+that change.
+
+The Cox and pooled logistic models are fitted with the weights chosen by \code{msmWeights}, whatever
+\code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} \code{stabilized} is (\code{\link[=computeCensoringWeights]{computeCensoringWeights()}} stores what is needed to
+form both). The default is the unstabilized weights. Under a grace period the stabilization
+numerators depend on the strategy and the day: after the grace period of an \code{"initiateWithin"}
+strategy the weight is multiplied by the share of persons who started by its end, and during the
+grace period of a strategy of not initiating by the share who have not initiated yet, which falls
+from day to day. Within a strategy, all clones at risk on a day share the numerator, so it cancels
+in the weighted Kaplan-Meier and Aalen-Johansen risks. It does not cancel in the Cox partial
+likelihood, which compares the clones of both strategies in each risk set: it changes how much each
+strategy, and each period of follow-up, counts. Because a grace period makes the hazards
+non-proportional (during the grace period the clones of both strategies follow the same course),
+the hazard ratio fitted with stabilized weights is then a different average over follow-up, not the
+hazard ratio of the regimes. In a simulation with a 7-day grace period and a regime log hazard ratio
+of -0.513, the Cox model estimated a log hazard ratio of about -0.355 with stabilized weights and
+-0.516 with unstabilized weights (means over replicates). The same holds for a pooled logistic model
+whose hazards are shared across strategies or days. \code{"stabilized"} reproduces the earlier
+behaviour, which fitted these models with the stabilized weights of \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}
+\code{stabilized = TRUE}; its standard errors are usually smaller, but it estimates that other average.
+When the hazard ratio of the regimes is constant over follow-up (for example without a grace
+period, and with an effect that does not change over time), the numerators scale the events and the
+risk set of a strategy alike on each day, and both weights estimate the same hazard ratio; the
+stabilized one then usually has the smaller standard error.
+
+Truncation: with \code{truncateMsmWeights = TRUE} in \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}} (the default), the
+weights of \code{msmWeights} are truncated on their own scale with the rule of
+\code{\link[=createWeightTruncation]{createWeightTruncation()}}, whatever scale \code{stabilized} sets for the weights of
+\code{\link[=computeCensoringWeights]{computeCensoringWeights()}}. With \code{truncateMsmWeights = FALSE}, they are formed from the truncated
+weights of \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}; when the two scales differ (as with \code{stabilized = TRUE} and
+\code{msmWeights = "unstabilized"}), the cap then does not bound them, and they can be much larger,
+for example for a \code{"neverInitiate"} strategy at long horizons; see \code{\link[=createComputeWeightsArgs]{createComputeWeightsArgs()}}.
+\code{\link[=fitOutcomeModel]{fitOutcomeModel()}} reports the cap, largest weight and share truncated of the weights it used.
+
+Robust variance: with \code{robustVarianceEngine = "cyclops"} (the default), the Cox model is fitted with
+each clone's person as its Cyclops subject, and the pooled logistic models (the outcome model and,
+with competing death, the death model, stacked into one model so that their joint covariance is
+clustered on person too) are refitted, from their estimates, to one row per person,
+strategy-by-interval cell and response, per model (cells with a fixed hazard left out); the variance
+is Cyclops' \code{vcov(fit, type = "robust")}, at the estimates of that refit. \code{"ccw"} computes the same
+sandwich in R from the score residuals summed by person, at the reported estimates, without the
+refit, so it takes less time and memory for the pooled logistic models. The two agree to rounding
+when the outcome model is converged, as with the default \code{control}; with a loose convergence
+criterion the refit moves the estimates, and the two differ accordingly.
+
+For likelihood profiling, either specify \code{profileGrid} for a user-defined grid, or \code{profileBounds}
+for an adaptive grid. Both are on the log scale of the model's relative effect: the log hazard ratio
+(\code{"hr"}) of \code{"cox"}, the log subdistribution hazard ratio (\code{"shr"}) of \code{"fineGray"}, or the log odds
+ratio (\code{"or"}) of \code{"logistic"}. When both are \code{NULL}, profiling is disabled. \code{"km"} has no profile.
+As in CohortMethod, the profile is that of the model likelihood whatever the variance estimator.
+Here that is the weighted pseudo-likelihood, with the weights treated as frequencies. It is narrower
+than the reported robust or bootstrap standard error implies (see \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}). Wide
+user-set bounds can reveal weighted event counts through the end derivatives; the export applies no
+minimum cell count, as in CohortMethod. Where the installed Cyclops supports it, the adaptive grid
+drops points more than 50 below the maximum log likelihood (\code{maxDrop = 50}); with a Cyclops without
+\code{maxDrop}, profiling takes much longer on large data and gives more points.
 }
 \examples{
-args <- createFitOutcomeModelArgs(
-  modelType         = "cox",
-  varianceEstimator = "robust"
-)
+args <- createFitOutcomeModelArgs(modelType = "km", horizons = c(30, 365))
+args <- createFitOutcomeModelArgs(horizons = c(30, 365), msmWeights = "stabilized")
 
 }
