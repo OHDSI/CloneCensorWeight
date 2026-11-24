@@ -2,6 +2,45 @@
 
 * Initial development
 
+* `computeCcwDiagnostics()`, `computeCcwSensitivity()` and `runCcwAnalyses()` fit once, for every
+  `covariateTimeInteraction` setting that gives it, a pooled logistic initiation hazard model whose
+  interaction columns are all left out (for example `"day0"` and `"interval"` with 7-day intervals and a
+  grace period ending on day 7 when nobody starts on day 7). It is the model without interactions, so the
+  fit of one of these settings, or of `"none"`, serves the others, recorded with each setting. Whether the
+  columns are left out is found from the days at risk of the fit sample before any fit. Models with
+  interaction columns (daily intervals, for example) are fit as before, the bootstrap replicates are not
+  affected, and models given to `computeCcwDiagnostics()` that were fit on clones without an outcome do
+  not stand for the other settings' models of the outcome's clones, which are fit on them as before. The
+  diagnostics choices and sensitivity variants whose models then differ only in that setting keep their
+  rows, labelled by their settings: on Synthea 8 of the 16 diagnostics choices take the weights, balance
+  and calibration of the other 8 instead of computing them again, and the sensitivity variants share
+  their weights and outcome model, and use the weights that the diagnostics computed with the same
+  models. `runCcwAnalyses()` copies the covariate balance, and the outcome models when their other
+  settings are the same, of analyses that differ only in that setting (with the bootstrap only when the
+  hazard models were fit on their whole risk sets). The fits of the Cox initiation hazard model are also
+  shared between settings that differ only in `timeBasis`, `covariateTimeInteraction` or
+  `pooledLogisticEngine`, which it does not use.
+
+* `computeWeightSummary()` no longer makes one row per clone-day. From the day on which a strategy's
+  weights stop changing (the day after the grace period, for example), each clone's days are one range
+  with its number of days, and the days before keep one row per clone-day. The counts, days, minimum,
+  maximum, quantiles (DuckDB's own interpolation between the values found from the counts) and the share
+  truncated are the same; the mean weight and effective sample size are sums in another order (Kahan sums
+  over the ranges), which differ in the last bits: on Synthea up to 5e-10 and 1e-12 relative, less than
+  the old code's runs with one and with four DuckDB threads differ from each other (5.7e-10 and 1.1e-12).
+  On Synthea a call takes under 1 s instead of about 20 s.
+
+* On the Synthea AMI example (7-day intervals, 4 threads), `computeCcwDiagnostics(sensitivity = TRUE)` with
+  the fitted models took 33 s (46 s CPU, 1.1 GB peak memory) instead of 436 s (1,109 s CPU, 7.8 GB). Of
+  the gain, about 250 s comes from the shared fits (one censoring model fit, the intercept-only binary
+  model of `graceRegime = "naturalGrace"` as nobody starts on day 7, instead of three; no cross-validated
+  fit instead of two) and the shared weights, balance and calibration, about 150 s from the 8 weight
+  summaries left, and 4 s from the sensitivity analysis using the diagnostics' weights. The results are
+  the same but for the last bits: with DuckDB on one thread, every row is identical but the mean weights
+  and effective sample sizes above and the rows of the choices the old code refit (`"none"`, and
+  `"interval"` in the sensitivity analysis), whose separate fits differed in the last bits of their
+  linear predictors (up to 2e-13 relative in the estimates).
+
 * `createFitOutcomeModelArgs(modelType = "fineGray")` (an option, not the default) fits a weighted
   Fine-Gray MSM: the subdistribution hazard ratio (`"shr"`), with the Aalen-Johansen risks, risk
   differences and risk ratios of `"km"` at the horizons. It needs `competingEvents = "death"`. A clone that

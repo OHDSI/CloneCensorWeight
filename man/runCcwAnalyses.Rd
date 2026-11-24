@@ -109,6 +109,13 @@ diagnostics use for every outcome) and \code{curves}, from \code{\link[=computeC
 event time, every 30 days and the horizons, \code{attrition} (that of the clones) and
 \code{followUpDistribution} (quantiles of the days of follow-up of the clones of each strategy).
 \code{diagnostics$values} holds the values that the summary compares with the diagnostic thresholds.
+
+Analyses that differ only in \code{covariateTimeInteraction} can have the same censoring models:
+pooled logistic hazard models whose interaction columns are all left out (see
+\code{\link[=fitCensoringModels]{fitCensoringModels()}}) are the model without interactions, fit once. Their covariate balance, and
+their outcome models when their other settings are the same, are then computed for one of them
+and copied for the others (with the bootstrap, only when the hazard models were fit on their
+whole risk sets, so that the replicates' models have no interaction columns either).
 \item \strong{Summary} (\code{resultsSummary.rds}, \code{diagnosticsSummary.rds}): see \code{\link[=getResultsSummary]{getResultsSummary()}} and
 \code{\link[=getDiagnosticsSummary]{getDiagnosticsSummary()}}.
 }

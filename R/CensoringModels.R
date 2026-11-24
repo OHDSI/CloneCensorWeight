@@ -294,19 +294,71 @@ fitCensoringModels <- function(clones,
   # initiateWithin(G) strategy of the same treatment: their risk sets are the same (both use the
   # analysis' sameDayOrdering). So is the hazard model through G of a notInitiateWithin(G) strategy and
   # of an initiateWithin(G) strategy with initiateWithinModel = "hazard".
+  # A pooled logistic hazard model whose interaction columns are all left out (.createInteractionBasis())
+  # is the model without interactions, so it is also kept under the key of covariateTimeInteraction =
+  # "none" (`noneKey`), and a request with another setting whose interaction basis is empty reuses it,
+  # recorded with the requested setting (.relabelInteractions()). Not in the reweight bootstrap's refits,
+  # whose keys also name their cache of the full data.
+  interaction <- fitCensoringModelsArgs$covariateTimeInteraction
   getFit <- function(component, kind, treatment, horizon, fixedVariance, description, shareMessage, firstDay = 0L) {
     key <- .censoringFitKey(component, treatment, horizon, fixedVariance, argsList)
+    noneKey <- if (kind == "hazard" && is.null(refit)) .noInteractionsFitKey(component, treatment, horizon, fixedVariance, argsList) else NULL
     if (key %in% used) {
       message(shareMessage)
     } else if (key %in% names(fits)) {
-      message("Reusing the fitted ", description)
+      fitType <- fits[[key]]$interactions$type
+      if (kind == "hazard" && !is.null(fitType) && fitType != interaction) {
+        # The model of another setting kept as the model without interactions:
+        message(sprintf("Reusing the fitted %s (fit with covariateTimeInteraction = \"%s\", whose interaction columns are all left out): it is the model without interactions", description, fitType))
+        fits[[key]] <<- .relabelInteractions(fits[[key]], interaction)
+      } else {
+        message("Reusing the fitted ", description)
+      }
     } else {
-      fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description, firstDay, key)
+      # With a model without interactions kept, whether this one would have interaction columns, from
+      # its risk set and the sample it would be fit on (no covariates, no fit). Without, it is that model;
+      # with, the fit uses what was built.
+      built <- if (!is.null(noneKey) && noneKey %in% names(fits)) buildHazardSample(treatment, horizon, description) else NULL
+      if (!is.null(built) && ncol(built$grid$interactionBasis) == 0) {
+        message(sprintf(
+          "Reusing the fitted %s (fit with covariateTimeInteraction = \"%s\"): with \"%s\" it has no interaction columns either, so it is the same model",
+          description, fits[[noneKey]]$interactions$type, interaction
+        ))
+        # Says so as the fit would (.messageDroppedInteractions()), which it does when the model has
+        # covariates:
+        grid <- built$grid
+        if (.hasCovariateCoefficients(fits[[noneKey]])) {
+          requested <- if (interaction == "day0") "day0" else colnames(grid$basis)
+          .messageDroppedInteractions(interaction, requested, colnames(grid$interactionBasis), grid$rowIntervals, grid$nIntervals, grid$intervalLength, description)
+        }
+        fits[[key]] <<- .relabelInteractions(fits[[noneKey]], interaction)
+      } else {
+        fits[[key]] <<- fitModel(kind, treatment, horizon, fixedVariance, description, firstDay, key, built)
+        if (!is.null(noneKey) && !noneKey %in% names(fits) && .hasNoInteractionColumns(fits[[key]])) {
+          fits[[noneKey]] <<- fits[[key]]
+        }
+      }
     }
     used <<- c(used, key)
     return(fits[[key]])
   }
-  fitModel <- function(kind, treatment, horizon, fixedVariance, description, firstDay, key) {
+  # The risk set of the pooled logistic hazard model through `horizon`, the sample it is fit on (with the
+  # messages of .sampleRiskSet(), which the fit gives after its own) and its grid (.logisticHazardGrid()).
+  buildHazardSample <- function(treatment, horizon, description) {
+    treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
+    riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+    messages <- character(0)
+    fitSet <- withCallingHandlers(
+      .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description),
+      message = function(m) {
+        messages <<- c(messages, conditionMessage(m))
+        invokeRestart("muffleMessage")
+      }
+    )
+    return(list(riskSet = riskSet, fitSet = fitSet, messages = messages, grid = .logisticHazardGrid(fitSet, horizon, fitCensoringModelsArgs)))
+  }
+  # `built`: NULL, or the hazard model's risk set, sample and grid from buildHazardSample().
+  fitModel <- function(kind, treatment, horizon, fixedVariance, description, firstDay, key, built = NULL) {
     treatmentDay <- if (treatment == "treatment") persons$treatmentDay else persons$comparatorTreatmentDay
     prior <- .getCensoringPrior(fitCensoringModelsArgs$prior, fixedVariance)
     message("Fitting ", description)
@@ -322,14 +374,21 @@ fitCensoringModels <- function(clones,
             .fitWeightedBinaryCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, subsampleSeed)
           }
         } else {
-          riskSet <- .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering)
+          riskSet <- if (is.null(built)) .getHazardRiskSet(persons, treatmentDay, horizon, sameDayOrdering) else built$riskSet
           fitHazard <- if (fitCensoringModelsArgs$hazardModelType == "cox") {
             function(riskSet, fitSet, modelRefit) .fitCoxCensoringModel(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, prior, fitSet, modelRefit)
           } else {
-            function(riskSet, fitSet, modelRefit) .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description, fitSet, modelRefit)
+            function(riskSet, fitSet, modelRefit) .fitLogisticCensoringModel(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description, fitSet, modelRefit, grid = built$grid)
           }
           if (is.null(refit)) {
-            fitSet <- .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
+            if (is.null(built)) {
+              fitSet <- .sampleRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
+            } else {
+              for (sampleMessage in built$messages) {
+                message(sampleMessage, appendLF = FALSE)
+              }
+              fitSet <- built$fitSet
+            }
             fitHazard(riskSet, fitSet, NULL)
           } else {
             fitSet <- .sampleWeightedRiskSet(riskSet, fitCensoringModelsArgs$maxCohortSizeForFitting, subsampleSeed, description)
@@ -447,9 +506,10 @@ fitCensoringModels <- function(clones,
 # The key of a fitted model: its component (.censoringFitComponent()), treatment, horizon, fixed prior
 # variance ("cv": none) and the settings (`argsList`, from FitCensoringModelsArgs$toList()) the fit
 # depends on. The design choices postGraceModel and initiateWithinModel choose between fits, so they
-# are not part of it, and the binary model at G does not depend on the hazard model's settings. Every
-# model depends on maxCohortSizeForFitting (and the seed of control, which draws the hazard models'
-# samples).
+# are not part of it, the binary model at G does not depend on the hazard model's settings, and the Cox
+# hazard model not on those of the pooled logistic one (timeBasis, covariateTimeInteraction and
+# pooledLogisticEngine). Every model depends on maxCohortSizeForFitting (and the seed of control, which
+# draws the hazard models' samples).
 .censoringFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
   argsList$postGraceModel <- NULL
   argsList$initiateWithinModel <- NULL
@@ -459,6 +519,11 @@ fitCensoringModels <- function(clones,
   argsList$control$threads <- NULL
   if (startsWith(component, "binary")) {
     argsList$hazardModelType <- NULL
+    argsList$timeBasis <- NULL
+    argsList$covariateTimeInteraction <- NULL
+    argsList$pooledLogisticEngine <- NULL
+  } else if (identical(argsList$hazardModelType, "cox")) {
+    # The Cox hazard model does not use the settings of the pooled logistic one:
     argsList$timeBasis <- NULL
     argsList$covariateTimeInteraction <- NULL
     argsList$pooledLogisticEngine <- NULL
@@ -474,6 +539,41 @@ fitCensoringModels <- function(clones,
     if (is.null(fixedVariance)) "cv" else sprintf("%.17g", fixedVariance),
     .settingsJson(argsList)
   ))
+}
+
+# The key (.censoringFitKey()) under which a pooled logistic hazard model fit with another
+# covariateTimeInteraction is also kept when its interaction columns are all left out: that of the
+# model without interactions (covariateTimeInteraction = "none"). NULL for other models, and for
+# settings saved without covariateTimeInteraction.
+.noInteractionsFitKey <- function(component, treatment, horizon, fixedVariance, argsList) {
+  if (startsWith(component, "binary") || !identical(argsList$hazardModelType, "logistic") ||
+    is.null(argsList$covariateTimeInteraction) || argsList$covariateTimeInteraction == "none") {
+    return(NULL)
+  }
+  argsList$covariateTimeInteraction <- "none"
+  return(.censoringFitKey(component, treatment, horizon, fixedVariance, argsList))
+}
+
+# Does a fitted pooled logistic hazard model have an interaction basis without columns? (FALSE for
+# models without one: Cox models, and models saved before the interactions existed.)
+.hasNoInteractionColumns <- function(fit) {
+  return(!is.null(fit$interactions$basis) && ncol(fit$interactions$basis) == 0)
+}
+
+# Does a fitted pooled logistic hazard model have coefficients of covariates (besides the intercept,
+# time-basis columns and interactions), that is was its model with covariates fit?
+.hasCovariateCoefficients <- function(fit) {
+  basis <- c("(Intercept)", colnames(fit$timeBasis$basis))
+  return(any(!names(fit$coefficients) %in% basis & !grepl(":", names(fit$coefficients), fixed = TRUE)))
+}
+
+# A pooled logistic hazard model without interaction columns, recorded as the fit with
+# covariateTimeInteraction = `covariateTimeInteraction` would record it: that setting (`type`) and the
+# empty interaction basis it gives. Every other element is that fit's.
+.relabelInteractions <- function(fit, covariateTimeInteraction) {
+  fit$interactions$type <- covariateTimeInteraction
+  fit$interactions$basis <- .createInteractionBasis(covariateTimeInteraction, fit$timeBasis$basis, fit$intervals$k, integer(0))
+  return(fit)
 }
 
 # A settings list (from toList()) as JSON with its named elements sorted by name at every level, because
@@ -493,19 +593,29 @@ fitCensoringModels <- function(clones,
 
 # The fits (named by .censoringFitKey()) of CcwCensoringModels, so they can be reused by
 # .fitCensoringModelsWithFits(). Models fit with .fixedPriorVariances cannot be told from
-# cross-validated ones, so pass only models fit without them.
-.censoringFitsFromModels <- function(censoringModels) {
+# cross-validated ones, so pass only models fit without them. With `noneAliases`, a pooled logistic
+# hazard model without interaction columns is also the model without interactions
+# (.noInteractionsFitKey()), which holds for models fit on the clones they are used with (not, for
+# example, for models fit on clones without an outcome used with the clones of an outcome).
+.censoringFitsFromModels <- function(censoringModels, noneAliases = TRUE) {
   argsList <- attr(censoringModels, "metaData")$fitCensoringModelsArgs
   fits <- list()
+  add <- function(component, treatment, fit) {
+    fits[[.censoringFitKey(component, treatment, fit$horizon, NULL, argsList)]] <<- fit
+    noneKey <- .noInteractionsFitKey(component, treatment, fit$horizon, NULL, argsList)
+    if (noneAliases && !is.null(noneKey) && !noneKey %in% names(fits) && .hasNoInteractionColumns(fit)) {
+      fits[[noneKey]] <<- fit
+    }
+  }
   for (model in censoringModels) {
     fit <- model[setdiff(names(model), c("strategyId", "type", "treatment", "postGrace", "graceStart", "graceRegime", "early"))]
     firstDay <- if (is.null(model$firstDay)) 0L else model$firstDay
-    fits[[.censoringFitKey(.censoringFitComponent(model$kind, model$type, firstDay), model$treatment, model$horizon, NULL, argsList)]] <- fit
+    add(.censoringFitComponent(model$kind, model$type, firstDay), model$treatment, fit)
     if (!is.null(model$postGrace)) {
-      fits[[.censoringFitKey("binary", model$treatment, model$postGrace$horizon, NULL, argsList)]] <- model$postGrace
+      add("binary", model$treatment, model$postGrace)
     }
     if (!is.null(model$early)) {
-      fits[[.censoringFitKey("hazard", model$treatment, model$early$horizon, NULL, argsList)]] <- model$early
+      add("hazard", model$treatment, model$early)
     }
   }
   return(fits)
@@ -1512,15 +1622,59 @@ fitCensoringModels <- function(clones,
   return(list(cyclopsData = cyclopsData, extraIds = columnIds[extra]))
 }
 
+# The intervals, time basis and interaction basis of the pooled logistic hazard model fit on `fitSet`
+# (the risk set, or a sample of its persons) through `horizon`, from the days at risk only (no
+# covariates): .fitLogisticCensoringModel() builds its model on them, and .fitCensoringModelsWithFits()
+# finds from them, before any fit, when the model has no interaction columns.
+.logisticHazardGrid <- function(fitSet, horizon, fitCensoringModelsArgs) {
+  intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
+  nIntervals <- horizon %/% intervalLength + 1L
+  k <- seq_len(nIntervals) - 1L
+  lastInterval <- fitSet$lastDay %/% intervalLength
+  # With the indicator basis, the hazard of an interval without initiations is 0, and that of an
+  # interval in which everyone at risk initiates is 1 (its coefficient is -Inf or Inf at the maximum
+  # likelihood). The rows of these intervals carry no information on the other coefficients. So they
+  # are left out of the fit, and the first remaining interval is the reference. This is the exact
+  # limit of the fit, which would otherwise not converge.
+  fitIntervals <- k
+  fullIntervals <- integer(0)
+  initiations <- NULL
+  atRisk <- NULL
+  if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(fitSet$y) > 0) {
+    initiations <- .tabulateFrequency(lastInterval[fitSet$y == 1] + 1L, fitSet[["frequency"]][fitSet$y == 1], nIntervals)
+    atRisk <- rev(cumsum(rev(.tabulateFrequency(lastInterval + 1L, fitSet[["frequency"]], nIntervals))))
+    fullIntervals <- k[initiations > 0 & initiations == atRisk]
+    fitIntervals <- k[initiations > 0 & initiations < atRisk]
+  }
+  basis <- .createTimeBasisMatrix(fitCensoringModelsArgs$timeBasis, nIntervals, fitIntervals)
+  # The intervals with rows in the fit:
+  rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, lastInterval))]
+  return(list(
+    intervalLength = intervalLength,
+    nIntervals = nIntervals,
+    k = k,
+    fitIntervals = fitIntervals,
+    fullIntervals = fullIntervals,
+    initiations = initiations,
+    atRisk = atRisk,
+    basis = basis,
+    rowIntervals = rowIntervals,
+    interactionBasis = .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
+  ))
+}
+
 # Fit on `fitSet` (the risk set, or a sample of its persons), with the linear predictor of every person
 # of the risk set. `refit`: as for .fitCoxCensoringModel(). A replicate refits the full data's Cyclops data
 # when its drawn persons have the full data's tidying and the same intervals in the fit and interaction
 # columns; the covariates, interactions and time-basis columns without rows of positive weight are then
-# fixed at 0.
-.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet, refit = NULL) {
-  intervalLength <- fitCensoringModelsArgs$timeBasis$intervalLength
-  nIntervals <- horizon %/% intervalLength + 1L
-  k <- seq_len(nIntervals) - 1L
+# fixed at 0. `grid`: NULL, or .logisticHazardGrid() of `fitSet`, when the caller has built it.
+.fitLogisticCensoringModel <- function(riskSet, horizon, cloneCensorWeightData, fitCensoringModelsArgs, prior, description = "initiation hazard model", fitSet = riskSet, refit = NULL, grid = NULL) {
+  if (is.null(grid)) {
+    grid <- .logisticHazardGrid(fitSet, horizon, fitCensoringModelsArgs)
+  }
+  intervalLength <- grid$intervalLength
+  nIntervals <- grid$nIntervals
+  k <- grid$k
   intervals <- tibble(
     k = k,
     startDay = k * intervalLength,
@@ -1528,22 +1682,13 @@ fitCensoringModels <- function(clones,
   )
   riskSet$lastInterval <- riskSet$lastDay %/% intervalLength
   fitSet$lastInterval <- fitSet$lastDay %/% intervalLength
-  # With the indicator basis, the hazard of an interval without initiations is 0, and that of an
-  # interval in which everyone at risk initiates is 1 (its coefficient is -Inf or Inf at the maximum
-  # likelihood). The rows of these intervals carry no information on the other coefficients. So they
-  # are left out of the fit, and the first remaining interval is the reference. This is the exact
-  # limit of the fit, which would otherwise not converge.
   buildOnly <- isTRUE(refit$buildOnly)
-  fitIntervals <- k
-  fullIntervals <- integer(0)
-  if (fitCensoringModelsArgs$timeBasis$type == "indicator" && sum(fitSet$y) > 0) {
-    initiations <- .tabulateFrequency(fitSet$lastInterval[fitSet$y == 1] + 1L, fitSet[["frequency"]][fitSet$y == 1], nIntervals)
-    atRisk <- rev(cumsum(rev(.tabulateFrequency(fitSet$lastInterval + 1L, fitSet[["frequency"]], nIntervals))))
-    fullIntervals <- k[initiations > 0 & initiations == atRisk]
-    fitIntervals <- k[initiations > 0 & initiations < atRisk]
-  }
+  fitIntervals <- grid$fitIntervals
+  fullIntervals <- grid$fullIntervals
+  initiations <- grid$initiations
+  atRisk <- grid$atRisk
   emptyIntervals <- setdiff(k, c(fitIntervals, fullIntervals))
-  basis <- .createTimeBasisMatrix(fitCensoringModelsArgs$timeBasis, nIntervals, fitIntervals)
+  basis <- grid$basis
   basisIds <- -seq_len(ncol(basis))
 
   covariateData <- .getRiskSetCovariateData(riskSet, cloneCensorWeightData, fitCensoringModelsArgs, tidy = !buildOnly)
@@ -1558,8 +1703,8 @@ fitCensoringModels <- function(clones,
     pull() |>
     sort()
   # Covariate-by-time interactions: column c of `interactionBasis` multiplies every covariate.
-  rowIntervals <- fitIntervals[fitIntervals <= max(c(-1L, fitSet$lastInterval))]
-  interactionBasis <- .createInteractionBasis(fitCensoringModelsArgs$covariateTimeInteraction, basis, k, rowIntervals)
+  rowIntervals <- grid$rowIntervals
+  interactionBasis <- grid$interactionBasis
   interactionRef <- tibble(
     covariateId = rep(as.numeric(covariateIds), ncol(interactionBasis)),
     columnIndex = rep(seq_len(ncol(interactionBasis)), each = length(covariateIds))
