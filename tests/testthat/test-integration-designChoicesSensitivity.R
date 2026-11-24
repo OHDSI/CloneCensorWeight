@@ -85,3 +85,48 @@ test_that("The sensitivity analysis refits every default variant and custom ones
   expect_s3_class(plotCcwSensitivity(sensitivity), "ggplot")
   expect_s3_class(plotCcwSensitivity(sensitivity, estimands = "hr"), "ggplot")
 })
+
+test_that("Interaction settings that leave out every interaction column share one hazard model fit", {
+  data <- simulateCloneCensorWeightData(n = 300, maxDays = 60, graceEnd = 7, seed = 7)
+  clones <- designClones(data)
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  variants <- list(
+    "covariateTimeInteraction = none" = list(fitCensoringModelsArgs = list(covariateTimeInteraction = "none")),
+    "covariateTimeInteraction = interval" = list(fitCensoringModelsArgs = list(covariateTimeInteraction = "interval"))
+  )
+  fitOutcomeModelArgs <- createFitOutcomeModelArgs(modelType = "km", horizons = 30)
+  run <- function(intervalLength, variants) {
+    messages <- capture_messages(sensitivity <- computeCcwSensitivity(
+      clones, data, designArgs(timeBasis = createTimeBasis(intervalLength = intervalLength)),
+      fitOutcomeModelArgs = fitOutcomeModelArgs, variants = variants
+    ))
+    return(list(fits = sum(grepl("^Fitting logistic initiation hazard model", messages)), messages = messages, sensitivity = sensitivity))
+  }
+  estimates <- function(sensitivity, variant) {
+    rows <- as.data.frame(sensitivity[sensitivity$variant == variant, colnames(sensitivity)[-(1:2)]])
+    attr(rows, "variants") <- NULL
+    return(rows)
+  }
+  # With 8-day intervals the grace period (days 0-7) is one interval, so "day0" and "interval" leave out
+  # their interaction columns: the hazard model is the model without interactions, fit once (for the
+  # specified "day0") and reused by both variants, which give the specified estimates:
+  weekly <- run(8, variants)
+  expect_equal(weekly$fits, 1)
+  expect_true(any(grepl("with \"interval\" it has no interaction columns either", weekly$messages, fixed = TRUE)))
+  # ... and share the specified variant's weights:
+  expect_equal(sum(grepl("so it shares its weights", weekly$messages, fixed = TRUE)), 2)
+  specified <- estimates(weekly$sensitivity, "specified")
+  expect_identical(estimates(weekly$sensitivity, "covariateTimeInteraction = none"), specified)
+  expect_identical(estimates(weekly$sensitivity, "covariateTimeInteraction = interval"), specified)
+  # ... which are those of a separate fit without interactions:
+  models <- suppressMessages(fitCensoringModels(clones, data, designArgs(timeBasis = createTimeBasis(intervalLength = 8), covariateTimeInteraction = "none")))
+  weighted <- suppressMessages(computeCensoringWeights(clones, models))
+  on.exit(close(weighted), add = TRUE)
+  expect_equal(specified, as.data.frame(suppressMessages(fitOutcomeModel(weighted, fitOutcomeModelArgs))$estimates))
+  # With 4-day intervals "day0" and "interval" keep interaction columns (of the first and the second
+  # interval), so each has its own fit, also when the model without interactions was fit before:
+  expect_equal(run(4, variants)$fits, 3)
+})

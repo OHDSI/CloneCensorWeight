@@ -457,13 +457,24 @@ mainAnalyses <- list(
     horizons = 365,
     varianceEstimator = "bootstrap",
     bootstrapArgs = createBootstrapArgs(replicates = bootstrapReplicates)
+  )),
+  # Analyses 5 and 6 differ only in covariateTimeInteraction. With 31-day intervals the grace period is
+  # one interval, so "day0" leaves out its interaction column, and their censoring models are the same:
+  orchestrationAnalysis(5, list(initiate30, notInitiate30), fitCensoringModelsArgs = createFitCensoringModelsArgs(
+    prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1),
+    timeBasis = createTimeBasis(intervalLength = 31)
+  )),
+  orchestrationAnalysis(6, list(initiate30, notInitiate30), fitCensoringModelsArgs = createFitCensoringModelsArgs(
+    prior = Cyclops::createPrior("laplace", exclude = c(0), variance = 1),
+    timeBasis = createTimeBasis(intervalLength = 31),
+    covariateTimeInteraction = "none"
   ))
 )
 mainSpecifications <- createCcwAnalysesSpecifications(
   ccwAnalysisList = mainAnalyses,
   targetTreatmentOutcomesList = list(createTargetTreatmentOutcomes(4, 1, 2, outcomes = c(list(CohortMethod::createOutcome(3)), negativeControls))),
   # Only analysis 1 runs the negative controls:
-  analysesToExclude = data.frame(analysisId = rep(2:4, each = 5), outcomeId = rep(101:105, 3))
+  analysesToExclude = data.frame(analysisId = rep(2:6, each = 5), outcomeId = rep(101:105, 5))
 )
 mainFolder <- tempfile()
 mainRun <- runQuietly(outputFolder = mainFolder, ccwAnalysesSpecifications = mainSpecifications)
@@ -471,7 +482,7 @@ mainRun <- runQuietly(outputFolder = mainFolder, ccwAnalysesSpecifications = mai
 test_that("runCcwAnalyses runs several analyses on Eunomia and fits a shared censoring model once", {
   referenceTable <- mainRun$referenceTable
   expect_equal(referenceTable, getFileReference(mainFolder))
-  expect_equal(nrow(referenceTable), 6 + 3)
+  expect_equal(nrow(referenceTable), 6 + 5)
   expect_setequal(
     names(referenceTable),
     c("analysisId", "targetId", "treatmentId", "comparatorTreatmentId", "outcomeId", "outcomeOfInterest", "trueEffectSize",
@@ -481,19 +492,27 @@ test_that("runCcwAnalyses runs several analyses on Eunomia and fits a shared cen
   expect_true(all(file.exists(file.path(mainFolder, files[files != ""]))))
   expect_equal(unique(referenceTable$ccwDataFile), "CcwData_l1_t4_tr1_c2.zip")
   expect_equal(unique(referenceTable$studyPopFile[referenceTable$outcomeId == 3]), "StudyPop_l1_s1_t4_tr1_c2_o3.rds")
-  expect_equal(length(unique(referenceTable$censoringModelFile)), 2)
+  expect_equal(length(unique(referenceTable$censoringModelFile)), 4)
   expect_true(file.exists(file.path(mainFolder, "ccwAnalysesSpecifications.rds")))
   expect_false(any(grepl("\\.tmp", list.files(mainFolder, recursive = TRUE))))
 
   # Each censoring model is fit once: the binary model of "initiate within 30 days" is shared by the
   # three analyses that compare it with "not within 30 days" (one file) and reused for the analysis
-  # that compares it with "never".
+  # that compares it with "never" and for analyses 5 and 6. Analysis 6 reuses the hazard model of
+  # analysis 5, and the balance and outcome model of analysis 5 are copied for it.
   censoringMessages <- stageMessages(mainRun$messages, "Fitting censoring models")
   expect_equal(sum(grepl("^Fitting binary censoring model", censoringMessages)), 1)
-  expect_equal(sum(grepl("^Reusing the fitted binary censoring model", censoringMessages)), 1)
-  expect_equal(sum(grepl("^Fitting logistic initiation hazard model through day 30 ", censoringMessages)), 1)
+  expect_equal(sum(grepl("^Reusing the fitted binary censoring model", censoringMessages)), 3)
+  expect_equal(sum(grepl("^Fitting logistic initiation hazard model through day 30 ", censoringMessages)), 2)
   expect_equal(sum(grepl("^Fitting logistic initiation hazard model through day 365 ", censoringMessages)), 1)
-  expect_equal(sum(grepl("^Computing covariate balance took", stageMessages(mainRun$messages, "Computing covariate balance"))), 2)
+  expect_equal(sum(grepl("^Computing covariate balance took", stageMessages(mainRun$messages, "Computing covariate balance"))), 3)
+  expect_equal(sum(grepl("^Copying 1 covariate balance file", mainRun$messages)), 1)
+  expect_equal(sum(grepl("^Copying 1 outcome model file", mainRun$messages)), 1)
+  row5 <- referenceTable[referenceTable$analysisId == 5, ]
+  row6 <- referenceTable[referenceTable$analysisId == 6, ]
+  expect_false(row6$balanceFile == row5$balanceFile)
+  expect_identical(readRDS(file.path(mainFolder, row6$balanceFile)), readRDS(file.path(mainFolder, row5$balanceFile)))
+  expect_identical(readRDS(file.path(mainFolder, row6$outcomeModelFile)), readRDS(file.path(mainFolder, row5$outcomeModelFile)))
 
   results <- getResultsSummary(mainFolder)
   diagnostics <- getDiagnosticsSummary(mainFolder)

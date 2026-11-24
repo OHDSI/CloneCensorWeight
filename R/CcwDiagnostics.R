@@ -744,7 +744,10 @@ computeWeightSummary <- function(weightedClones, days = NULL, dayBandStarts = NU
     .dropTables(weightedClones, "ccwD")
     .dropTables(weightedClones, "ccwW")
   })
-  .createCloneDayTables(weightedClones, days)
+  # The clone-days as ranges of days with the same weight (one per clone once the weight no longer
+  # changes), each counting its days, so the statistics are those of the clone-days without making one
+  # row per clone-day:
+  .createCloneDayTables(weightedClones, days, ranges = TRUE)
   weightedClones$ccwDBands <- tibble(
     bandStart = dayBandStarts,
     bandEnd = c(dayBandStarts[-1] - 1L, NA_integer_)
@@ -759,27 +762,57 @@ computeWeightSummary <- function(weightedClones, days = NULL, dayBandStarts = NU
   } else {
     sprintf("(%s) %s ccwWSurvival.numeratorSurvival", truncated, if (stabilized) "/" else "*")
   }
+  # The weights of the ranges in each band: a range of one day in the band of its day, and a longer one
+  # split at the band starts, with the days of ccwDDays of each part:
+  weights <- sprintf("%s AS weightBefore,
+      %s AS weightAfter,
+      %s AS otherBefore,
+      %s AS otherAfter", weight, truncated, otherWeight, otherTruncated)
+  survivalJoin <- "INNER JOIN ccwWSurvival
+      ON ccwDCloneDays.strategyId = ccwWSurvival.strategyId
+        AND ccwDCloneDays.rowId = ccwWSurvival.rowId
+        AND ccwDCloneDays.evalDay = ccwWSurvival.evalDay"
+  capJoins <- "LEFT JOIN ccwWCaps
+      ON ccwDCloneDays.strategyId = ccwWCaps.strategyId
+    LEFT JOIN ccwWOtherCaps
+      ON ccwDCloneDays.strategyId = ccwWOtherCaps.strategyId"
   .andromedaExecute(weightedClones, sprintf("
     CREATE TABLE ccwDWeights AS
     SELECT ccwDCloneDays.strategyId,
-      ccwDCloneDays.day,
       ccwDBands.bandStart,
-      %s AS weightBefore,
-      %s AS weightAfter,
-      %s AS otherBefore,
-      %s AS otherAfter
+      ccwDCloneDays.lo,
+      ccwDCloneDays.hi,
+      ccwDCloneDays.n,
+      ccwDCloneDays.ranged,
+      %1$s
     FROM ccwDCloneDays
-    INNER JOIN ccwWSurvival
-      ON ccwDCloneDays.strategyId = ccwWSurvival.strategyId
-        AND ccwDCloneDays.rowId = ccwWSurvival.rowId
-        AND ccwDCloneDays.evalDay = ccwWSurvival.evalDay
+    %2$s
     INNER JOIN ccwDBands
-      ON ccwDCloneDays.day >= ccwDBands.bandStart
-        AND (ccwDBands.bandEnd IS NULL OR ccwDCloneDays.day <= ccwDBands.bandEnd)
-    LEFT JOIN ccwWCaps
-      ON ccwDCloneDays.strategyId = ccwWCaps.strategyId
-    LEFT JOIN ccwWOtherCaps
-      ON ccwDCloneDays.strategyId = ccwWOtherCaps.strategyId;", weight, truncated, otherWeight, otherTruncated))
+      ON ccwDCloneDays.lo >= ccwDBands.bandStart
+        AND (ccwDBands.bandEnd IS NULL OR ccwDCloneDays.lo <= ccwDBands.bandEnd)
+    %3$s
+    WHERE NOT ccwDCloneDays.ranged
+    UNION ALL
+    SELECT ccwDCloneDays.strategyId,
+      ccwDBands.bandStart,
+      GREATEST(ccwDCloneDays.lo, ccwDBands.bandStart) AS lo,
+      LEAST(ccwDCloneDays.hi, COALESCE(ccwDBands.bandEnd, ccwDCloneDays.hi)) AS hi,
+      CAST(hiCalendar.cum - loCalendar.cum AS BIGINT) AS n,
+      ccwDCloneDays.ranged,
+      %1$s
+    FROM ccwDCloneDays
+    %2$s
+    INNER JOIN ccwDBands
+      ON ccwDCloneDays.hi >= ccwDBands.bandStart
+        AND (ccwDBands.bandEnd IS NULL OR ccwDCloneDays.lo <= ccwDBands.bandEnd)
+    INNER JOIN ccwDCalendar hiCalendar
+      ON hiCalendar.day = LEAST(ccwDCloneDays.hi, COALESCE(ccwDBands.bandEnd, ccwDCloneDays.hi))
+    INNER JOIN ccwDCalendar loCalendar
+      ON loCalendar.day = GREATEST(ccwDCloneDays.lo, ccwDBands.bandStart) - 1
+    %3$s
+    WHERE ccwDCloneDays.ranged
+      AND hiCalendar.cum > loCalendar.cum;", weights, survivalJoin, capJoins))
+  .createDailyWeightSums(weightedClones, c("weightBefore", "weightAfter", "otherBefore", "otherAfter"))
 
   scales <- if (stabilized) c("stabilized", "unstabilized") else c("unstabilized", "stabilized")
   caps <- metaData$weights$caps
@@ -811,53 +844,174 @@ computeWeightSummary <- function(weightedClones, days = NULL, dayBandStarts = NU
   return(summary)
 }
 
-# Per strategy and band, the statistics of `column` of ccwDWeights, with the share of clone-days whose
-# weight is below `before` (the column before truncation; NULL: NA).
+# Per strategy and band, the statistics of `column` of ccwDWeights (ranges of `n` clone-days with the
+# same weight, .createCloneDayRanges()) over its clone-days, with the share of clone-days whose weight
+# is below `before` (the column before truncation; NULL: NA), and the days and effective sample size
+# from ccwDDailySums (.createDailyWeightSums()).
 .summarizeWeightColumn <- function(clones, column, before) {
-  shareTruncated <- if (is.null(before)) "CAST(NULL AS DOUBLE)" else sprintf("AVG(CASE WHEN %s > %s * (1 + 1e-9) THEN 1.0 ELSE 0.0 END)", before, column)
+  shareTruncated <- if (is.null(before)) "CAST(NULL AS DOUBLE)" else sprintf("CAST(SUM(CASE WHEN %s > %s * (1 + 1e-9) THEN n ELSE 0 END) AS DOUBLE) / SUM(n)", before, column)
   statistics <- .andromedaSql(clones, sprintf("
     SELECT strategyId,
       bandStart,
-      COUNT(*) AS cloneDays,
-      COUNT(DISTINCT day) AS days,
-      MAX(day) AS lastDay,
-      AVG(%1$s) AS meanWeight,
+      CAST(SUM(n) AS BIGINT) AS cloneDays,
+      fsum(n * %1$s) / SUM(n) AS meanWeight,
       MIN(%1$s) AS minWeight,
-      quantile_cont(%1$s, 0.25) AS p25Weight,
-      quantile_cont(%1$s, 0.5) AS medianWeight,
-      quantile_cont(%1$s, 0.75) AS p75Weight,
-      quantile_cont(%1$s, 0.95) AS p95Weight,
-      quantile_cont(%1$s, 0.99) AS p99Weight,
       MAX(%1$s) AS maxWeight,
       %2$s AS shareTruncated
     FROM ccwDWeights
     GROUP BY strategyId,
       bandStart;", column, shareTruncated))
+  quantiles <- .weightQuantiles(clones, column, c(p25Weight = 0.25, medianWeight = 0.5, p75Weight = 0.75, p95Weight = 0.95, p99Weight = 0.99))
   effective <- .andromedaSql(clones, sprintf("
     SELECT strategyId,
       bandStart,
-      AVG(ess) AS effectiveSampleSize,
-      AVG(ess / n) AS effectiveSampleShare
-    FROM (
+      COUNT(*) AS days,
+      MAX(day) AS lastDay,
+      AVG(POWER(s1_%1$s, 2) / s2_%1$s) AS effectiveSampleSize,
+      AVG(POWER(s1_%1$s, 2) / s2_%1$s / n) AS effectiveSampleShare
+    FROM ccwDDailySums
+    GROUP BY strategyId,
+      bandStart;", column))
+  statistics$strategyId <- as.integer(statistics$strategyId)
+  statistics$bandStart <- as.integer(statistics$bandStart)
+  effective$strategyId <- as.integer(effective$strategyId)
+  effective$bandStart <- as.integer(effective$bandStart)
+  statistics <- statistics |>
+    dplyr::left_join(quantiles, by = c("strategyId", "bandStart")) |>
+    dplyr::left_join(effective, by = c("strategyId", "bandStart"))
+  statistics$cloneDays <- as.integer(statistics$cloneDays)
+  statistics$days <- as.integer(statistics$days)
+  statistics$lastDay <- as.integer(statistics$lastDay)
+  statistics$shareTruncated <- as.numeric(statistics$shareTruncated)
+  return(dplyr::as_tibble(statistics))
+}
+
+# Per strategy and band, the quantile_cont() of `column` of ccwDWeights over its clone-days at the
+# `probabilities` (named by their columns), from the number of clone-days of each distinct value: the
+# values at the positions below and above (N - 1) p are found from the cumulative counts, and when they
+# differ in position, quantile_cont() of those two values at the fraction of (N - 1) p interpolates them,
+# so the result is that of quantile_cont() on one row per clone-day.
+.weightQuantiles <- function(clones, column, probabilities) {
+  values <- .andromedaSql(clones, sprintf("
+    SELECT strategyId,
+      bandStart,
+      %1$s AS value,
+      CAST(SUM(n) AS DOUBLE) AS n
+    FROM ccwDWeights
+    WHERE %1$s IS NOT NULL
+    GROUP BY strategyId,
+      bandStart,
+      %1$s
+    ORDER BY strategyId,
+      bandStart,
+      value;", column))
+  group <- paste(values$strategyId, values$bandStart)
+  groups <- split(seq_len(nrow(values)), factor(group, levels = unique(group)))
+  result <- tibble(
+    strategyId = as.integer(values$strategyId[vapply(groups, function(rows) rows[1], integer(1))]),
+    bandStart = as.integer(values$bandStart[vapply(groups, function(rows) rows[1], integer(1))])
+  )
+  # One row per group and probability (probabilities vary fastest):
+  quantiles <- dplyr::bind_rows(lapply(groups, function(rows) {
+    cumulative <- cumsum(values$n[rows])
+    position <- (cumulative[length(cumulative)] - 1) * unname(probabilities)
+    below <- floor(position)
+    above <- ceiling(position)
+    tibble(
+      lo = values$value[rows[findInterval(below, cumulative) + 1L]],
+      hi = values$value[rows[findInterval(above, cumulative) + 1L]],
+      fraction = position - below,
+      interpolate = above > below
+    )
+  }))
+  value <- as.numeric(quantiles$lo)
+  interpolate <- which(as.logical(quantiles$interpolate))
+  if (length(interpolate) > 0) {
+    # quantile_cont() takes a constant fraction, so one query per distinct fraction:
+    fractions <- unique(quantiles$fraction[interpolate])
+    clones$ccwDQuantilePairs <- tibble(
+      id = rep(interpolate, 2),
+      fractionId = rep(match(quantiles$fraction[interpolate], fractions), 2),
+      value = c(quantiles$lo[interpolate], quantiles$hi[interpolate])
+    )
+    interpolated <- .andromedaSql(clones, paste(sprintf(
+      "SELECT id, quantile_cont(value, CAST('%s' AS DOUBLE)) AS value FROM ccwDQuantilePairs WHERE fractionId = %d GROUP BY id",
+      sprintf("%.17g", fractions), seq_along(fractions)
+    ), collapse = " UNION ALL "))
+    value[interpolated$id] <- interpolated$value
+  }
+  for (i in seq_along(probabilities)) {
+    result[[names(probabilities)[i]]] <- value[seq(i, by = length(probabilities), length.out = nrow(result))]
+  }
+  return(result)
+}
+
+# Creates ccwDDailySums: per strategy, band and day of ccwDDays with clones under follow-up, the number
+# of clones `n` and, for each of `columns` of ccwDWeights, the sum of the weights (s1_<column>) and of
+# their squares (s2_<column>). The days before a strategy's stableDay (one row per clone-day) are summed
+# per day; later days from the starts and ends of the ranges, as running (Kahan) sums over the days.
+.createDailyWeightSums <- function(clones, columns) {
+  sumsPerDay <- paste(sprintf("SUM(%1$s) AS s1_%1$s, SUM(POWER(%1$s, 2)) AS s2_%1$s", columns), collapse = ", ")
+  starts <- paste(sprintf("%1$s AS s1_%1$s, POWER(%1$s, 2) AS s2_%1$s", columns), collapse = ", ")
+  ends <- paste(sprintf("-%1$s AS s1_%1$s, -POWER(%1$s, 2) AS s2_%1$s", columns), collapse = ", ")
+  changesPerDay <- paste(sprintf("fsum(s1_%1$s) AS s1_%1$s, fsum(s2_%1$s) AS s2_%1$s", columns), collapse = ", ")
+  running <- paste(sprintf("fsum(COALESCE(changes.s1_%1$s, 0)) OVER upToDay AS s1_%1$s, fsum(COALESCE(changes.s2_%1$s, 0)) OVER upToDay AS s2_%1$s", columns), collapse = ", ")
+  .andromedaExecute(clones, sprintf("
+    CREATE TABLE ccwDDailySums AS
+    WITH changes AS (
       SELECT strategyId,
         bandStart,
         day,
-        POWER(SUM(%1$s), 2) / SUM(POWER(%1$s, 2)) AS ess,
-        COUNT(*) AS n
-      FROM ccwDWeights
+        SUM(n) AS n,
+        %4$s
+      FROM (
+        SELECT strategyId, bandStart, lo AS day, 1 AS n, %2$s
+        FROM ccwDWeights
+        WHERE ranged
+        UNION ALL
+        SELECT strategyId, bandStart, hi + 1 AS day, -1 AS n, %3$s
+        FROM ccwDWeights
+        WHERE ranged
+      ) rangeEnds
       GROUP BY strategyId,
         bandStart,
         day
-    ) dailyEss
+    ),
+    running AS (
+      SELECT groups.strategyId,
+        groups.bandStart,
+        ccwDCalendar.day,
+        CAST(SUM(COALESCE(changes.n, 0)) OVER upToDay AS BIGINT) AS n,
+        %5$s
+      FROM (SELECT DISTINCT strategyId, bandStart FROM changes) groups
+      CROSS JOIN ccwDCalendar
+      LEFT JOIN changes
+        ON groups.strategyId = changes.strategyId
+          AND groups.bandStart = changes.bandStart
+          AND ccwDCalendar.day = changes.day
+      WINDOW upToDay AS (PARTITION BY groups.strategyId, groups.bandStart ORDER BY ccwDCalendar.day ROWS UNBOUNDED PRECEDING)
+    )
+    SELECT strategyId,
+      bandStart,
+      lo AS day,
+      COUNT(*) AS n,
+      %1$s
+    FROM ccwDWeights
+    WHERE NOT ranged
     GROUP BY strategyId,
-      bandStart;", column))
-  statistics <- dplyr::left_join(statistics, effective, by = c("strategyId", "bandStart"))
-  statistics$strategyId <- as.integer(statistics$strategyId)
-  statistics$bandStart <- as.integer(statistics$bandStart)
-  statistics$cloneDays <- as.integer(statistics$cloneDays)
-  statistics$days <- as.integer(statistics$days)
-  statistics$shareTruncated <- as.numeric(statistics$shareTruncated)
-  return(dplyr::as_tibble(statistics))
+      bandStart,
+      lo
+    UNION ALL
+    SELECT running.strategyId,
+      running.bandStart,
+      running.day,
+      running.n,
+      %6$s
+    FROM running
+    INNER JOIN ccwDDays
+      ON running.day = ccwDDays.day
+    WHERE running.n > 0;", sumsPerDay, starts, ends, changesPerDay, running, paste(sprintf("running.s1_%1$s, running.s2_%1$s", columns), collapse = ", ")))
+  invisible(NULL)
 }
 
 #' @export
@@ -983,13 +1137,21 @@ plotWeightSummary <- function(weightSummary, labels = NULL, fileName = NULL) {
 #'                               list(postGraceModel = "binary", covariateTimeInteraction = "none")))`.
 #' @param .censoringModelFits    For internal use ([computeCcwDiagnostics()]): `NULL`, or censoring
 #'                               models fitted earlier, which are reused instead of refitted.
+#' @param .weightedClones        For internal use ([computeCcwDiagnostics()]): `NULL`, or a list of
+#'                               weighted clones computed earlier from these clones (each a list with
+#'                               the censoring `models`, the `weightsJson` of the `ComputeWeightsArgs`
+#'                               as sorted JSON, and the `weightedClones`, which the caller closes),
+#'                               which are used instead of weighting the clones again.
 #'
 #' @return
 #' A tibble of class `CcwSensitivity` with columns `variant` (`"specified"` for the specified
 #' settings), `changes` (a description of the changed settings) and the columns of the estimates of
 #' [fitOutcomeModel()] (`estimand`, `estimate`, `logEstimate`, `seLogEstimate`, `se`, `lb95`, `ub95`,
 #' `p`). The attribute `variants` holds the settings of each variant. Each censoring model is fit once
-#' and shared by the variants that use it.
+#' and shared by the variants that use it. Variants whose censoring models differ only in the
+#' `covariateTimeInteraction` their hazard models record (for example settings whose interaction
+#' columns are all left out, see [computeCcwDiagnostics()]) have the same models: with the same weight
+#' settings they share their weights, and with the same outcome model settings too, their outcome model.
 #'
 #' @example inst/examples/clones.R
 #' @examples
@@ -1018,7 +1180,8 @@ computeCcwSensitivity <- function(clones,
                                   computeWeightsArgs = createComputeWeightsArgs(),
                                   fitOutcomeModelArgs = createFitOutcomeModelArgs(),
                                   variants = NULL,
-                                  .censoringModelFits = NULL) {
+                                  .censoringModelFits = NULL,
+                                  .weightedClones = NULL) {
   errorMessages <- checkmate::makeAssertCollection()
   .assertCcwClones(clones, add = errorMessages)
   .assertCloneCensorWeightData(cloneCensorWeightData, add = errorMessages)
@@ -1039,8 +1202,18 @@ computeCcwSensitivity <- function(clones,
   fits <- if (is.null(.censoringModelFits)) list() else .censoringModelFits
   warnDay0CovariateWindows <- is.null(.censoringModelFits)
   warnNaturalGrace <- is.null(.censoringModelFits)
+  # The censoring settings whose models (and so weights) each variant's are: its own, or those of an
+  # earlier variant whose models differ only in the covariateTimeInteraction their hazard models record
+  # (a model whose interaction columns are all left out is the model without interactions).
+  modelsKeys <- list()
   weightedClones <- list()
-  on.exit(for (weighted in weightedClones) close(weighted))
+  weightsVariant <- list()
+  # The weighted clones from computeCcwDiagnostics() are its own to close:
+  borrowed <- character(0)
+  on.exit(for (weightsKey in setdiff(names(weightedClones), borrowed)) close(weightedClones[[weightsKey]]))
+  # The estimates of each outcome model fit, shared by the variants with the same weights and outcome
+  # model settings:
+  outcomeEstimates <- list()
   estimates <- list()
   settings <- list()
   for (name in names(variants)) {
@@ -1056,16 +1229,49 @@ computeCcwSensitivity <- function(clones,
         warnNaturalGrace <- FALSE
       }
       fits <- fitted$fits
+      unlabelled <- .withoutInteractionLabels(fitted$models)
+      modelsKeys[[censoringKey]] <- censoringKey
+      for (earlier in names(censoringModels)) {
+        if (.sameCensoringModels(.withoutInteractionLabels(censoringModels[[earlier]]), unlabelled)) {
+          modelsKeys[[censoringKey]] <- modelsKeys[[earlier]]
+          break
+        }
+      }
       censoringModels[[censoringKey]] <- fitted$models
     }
+    modelsKey <- modelsKeys[[censoringKey]]
     outcomeTimeBasis <- if (args$fitOutcomeModelArgs$modelType == "logistic") args$fitOutcomeModelArgs$timeBasis else NULL
-    weightsKey <- paste(censoringKey, as.character(args$computeWeightsArgs$toJson()), if (is.null(outcomeTimeBasis)) "" else as.character(outcomeTimeBasis$toJson()))
+    weightsJson <- .settingsJson(args$computeWeightsArgs$toList())
+    weightsKey <- paste(modelsKey, weightsJson, if (is.null(outcomeTimeBasis)) "" else as.character(outcomeTimeBasis$toJson()))
     if (is.null(weightedClones[[weightsKey]])) {
-      weightedClones[[weightsKey]] <- computeCensoringWeights(clones, censoringModels[[censoringKey]], args$computeWeightsArgs, outcomeTimeBasis)
+      # The weights computeCcwDiagnostics() computed with the same models and weight settings:
+      diagnosticsWeights <- NULL
+      if (is.null(outcomeTimeBasis)) {
+        unlabelled <- .withoutInteractionLabels(censoringModels[[modelsKey]])
+        for (entry in .weightedClones) {
+          if (entry$weightsJson == weightsJson && .sameCensoringModels(.withoutInteractionLabels(entry$models), unlabelled)) {
+            diagnosticsWeights <- entry$weightedClones
+            break
+          }
+        }
+      }
+      if (is.null(diagnosticsWeights)) {
+        weightedClones[[weightsKey]] <- computeCensoringWeights(clones, censoringModels[[modelsKey]], args$computeWeightsArgs, outcomeTimeBasis)
+      } else {
+        message(sprintf("Variant '%s' uses the censoring weights of the diagnostics with the same censoring models", name))
+        weightedClones[[weightsKey]] <- diagnosticsWeights
+        borrowed <- c(borrowed, weightsKey)
+      }
+      weightsVariant[[weightsKey]] <- name
+    } else if (modelsKey != censoringKey) {
+      message(sprintf("Variant '%s' has the same censoring models as variant '%s', so it shares its weights", name, weightsVariant[[weightsKey]]))
     }
-    model <- fitOutcomeModel(weightedClones[[weightsKey]], args$fitOutcomeModelArgs, cloneCensorWeightData = cloneCensorWeightData)
+    outcomeKey <- paste(weightsKey, as.character(args$fitOutcomeModelArgs$toJson()))
+    if (is.null(outcomeEstimates[[outcomeKey]])) {
+      outcomeEstimates[[outcomeKey]] <- fitOutcomeModel(weightedClones[[weightsKey]], args$fitOutcomeModelArgs, cloneCensorWeightData = cloneCensorWeightData)$estimates
+    }
     changes <- .describeVariant(variants[[name]])
-    estimates[[name]] <- dplyr::mutate(model$estimates, variant = name, changes = changes, .before = 1)
+    estimates[[name]] <- dplyr::mutate(outcomeEstimates[[outcomeKey]], variant = name, changes = changes, .before = 1)
     settings[[name]] <- tibble(
       variant = name,
       changes = changes,
@@ -1280,8 +1486,12 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #' settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
 #' and shared by the choices that use it (for example the hazard model through `G` serves both
 #' `postGraceModel` choices, and both strategies with `initiateWithinModel = "hazard"`), and the models
-#' in `censoringModels` are reused, so only the models they lack are fit. For each choice the result
-#' holds:
+#' in `censoringModels` are reused, so only the models they lack are fit. A pooled logistic hazard
+#' model whose interaction columns are all left out (see [fitCensoringModels()]; for example `"day0"`
+#' with 7-day intervals and `G = 7` when nobody starts on day 7) is the model without interactions, so
+#' it is fit once for all the interaction settings that give it. The choices whose models differ only
+#' in that setting keep their rows, labelled by their settings, with the weights, balance and
+#' calibration of the first of them, computed once. For each choice the result holds:
 #'
 #' - `calibration`: [computeCensoringModelCalibration()], for the binary model at `G` and for the
 #'   hazard model of each interaction setting, by group of the prediction, in the large, and by the
@@ -1295,7 +1505,8 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #' - `positivity`: [computePositivity()] for the specified interaction setting, with the binary model
 #'   at `G` and the hazard model of each strategy with a grace period;
 #' - `sensitivity`: [computeCcwSensitivity()] with its default variants, only when `sensitivity = TRUE`,
-#'   because it refits the outcome model under every variant.
+#'   because it fits the outcome model under every variant (once per distinct set of weights and outcome
+#'   model settings, with the weights computed for the choices above where the models are the same).
 #'
 #' Read the balance with the grace-period selection check. The clones compared at `tau + 1` are the
 #' survivors of two regimes. When starting the treatment changes the risk during the grace period, the
@@ -1320,7 +1531,7 @@ plotCcwSensitivity <- function(sensitivity, estimands = NULL, fileName = NULL) {
 #'                                    [createCcwDiagnosticThresholds()].
 #' @param numberOfGroups              The number of groups (quantiles) of the predictions.
 #' @param strataCovariateIds          IDs of covariates by which the calibration is also reported.
-#' @param sensitivity                 Also refit the outcome model under alternative choices (see
+#' @param sensitivity                 Also fit the outcome model under alternative choices (see
 #'                                    [computeCcwSensitivity()])?
 #' @param fitOutcomeModelArgs         An object of type `FitOutcomeModelArgs` as created using
 #'                                    [createFitOutcomeModelArgs()], used with `sensitivity = TRUE`.
@@ -1406,7 +1617,12 @@ computeCcwDiagnostics <- function(clones,
     } else if (.withoutDesignChoices(modelsArgs) != .withoutDesignChoices(fitCensoringModelsArgs$toList())) {
       message("The censoring models given were fit with other settings than fitCensoringModelsArgs (besides postGraceModel, initiateWithinModel, graceRegime and covariateTimeInteraction), so the models that depend on them are fit again")
     }
-    fits <- .censoringFitsFromModels(censoringModels)
+    # Models fit on clones without an outcome (shared across outcomes) are not the models without
+    # interactions of these clones, so those are fit on them:
+    fits <- .censoringFitsFromModels(censoringModels, noneAliases = identical(
+      as.numeric(attr(censoringModels, "metaData")$outcomeId),
+      as.numeric(attr(clones, "metaData")$outcomeId)
+    ))
   }
   strategies <- attr(clones, "metaData")$strategies
   types <- vapply(strategies, function(strategy) strategy$type, character(1))
@@ -1472,16 +1688,53 @@ computeCcwDiagnostics <- function(clones,
   variants <- variants[!duplicate, ]
   variantModels <- variantModels[!duplicate]
   specifiedModels <- variantModels[[1]]
+  # Choices whose models differ only in the covariateTimeInteraction their hazard models record (a
+  # model whose interaction columns are all left out is the model without interactions) keep their
+  # rows, but their weights, balance and calibration are those of the first such choice (`sameAs`):
+  unlabelled <- lapply(variantModels, .withoutInteractionLabels)
+  sameAs <- vapply(seq_along(variantModels), function(i) {
+    earlier <- which(vapply(seq_len(i - 1), function(j) .sameCensoringModels(unlabelled[[i]], unlabelled[[j]]), logical(1)))
+    return(if (length(earlier) == 0) i else earlier[1])
+  }, integer(1))
+  for (i in which(sameAs != seq_along(sameAs))) {
+    message(sprintf(
+      "The censoring models of variant '%s' are those of variant '%s' (their hazard models have no interaction columns), so its weights, balance and calibration are too",
+      variants$variant[i], variants$variant[sameAs[i]]
+    ))
+  }
 
-  calibration <- dplyr::bind_rows(lapply(variantModels, function(models) {
-    computeCensoringModelCalibration(clones, models, numberOfGroups, cloneCensorWeightData, strataCovariateIds)
-  }))
+  calibrations <- list()
+  for (i in seq_len(nrow(variants))) {
+    if (sameAs[i] == i) {
+      calibrations[[i]] <- computeCensoringModelCalibration(clones, variantModels[[i]], numberOfGroups, cloneCensorWeightData, strataCovariateIds)
+    } else {
+      calibrations[[i]] <- calibrations[[sameAs[i]]]
+      hazardRows <- calibrations[[i]]$model == "hazard"
+      calibrations[[i]]$covariateTimeInteraction[hazardRows] <- variants$covariateTimeInteraction[i]
+    }
+  }
+  calibration <- dplyr::bind_rows(calibrations)
   calibration <- calibration[!duplicated(calibration[, c("strategyId", "model", "covariateTimeInteraction", "graceRegime", "grouping", "covariateId", "group")]), ]
 
+  # With the sensitivity analysis, the weighted clones of the choices whose models its default variants
+  # use (the specified choice, and those that change one design choice) are kept for it:
+  changes <- (variants$postGraceModel != variants$postGraceModel[1]) + (variants$covariateTimeInteraction != variants$covariateTimeInteraction[1]) +
+    (variants$initiateWithinModel != variants$initiateWithinModel[1]) + (variants$graceRegime != variants$graceRegime[1])
+  keep <- sensitivity & seq_len(nrow(variants)) %in% sameAs[changes <= 1]
+  keptWeights <- list()
+  on.exit(for (entry in keptWeights) close(entry$weightedClones))
   balance <- list()
   weightSummaries <- list()
   for (i in seq_len(nrow(variants))) {
+    if (sameAs[i] != i) {
+      balance[[i]] <- dplyr::mutate(balance[[sameAs[i]]], variant = variants$variant[i])
+      weightSummaries[[i]] <- dplyr::mutate(weightSummaries[[sameAs[i]]], variant = variants$variant[i])
+      next
+    }
     weightedClones <- computeCensoringWeights(clones, variantModels[[i]], computeWeightsArgs)
+    if (keep[i]) {
+      keptWeights[[length(keptWeights) + 1]] <- list(models = variantModels[[i]], weightsJson = .settingsJson(computeWeightsArgs$toList()), weightedClones = weightedClones)
+    }
     tryCatch(
       {
         covariateBalance <- computeCovariateBalance(weightedClones, cloneCensorWeightData, computeCovariateBalanceArgs)
@@ -1491,7 +1744,7 @@ computeCcwDiagnostics <- function(clones,
           dplyr::as_tibble() |>
           dplyr::mutate(variant = variants$variant[i], .before = 1)
       },
-      finally = close(weightedClones)
+      finally = if (!keep[i]) close(weightedClones)
     )
   }
 
@@ -1513,7 +1766,7 @@ computeCcwDiagnostics <- function(clones,
     weightSummary = dplyr::bind_rows(weightSummaries),
     balance = dplyr::bind_rows(balance),
     positivity = positivity,
-    sensitivity = if (sensitivity) computeCcwSensitivity(clones, cloneCensorWeightData, fitCensoringModelsArgs, computeWeightsArgs, fitOutcomeModelArgs, .censoringModelFits = fits) else NULL,
+    sensitivity = if (sensitivity) computeCcwSensitivity(clones, cloneCensorWeightData, fitCensoringModelsArgs, computeWeightsArgs, fitOutcomeModelArgs, .censoringModelFits = fits, .weightedClones = keptWeights) else NULL,
     thresholds = diagnosticThresholds$toList()
   )
   class(diagnostics) <- "CcwDiagnostics"
@@ -1537,6 +1790,26 @@ computeCcwDiagnostics <- function(clones,
   attr(a, "metaData") <- NULL
   attr(b, "metaData") <- NULL
   return(identical(a, b))
+}
+
+# CcwCensoringModels without the covariateTimeInteraction recorded by their pooled logistic hazard
+# models that have no interaction columns (the `type`, and the empty `basis`, whose dimnames depend on
+# it), so that models that differ only in that setting compare the same with .sameCensoringModels().
+.withoutInteractionLabels <- function(censoringModels) {
+  unlabel <- function(model) {
+    if (.hasNoInteractionColumns(model)) {
+      model$interactions$type <- NULL
+      model$interactions$basis <- NULL
+    }
+    return(model)
+  }
+  for (i in seq_along(censoringModels)) {
+    censoringModels[[i]] <- unlabel(censoringModels[[i]])
+    if (!is.null(censoringModels[[i]]$early)) {
+      censoringModels[[i]]$early <- unlabel(censoringModels[[i]]$early)
+    }
+  }
+  return(censoringModels)
 }
 
 # One CcwPositivity from several, each model of each strategy once (in strategy order).

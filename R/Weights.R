@@ -967,8 +967,10 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
 # follow-up on each of `days`, NULL: the last days of all segments, with the day whose survival gives
 # their weight), ccwWSurvival (survival and numeratorSurvival per strategyId, rowId and evalDay, as in
 # computeCensoringWeights()), and the caps of both scales, ccwWCaps and ccwWOtherCaps (strategyId, cap).
-# The caller drops the ccwD and ccwW tables.
-.createCloneDayTables <- function(weightedClones, days) {
+# With `ranges = TRUE`, ccwDCloneDays holds ranges of days instead (.createCloneDayRanges()), whose
+# survival is computed for the same strategyId, rowId and evalDay. The caller drops the ccwD and ccwW
+# tables.
+.createCloneDayTables <- function(weightedClones, days, ranges = FALSE) {
   metaData <- attr(weightedClones, "metaData")
   censoringModels <- metaData$weights$censoringModels
   if (is.null(censoringModels)) {
@@ -988,20 +990,24 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   # as in computeCensoringWeights():
   .writeModelTables(weightedClones, censoringModels)
   offset <- if (metaData$sameDayOrdering == "deviationFirst") 0L else 1L
-  .andromedaExecute(weightedClones, sprintf("
-    CREATE TABLE ccwDCloneDays AS
-    SELECT segments.strategyId,
-      segments.rowId,
-      ccwDDays.day,
-      %s AS evalDay
-    FROM segments
-    INNER JOIN clones
-      ON segments.cloneRowId = clones.cloneRowId
-    INNER JOIN ccwDDays
-      ON segments.startTime < ccwDDays.day - clones.riskStart + 1
-        AND ccwDDays.day - clones.riskStart + 1 <= segments.stopTime
-    INNER JOIN ccwWParams
-      ON segments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
+  if (!ranges) {
+    .andromedaExecute(weightedClones, sprintf("
+      CREATE TABLE ccwDCloneDays AS
+      SELECT segments.strategyId,
+        segments.rowId,
+        ccwDDays.day,
+        %s AS evalDay
+      FROM segments
+      INNER JOIN clones
+        ON segments.cloneRowId = clones.cloneRowId
+      INNER JOIN ccwDDays
+        ON segments.startTime < ccwDDays.day - clones.riskStart + 1
+          AND ccwDDays.day - clones.riskStart + 1 <= segments.stopTime
+      INNER JOIN ccwWParams
+        ON segments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
+  } else {
+    .createCloneDayRanges(weightedClones, offset)
+  }
   .checkPredictionsExist(weightedClones, "ccwDCloneDays")
   .computeSurvival(weightedClones, "ccwDCloneDays")
   caps <- metaData$weights$caps
@@ -1011,6 +1017,93 @@ computeWeightDistribution <- function(weightedClones, days = NULL) {
   otherCaps <- if (is.null(caps$otherScaleCap)) caps[0, c("strategyId", "cap")] else tibble(strategyId = caps$strategyId, cap = caps$otherScaleCap)
   weightedClones$ccwWOtherCaps <- otherCaps |>
     filter(!is.na(.data$cap))
+  invisible(NULL)
+}
+
+# Creates ccwDCloneDays as ranges of the days of ccwDDays on which a clone is under follow-up with the
+# same weight: strategyId, rowId, lo and hi (the first and last day of the range), n (the days of
+# ccwDDays in it), ranged and evalDay (as .createCloneDayTables()). From each strategy's `stableDay` on,
+# the evalDay of .evalDaySql() no longer changes (the day after the switch, cutDay + 1, or windowEnd +
+# offset), so every clone has one range there (ranged = TRUE): its segments cover its follow-up without
+# gaps (computeCensoringWeights() cuts it into them). Before stableDay, each clone-day is a range of one
+# day (ranged = FALSE). So the distinct strategyId, rowId and evalDay are those of one row per
+# clone-day. Also creates ccwDCalendar (day, cum: the number of days of ccwDDays up to it), one row per
+# day of the clones' follow-up and the day before.
+.createCloneDayRanges <- function(weightedClones, offset) {
+  .andromedaExecute(weightedClones, sprintf("
+    CREATE TABLE ccwDSegments AS
+    SELECT segments.cloneRowId,
+      segments.strategyId,
+      segments.rowId,
+      CAST(segments.startTime + clones.riskStart AS INTEGER) AS firstDay,
+      CAST(segments.stopTime + clones.riskStart - 1 AS INTEGER) AS lastDay,
+      CAST(CASE
+        WHEN ccwWParams.kind = 'binary' OR ccwWParams.cutDay IS NOT NULL THEN ccwWParams.cutDay + 1
+        ELSE ccwWParams.windowEnd + %d
+      END AS INTEGER) AS stableDay
+    FROM segments
+    INNER JOIN clones
+      ON segments.cloneRowId = clones.cloneRowId
+    INNER JOIN ccwWParams
+      ON segments.strategyId = ccwWParams.strategyId;", offset))
+  .andromedaExecute(weightedClones, "
+    CREATE TABLE ccwDCalendar AS
+    SELECT calendar.day,
+      COUNT(ccwDDays.day) OVER (ORDER BY calendar.day) AS cum
+    FROM (
+      SELECT CAST(UNNEST(range(firstDay, lastDay + 1)) AS INTEGER) AS day
+      FROM (
+        SELECT MIN(firstDay) - 1 AS firstDay,
+          MAX(lastDay) AS lastDay
+        FROM ccwDSegments
+      ) followUp
+    ) calendar
+    LEFT JOIN ccwDDays
+      ON calendar.day = ccwDDays.day;")
+  .andromedaExecute(weightedClones, sprintf("
+    CREATE TABLE ccwDCloneDays AS
+    SELECT ccwDSegments.strategyId,
+      ccwDSegments.rowId,
+      ccwDDays.day AS lo,
+      ccwDDays.day AS hi,
+      CAST(1 AS BIGINT) AS n,
+      FALSE AS ranged,
+      %s AS evalDay
+    FROM ccwDSegments
+    INNER JOIN ccwDDays
+      ON ccwDDays.day >= ccwDSegments.firstDay
+        AND ccwDDays.day <= LEAST(ccwDSegments.lastDay, ccwDSegments.stableDay - 1)
+    INNER JOIN ccwWParams
+      ON ccwDSegments.strategyId = ccwWParams.strategyId;", .evalDaySql("ccwDDays.day", offset)))
+  .andromedaExecute(weightedClones, sprintf("
+    INSERT INTO ccwDCloneDays
+    SELECT followUp.strategyId,
+      followUp.rowId,
+      followUp.lo,
+      followUp.hi,
+      CAST(hiCalendar.cum - loCalendar.cum AS BIGINT) AS n,
+      TRUE AS ranged,
+      %s AS evalDay
+    FROM (
+      SELECT strategyId,
+        rowId,
+        stableDay,
+        GREATEST(MIN(firstDay), stableDay) AS lo,
+        MAX(lastDay) AS hi
+      FROM ccwDSegments
+      GROUP BY cloneRowId,
+        strategyId,
+        rowId,
+        stableDay
+    ) followUp
+    INNER JOIN ccwWParams
+      ON followUp.strategyId = ccwWParams.strategyId
+    INNER JOIN ccwDCalendar hiCalendar
+      ON hiCalendar.day = followUp.hi
+    INNER JOIN ccwDCalendar loCalendar
+      ON loCalendar.day = followUp.lo - 1
+    WHERE followUp.lo <= followUp.hi
+      AND hiCalendar.cum > loCalendar.cum;", .evalDaySql("followUp.stableDay", offset)))
   invisible(NULL)
 }
 

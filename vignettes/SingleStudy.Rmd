@@ -428,7 +428,7 @@ And positivity, per model:
 knitr::kable(diagnosticsTables$positivity, digits = 3)
 ```
 
-Here the alternatives agree: every variant balances the covariates (largest standardized difference below 0.1), the selection check does not flag (very few persons die during the grace period, so it has little power), and the weights stay small. The natural-grace variants (`graceRegime = "naturalGrace"`) are not identified in these data, because nobody starts metoprolol on day 7 itself, which is why their positivity is 0 (`fitCensoringModels()` warns about this). `computeCcwSensitivity()` (or `sensitivity = TRUE`) also refits the outcome model under each alternative.
+Here the alternatives agree: every variant balances the covariates (largest standardized difference below 0.1), the selection check does not flag (very few persons die during the grace period, so it has little power), and the weights stay small. The natural-grace variants (`graceRegime = "naturalGrace"`) are not identified in these data, because nobody starts metoprolol on day 7 itself, which is why their positivity is 0 (`fitCensoringModels()` warns about this). `computeCcwSensitivity()` (or `sensitivity = TRUE`) also fits the outcome model under each alternative.
 
 # Outcome models
 

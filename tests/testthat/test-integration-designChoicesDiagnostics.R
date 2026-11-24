@@ -253,3 +253,58 @@ test_that("computeCcwDiagnostics compares choices that give the same models once
     paste(c("1 binary NA", "2 binary NA", "1 hazard day0", "2 hazard day0", "1 hazard none", "2 hazard none"), rep(c("binaryAtG", "naturalGrace"), each = 6))
   )
 })
+
+test_that("computeCcwDiagnostics gives the choices whose hazard models have no interaction columns one set of weights, balance and calibration", {
+  data <- simulateCloneCensorWeightData(n = 300, maxDays = 60, graceEnd = 7, seed = 10)
+  population <- suppressMessages(createStudyPopulation(
+    cloneCensorWeightData = data,
+    outcomeId = 3,
+    createStudyPopulationArgs = CohortMethod::createCreateStudyPopulationArgs(riskWindowStart = 0, riskWindowEnd = 60, endAnchor = "cohort start")
+  ))
+  strategies <- list(
+    createTreatmentStrategy(1, "Initiate within 7 days", "initiateWithin", graceEnd = 7),
+    createTreatmentStrategy(2, "Initiate within 14 days", "initiateWithin", graceEnd = 14)
+  )
+  clones <- suppressMessages(createClones(population, data, createCreateClonesArgs(strategies = strategies)))
+  on.exit({
+    close(clones)
+    close(data)
+  })
+  # With 15-day intervals both grace periods are one interval, so "day0" leaves out its interaction
+  # column: the given hazard models are also the models of "none", which are not fit.
+  args <- designArgs(timeBasis = createTimeBasis(intervalLength = 15), initiateWithinModel = "hazard")
+  models <- suppressMessages(fitCensoringModels(clones, data, args))
+  messages <- capture_messages(diagnostics <- computeCcwDiagnostics(clones, data, args, numberOfGroups = 2, censoringModels = models))
+  expect_false(any(grepl("^Fitting logistic initiation hazard model", messages)))
+  none <- grepl("covariateTimeInteraction = none", diagnostics$variants$variant)
+  expect_gt(sum(none), 0)
+  expect_equal(sum(grepl("so its weights, balance and calibration are too", messages, fixed = TRUE)), sum(none))
+  # The rows of each "none" choice are those of its "day0" choice:
+  rowsOf <- function(table, interaction) {
+    rows <- as.data.frame(table[grepl(sprintf("covariateTimeInteraction = %s", interaction), table$variant), ])
+    rows$variant <- sub(sprintf("covariateTimeInteraction = %s", interaction), "", rows$variant)
+    rows <- rows[rows$variant %in% sub("covariateTimeInteraction = none", "", diagnostics$variants$variant[none]), ]
+    rows <- rows[order(rows$variant), ]
+    rownames(rows) <- NULL
+    return(rows)
+  }
+  expect_identical(rowsOf(diagnostics$weightSummary, "none"), rowsOf(diagnostics$weightSummary, "day0"))
+  expect_identical(rowsOf(diagnostics$balance, "none"), rowsOf(diagnostics$balance, "day0"))
+  hazard <- as.data.frame(diagnostics$calibration[diagnostics$calibration$model == "hazard", ])
+  hazard <- hazard[order(hazard$covariateTimeInteraction, hazard$strategyId, hazard$graceRegime, hazard$grouping, hazard$covariateId, hazard$group), ]
+  byInteraction <- lapply(split(hazard[, setdiff(names(hazard), "covariateTimeInteraction")], hazard$covariateTimeInteraction), function(rows) {
+    rownames(rows) <- NULL
+    return(rows)
+  })
+  expect_named(byInteraction, c("day0", "none"))
+  expect_identical(byInteraction$none, byInteraction$day0)
+})
+
+test_that("The fits of the Cox hazard model are shared between settings of the pooled logistic one", {
+  key <- function(...) .censoringFitKey("hazard", "treatment", 7L, NULL, createFitCensoringModelsArgs(...)$toList())
+  expect_identical(
+    key(hazardModelType = "cox", covariateTimeInteraction = "none"),
+    key(hazardModelType = "cox", covariateTimeInteraction = "none", timeBasis = createTimeBasis(intervalLength = 7))
+  )
+  expect_false(identical(key(covariateTimeInteraction = "none"), key(covariateTimeInteraction = "none", timeBasis = createTimeBasis(intervalLength = 7))))
+})
