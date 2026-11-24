@@ -52,6 +52,19 @@
   the at-risk counts on those days are exact. The rows of the days with events are kept, and can run
   past the last horizon.
 
+* `exportToCsv()` writes the `varianceDiagnostics` of the stacked sandwich (below) to two new tables:
+  `ccw_variance_diagnostics` (per estimand, with the key of `ccw_result`: `se_robust`, `se_stacked` and
+  their `ratio`, of the standard errors of the log for ratio estimands) and
+  `ccw_variance_model_diagnostics` (per strategy and `component`, the censoring or numerator model:
+  `prior_type` (`prior`, a reserved word in SQL), `support_size`, `conditional_on_support`,
+  `max_kkt_gap`, `rank`, `condition_number`, `sampled` and the truncated shares). They have rows only
+  for outcome models fit with `varianceEstimator = "stackedSandwich"`, controls included, and are
+  header-only otherwise (as in `inst/Results_Eunomia.zip`, to which the two header-only files were
+  added). No minimum cell count applies. Non-finite values (a 0/0 `ratio`, the infinite
+  `condition_number` of a singular information) are written as null. The export now reads each outcome
+  model file once for all the tables it takes from them (it read those of the outcomes of interest
+  twice).
+
 * `createFitOutcomeModelArgs(varianceEstimator = "stackedSandwich")` (an option; `"robust"` stays the
   default): the person-clustered sandwich of the outcome estimates stacked with the estimating equations
   of the censoring models and their stabilization numerators, so the standard errors account for the

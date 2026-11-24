@@ -198,6 +198,8 @@
 #'   coefficients of the support, 0 at the exact optimum, `NA` when it has none), the `rank` and
 #'   `conditionNumber` (on the correlation scale) of its information, whether it was fit on a sample (`sampled`), and its
 #'   strategy's `truncatedShare` and `otherScaleTruncatedShare` (see [computeCensoringWeights()]).
+#'   [exportToCsv()] writes them to `ccw_variance_diagnostics` and `ccw_variance_model_diagnostics`
+#'   (with the `strategyId` of `models`, the position of the strategy, as its strategy ID).
 #'
 #' @references
 #' Hernan MA. The hazards of hazard ratios. Epidemiology. 2010;21:13-15.

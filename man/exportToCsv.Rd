@@ -52,6 +52,12 @@ the log \code{hr}, \code{shr} or \code{or} (\code{logLikelihoodProfile} of \code
 normalized to a maximum of 0 and \code{gradient} as is, also for fits that did not converge, but not for
 contrasts that are null by design (standard error 0 up to rounding: below 1e-6). No minimum cell
 count applies to it.
+With \code{varianceEstimator = "stackedSandwich"} (see \code{\link[=createFitOutcomeModelArgs]{createFitOutcomeModelArgs()}}), also the
+\code{varianceDiagnostics} of \code{\link[=fitOutcomeModel]{fitOutcomeModel()}}: \code{ccw_variance_diagnostics} (per estimand, keyed as
+\code{ccw_result}: the robust and stacked standard errors and their ratio) and
+\code{ccw_variance_model_diagnostics} (per strategy and censoring or numerator model). Other analyses
+have no rows in them, so the files of a site with none have only their header. No minimum cell
+count applies to them.
 \item For outcomes of interest: \code{ccw_attrition}, \code{ccw_follow_up_dist}, \code{ccw_covariate_balance} (at the
 end of the grace periods, see \code{\link[=computeCovariateBalance]{computeCovariateBalance()}}), \code{ccw_censoring_model} (the non-zero
 coefficients) and \code{ccw_censoring_model_dist} (the density of the predicted probability of

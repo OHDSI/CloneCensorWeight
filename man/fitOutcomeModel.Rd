@@ -69,6 +69,8 @@ Laplace prior), \code{maxKktGap} (Laplace: the largest \verb{|sum_i U_ij| / s_j 
 coefficients of the support, 0 at the exact optimum, \code{NA} when it has none), the \code{rank} and
 \code{conditionNumber} (on the correlation scale) of its information, whether it was fit on a sample (\code{sampled}), and its
 strategy's \code{truncatedShare} and \code{otherScaleTruncatedShare} (see \code{\link[=computeCensoringWeights]{computeCensoringWeights()}}).
+\code{\link[=exportToCsv]{exportToCsv()}} writes them to \code{ccw_variance_diagnostics} and \code{ccw_variance_model_diagnostics}
+(with the \code{strategyId} of \code{models}, the position of the strategy, as its strategy ID).
 }
 }
 \description{

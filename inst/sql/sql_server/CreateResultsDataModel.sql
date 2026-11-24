@@ -234,6 +234,39 @@ CREATE TABLE @database_schema.@table_prefixccw_likelihood_profile (
 	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand, log_rr)
 );
 
+CREATE TABLE @database_schema.@table_prefixccw_variance_diagnostics (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	target_strategy_id INT NOT NULL,
+	comparator_strategy_id INT NOT NULL,
+	estimand VARCHAR(50) NOT NULL,
+	se_robust FLOAT,
+	se_stacked FLOAT,
+	ratio FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, target_strategy_id, comparator_strategy_id, estimand)
+);
+
+CREATE TABLE @database_schema.@table_prefixccw_variance_model_diagnostics (
+	database_id VARCHAR NOT NULL,
+	analysis_id INT NOT NULL,
+	target_treatment_id BIGINT NOT NULL,
+	outcome_id BIGINT NOT NULL,
+	strategy_id INT NOT NULL,
+	component VARCHAR(100) NOT NULL,
+	prior_type VARCHAR(20),
+	support_size INT,
+	conditional_on_support INT,
+	max_kkt_gap FLOAT,
+	rank INT,
+	condition_number FLOAT,
+	sampled INT,
+	truncated_share FLOAT,
+	other_scale_truncated_share FLOAT,
+	PRIMARY KEY(database_id, analysis_id, target_treatment_id, outcome_id, strategy_id, component)
+);
+
 CREATE TABLE @database_schema.@table_prefixccw_diagnostics_summary (
 	database_id VARCHAR NOT NULL,
 	analysis_id INT NOT NULL,

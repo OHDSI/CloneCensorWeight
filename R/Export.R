@@ -38,6 +38,12 @@
 #'   normalized to a maximum of 0 and `gradient` as is, also for fits that did not converge, but not for
 #'   contrasts that are null by design (standard error 0 up to rounding: below 1e-6). No minimum cell
 #'   count applies to it.
+#'   With `varianceEstimator = "stackedSandwich"` (see [createFitOutcomeModelArgs()]), also the
+#'   `varianceDiagnostics` of [fitOutcomeModel()]: `ccw_variance_diagnostics` (per estimand, keyed as
+#'   `ccw_result`: the robust and stacked standard errors and their ratio) and
+#'   `ccw_variance_model_diagnostics` (per strategy and censoring or numerator model). Other analyses
+#'   have no rows in them, so the files of a site with none have only their header. No minimum cell
+#'   count applies to them.
 #' - For outcomes of interest: `ccw_attrition`, `ccw_follow_up_dist`, `ccw_covariate_balance` (at the
 #'   end of the grace periods, see [computeCovariateBalance()]), `ccw_censoring_model` (the non-zero
 #'   coefficients) and `ccw_censoring_model_dist` (the density of the predicted probability of
@@ -113,8 +119,7 @@ exportToCsv <- function(outputFolder,
     .exportDiagnosticsSummary(outputFolder, targetTreatment, strategyIds, exportFolder, databaseId),
     .exportCovariateBalance(outputFolder, reference, specifications, exportFolder, databaseId, minCellCount),
     .exportCensoringModels(outputFolder, reference, exportFolder, databaseId),
-    .exportFromOutcomeModels(outputFolder, reference, exportFolder, databaseId, minCellCount),
-    .exportLikelihoodProfiles(outputFolder, reference, exportFolder, databaseId)
+    .exportFromOutcomeModels(outputFolder, reference, exportFolder, databaseId, minCellCount)
   )
 
   message("Adding results to zip file")
@@ -478,14 +483,26 @@ exportToCsv <- function(outputFolder,
 # Tables from the outcome model files ----------------------------------------------------------------
 
 # ccw_attrition, ccw_follow_up_dist, ccw_censoring_model_dist, ccw_weight_dist and
-# ccw_cumulative_incidence, from the outcome models of the outcomes of interest.
+# ccw_cumulative_incidence, from the outcome models of the outcomes of interest, and
+# ccw_likelihood_profile, ccw_variance_diagnostics and ccw_variance_model_diagnostics, from every outcome
+# model (controls included). Each outcome model file is read once.
 .exportFromOutcomeModels <- function(outputFolder, reference, exportFolder, databaseId, minCellCount) {
-  message("- ccw_attrition, ccw_follow_up_dist, ccw_censoring_model_dist, ccw_weight_dist and ccw_cumulative_incidence tables")
-  reference <- reference[reference$outcomeOfInterest, ]
-  tables <- list(attrition = list(), followUp = list(), censoringDist = list(), weightDist = list(), incidence = list())
+  message("- ccw_attrition, ccw_follow_up_dist, ccw_censoring_model_dist, ccw_weight_dist, ccw_cumulative_incidence, ccw_likelihood_profile, ccw_variance_diagnostics and ccw_variance_model_diagnostics tables")
+  reference <- reference[reference$outcomeModelFile != "", ]
+  tables <- list(
+    attrition = list(), followUp = list(), censoringDist = list(), weightDist = list(), incidence = list(), profiles = list(),
+    varianceEstimands = list(), varianceModels = list()
+  )
   for (i in seq_len(nrow(reference))) {
     refRow <- reference[i, ]
     outcomeModel <- readRDS(file.path(outputFolder, refRow$outcomeModelFile))
+    tables$profiles[[length(tables$profiles) + 1]] <- .likelihoodProfileRows(outcomeModel, refRow, databaseId)
+    varianceDiagnostics <- .varianceDiagnosticsRows(outcomeModel, refRow, databaseId)
+    tables$varianceEstimands[[length(tables$varianceEstimands) + 1]] <- varianceDiagnostics$estimands
+    tables$varianceModels[[length(tables$varianceModels) + 1]] <- varianceDiagnostics$models
+    if (!refRow$outcomeOfInterest) {
+      next
+    }
     keys <- function(data, position) {
       data <- dplyr::mutate(
         data,
@@ -562,51 +579,78 @@ exportToCsv <- function(outputFolder,
     .writeToCsv(bind(tables$followUp, "ccw_follow_up_dist"), "ccw_follow_up_dist", exportFolder),
     .writeToCsv(bind(tables$censoringDist, "ccw_censoring_model_dist"), "ccw_censoring_model_dist", exportFolder),
     .writeToCsv(bind(tables$weightDist, "ccw_weight_dist"), "ccw_weight_dist", exportFolder),
-    .writeToCsv(bind(tables$incidence, "ccw_cumulative_incidence"), "ccw_cumulative_incidence", exportFolder)
+    .writeToCsv(bind(tables$incidence, "ccw_cumulative_incidence"), "ccw_cumulative_incidence", exportFolder),
+    .writeToCsv(dplyr::bind_rows(tables$profiles), "ccw_likelihood_profile", exportFolder),
+    .writeToCsv(dplyr::bind_rows(tables$varianceEstimands), "ccw_variance_diagnostics", exportFolder),
+    .writeToCsv(dplyr::bind_rows(tables$varianceModels), "ccw_variance_model_diagnostics", exportFolder)
   ))
 }
 
-# ccw_likelihood_profile, as CohortMethod's cm_likelihood_profile (CohortMethod R/Export.R,
-# exportLikelihoodProfiles(), Apache 2.0): the likelihood profile of the log hr, shr or or of every outcome
-# model (controls included, and fits that did not converge), with the log likelihood normalized to a
-# maximum of 0 and the gradient as is, without a minimum cell count. Unlike CohortMethod, a contrast that
-# is null by design (standard error 0 up to rounding) is left out, and so are non-finite points.
-.exportLikelihoodProfiles <- function(outputFolder, reference, exportFolder, databaseId) {
-  message("- ccw_likelihood_profile table")
-  reference <- reference[reference$outcomeModelFile != "", ]
-  profiles <- list()
-  for (i in seq_len(nrow(reference))) {
-    refRow <- reference[i, ]
-    outcomeModel <- readRDS(file.path(outputFolder, refRow$outcomeModelFile))
-    profile <- outcomeModel$logLikelihoodProfile
-    if (is.null(profile)) {
-      next
-    }
-    estimand <- .profiledEstimands[[outcomeModel$modelType]]
-    # A contrast that is null by design has a peaked pseudo-likelihood but no information. Its standard
-    # error is 0, or rounding noise (of the order of 1e-7 with Cyclops' robust variance); a log ratio with a
-    # standard error below 1e-6 would need of the order of 1e12 events:
-    if (isTRUE(outcomeModel$estimates$seLogEstimate[outcomeModel$estimates$estimand == estimand] < 1e-6)) {
-      next
-    }
-    profile <- profile[is.finite(profile$point) & is.finite(profile$value), ]
-    if (nrow(profile) == 0) {
-      next
-    }
-    profiles[[length(profiles) + 1]] <- tibble(
-      databaseId = databaseId,
-      analysisId = as.integer(refRow$analysisId),
-      targetTreatmentId = refRow$targetTreatmentId,
-      outcomeId = refRow$outcomeId,
-      targetStrategyId = refRow$targetStrategyId,
-      comparatorStrategyId = refRow$comparatorStrategyId,
-      estimand = estimand,
-      logRr = profile$point,
-      logLikelihood = profile$value - max(profile$value),
-      gradient = profile$derivative
-    )
+# The rows of ccw_likelihood_profile of an outcome model, as CohortMethod's cm_likelihood_profile
+# (CohortMethod R/Export.R, exportLikelihoodProfiles(), Apache 2.0): the likelihood profile of the log hr,
+# shr or or (also of fits that did not converge), with the log likelihood normalized to a maximum of 0 and
+# the gradient as is, without a minimum cell count. Unlike CohortMethod, a contrast that is null by design
+# (standard error 0 up to rounding) is left out, and so are non-finite points. NULL when there are none.
+.likelihoodProfileRows <- function(outcomeModel, refRow, databaseId) {
+  profile <- outcomeModel$logLikelihoodProfile
+  if (is.null(profile)) {
+    return(NULL)
   }
-  return(.writeToCsv(dplyr::bind_rows(profiles), "ccw_likelihood_profile", exportFolder))
+  estimand <- .profiledEstimands[[outcomeModel$modelType]]
+  # A contrast that is null by design has a peaked pseudo-likelihood but no information. Its standard
+  # error is 0, or rounding noise (of the order of 1e-7 with Cyclops' robust variance); a log ratio with a
+  # standard error below 1e-6 would need of the order of 1e12 events:
+  if (isTRUE(outcomeModel$estimates$seLogEstimate[outcomeModel$estimates$estimand == estimand] < 1e-6)) {
+    return(NULL)
+  }
+  profile <- profile[is.finite(profile$point) & is.finite(profile$value), ]
+  if (nrow(profile) == 0) {
+    return(NULL)
+  }
+  return(tibble(
+    databaseId = databaseId,
+    analysisId = as.integer(refRow$analysisId),
+    targetTreatmentId = refRow$targetTreatmentId,
+    outcomeId = refRow$outcomeId,
+    targetStrategyId = refRow$targetStrategyId,
+    comparatorStrategyId = refRow$comparatorStrategyId,
+    estimand = estimand,
+    logRr = profile$point,
+    logLikelihood = profile$value - max(profile$value),
+    gradient = profile$derivative
+  ))
+}
+
+# The rows of ccw_variance_diagnostics (`estimands`, keyed as ccw_result) and
+# ccw_variance_model_diagnostics (`models`, per strategy and component) of an outcome model: its
+# `varianceDiagnostics` (varianceEstimator = "stackedSandwich" only; NULL otherwise). Standard errors and
+# model diagnostics are not counts, so no minimum cell count applies. Non-finite values (a NaN ratio of two
+# zero standard errors, an infinite condition number of a singular information) become NA, so the CSV
+# and the database agree (the upload would make Inf null anyway).
+.varianceDiagnosticsRows <- function(outcomeModel, refRow, databaseId) {
+  diagnostics <- outcomeModel$varianceDiagnostics
+  if (is.null(diagnostics)) {
+    return(NULL)
+  }
+  keys <- tibble(
+    databaseId = databaseId,
+    analysisId = as.integer(refRow$analysisId),
+    targetTreatmentId = refRow$targetTreatmentId,
+    outcomeId = refRow$outcomeId
+  )
+  estimands <- dplyr::cross_join(
+    dplyr::mutate(keys, targetStrategyId = refRow$targetStrategyId, comparatorStrategyId = refRow$comparatorStrategyId),
+    diagnostics$estimands[, c("estimand", "seRobust", "seStacked", "ratio")]
+  )
+  # The models' strategyId is the position of the strategy (1 target, 2 comparator), as in the censoring
+  # models; PRIOR is a reserved word in SQL:
+  models <- dplyr::cross_join(keys, dplyr::rename(diagnostics$models, priorType = "prior"))
+  models$strategyId <- as.integer(.strategyIdOf(refRow, models$strategyId))
+  finite <- function(x) if (is.double(x)) replace(x, !is.finite(x), NA) else x
+  return(list(
+    estimands = dplyr::mutate(estimands, dplyr::across(dplyr::everything(), finite)),
+    models = dplyr::mutate(models, dplyr::across(dplyr::everything(), finite))
+  ))
 }
 
 # The density of the predicted probability of starting the treatment of each censoring model, on 100

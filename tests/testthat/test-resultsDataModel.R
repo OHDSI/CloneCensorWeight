@@ -6,6 +6,9 @@ library(testthat)
 
 specifications <- getResultsDataModelSpecifications()
 definitionTables <- c("ccw_analysis", "ccw_strategy", "ccw_target_treatment", "ccw_target_treatment_outcome")
+# Tables with rows only for analyses with varianceEstimator = "stackedSandwich", which the Eunomia runs do
+# not use: header-only there.
+stackedOnlyTables <- c("ccw_variance_diagnostics", "ccw_variance_model_diagnostics")
 
 quietly <- function(expr) {
   value <- NULL
@@ -122,21 +125,114 @@ test_that("Likelihood profiles are exported as CohortMethod's, without contrasts
   saveRDS(list(modelType = "cox", estimates = estimates(0.2), logLikelihoodProfile = profile), file.path(outputFolder, "profile.rds"))
   reference <- tibble(
     analysisId = 1:5, targetTreatmentId = 5, outcomeId = 3, targetStrategyId = 1L, comparatorStrategyId = 2L,
-    outcomeModelFile = c("none.rds", "null.rds", "noise.rds", "", "profile.rds")
+    outcomeModelFile = c("none.rds", "null.rds", "noise.rds", "", "profile.rds"), outcomeOfInterest = FALSE
   )
+  fileName <- "ccw_likelihood_profile.csv"
   # (a) no profile, (b) a contrast null by design, with a standard error of 0 or of rounding noise, (c) no
   # outcome model:
-  fileName <- quietly(.exportLikelihoodProfiles(outputFolder, reference[1:4, ], outputFolder, "db"))
+  quietly(.exportFromOutcomeModels(outputFolder, reference[1:4, ], outputFolder, "db", 5))
   expect_equal(csvColumns(file.path(outputFolder, fileName)), specifications$columnName[specifications$tableName == "ccw_likelihood_profile"])
   expect_equal(nrow(readr::read_csv(file.path(outputFolder, fileName), col_types = readr::cols())), 0)
   # A profile, with the log likelihood normalized to a maximum of 0 and the gradient as is:
-  quietly(.exportLikelihoodProfiles(outputFolder, reference, outputFolder, "db"))
+  quietly(.exportFromOutcomeModels(outputFolder, reference, outputFolder, "db", 5))
   exported <- readr::read_csv(file.path(outputFolder, fileName), col_types = readr::cols())
   expect_equal(exported$analysis_id, rep(5, 3))
   expect_equal(exported$estimand, rep("hr", 3))
   expect_equal(exported$log_rr, profile$point)
   expect_equal(exported$log_likelihood, c(-2, 0, -1))
   expect_equal(exported$gradient, profile$derivative)
+})
+
+test_that("Non-finite variance diagnostics are exported as NA", {
+  outcomeModel <- list(varianceDiagnostics = list(
+    estimands = tibble(estimand = c("hr", "rd_10"), seRobust = c(0, 0.1), seStacked = c(0, 0.2), ratio = c(NaN, 2)),
+    models = tibble(
+      strategyId = 1L, component = "hazard model", prior = "none", supportSize = 2L, conditionalOnSupport = FALSE,
+      maxKktGap = NA_real_, rank = 1L, conditionNumber = Inf, sampled = FALSE, truncatedShare = 0, otherScaleTruncatedShare = 0
+    )
+  ))
+  refRow <- tibble(analysisId = 1, targetTreatmentId = 5, outcomeId = 3, targetStrategyId = 7L, comparatorStrategyId = 8L)
+  rows <- .varianceDiagnosticsRows(outcomeModel, refRow, "db")
+  expect_equal(rows$estimands$ratio, c(NA, 2))
+  expect_equal(rows$estimands$seRobust, c(0, 0.1))
+  expect_true(is.na(rows$models$conditionNumber))
+  expect_equal(rows$models$strategyId, 7L)
+})
+
+test_that("The stacked-sandwich variance diagnostics are exported, keyed as ccw_result, and upload", {
+  skip_if_not_installed("RSQLite")
+  skip_if_not_installed("zip")
+  fixture <- createM3Fixture(150, seed = 1, deathFraction = 0)
+  data <- createM3Data(fixture)
+  clones <- buildM3Clones(fixture$persons, m3Strategies("initiateWithin", "notInitiateWithin", 3), competingEvents = "none")
+  models <- suppressMessages(fitCensoringModels(clones, data, m3Args("logistic")))
+  weightedClones <- suppressMessages(computeCensoringWeights(clones, models, createComputeWeightsArgs()))
+  outcomeModel <- suppressMessages(fitOutcomeModel(
+    weightedClones, createFitOutcomeModelArgs(horizons = 10, varianceEstimator = "stackedSandwich"),
+    cloneCensorWeightData = data
+  ))
+  close(weightedClones)
+  close(clones)
+  close(data)
+  outputFolder <- tempfile()
+  dir.create(outputFolder)
+  on.exit(unlink(outputFolder, recursive = TRUE))
+  saveRDS(outcomeModel, file.path(outputFolder, "stacked.rds"))
+  outcomeModel$varianceDiagnostics <- NULL
+  saveRDS(outcomeModel, file.path(outputFolder, "robust.rds"))
+  reference <- tibble(
+    analysisId = 1:2, targetTreatmentId = 5, outcomeId = 3, targetStrategyId = 7L, comparatorStrategyId = 8L,
+    outcomeModelFile = c("robust.rds", "stacked.rds"), outcomeOfInterest = FALSE
+  )
+  tableNames <- c("ccw_variance_diagnostics", "ccw_variance_model_diagnostics")
+  readTable <- function(tableName) readr::read_csv(file.path(outputFolder, paste0(tableName, ".csv")), col_types = readr::cols())
+  # Without the stacked sandwich, only the header:
+  quietly(.exportFromOutcomeModels(outputFolder, reference[1, ], outputFolder, "db", 5))
+  for (tableName in tableNames) {
+    expect_equal(csvColumns(file.path(outputFolder, paste0(tableName, ".csv"))), specifications$columnName[specifications$tableName == tableName])
+    expect_equal(nrow(readTable(tableName)), 0, info = tableName)
+  }
+  # With it, the rows of the stacked fit only, equal to its varianceDiagnostics, with unique keys:
+  quietly(.exportFromOutcomeModels(outputFolder, reference, outputFolder, "db", 5))
+  diagnostics <- readRDS(file.path(outputFolder, "stacked.rds"))$varianceDiagnostics
+  for (tableName in tableNames) {
+    exported <- readTable(tableName)
+    expect_equal(colnames(exported), specifications$columnName[specifications$tableName == tableName])
+    keys <- specifications$columnName[specifications$tableName == tableName & specifications$primaryKey == "Yes"]
+    expect_false(anyDuplicated(exported[, keys]) > 0, info = tableName)
+    expect_equal(unique(exported$analysis_id), 2, info = tableName)
+  }
+  estimands <- readTable("ccw_variance_diagnostics")
+  expect_equal(estimands$estimand, diagnostics$estimands$estimand)
+  expect_true(all(c("hr", "rd_10") %in% estimands$estimand))
+  expect_equal(estimands$se_robust, diagnostics$estimands$seRobust, tolerance = 1e-10)
+  expect_equal(estimands$se_stacked, diagnostics$estimands$seStacked, tolerance = 1e-10)
+  expect_equal(estimands$ratio, diagnostics$estimands$ratio, tolerance = 1e-10)
+  modelRows <- readTable("ccw_variance_model_diagnostics")
+  # The strategy IDs, not the positions of the strategies:
+  expect_equal(diagnostics$models$strategyId, c(1, 1, 2, 2))
+  expect_equal(modelRows$strategy_id, c(7, 7, 8, 8))
+  expect_equal(modelRows$component, diagnostics$models$component)
+  expect_equal(modelRows$prior_type, diagnostics$models$prior)
+  expect_equal(modelRows$conditional_on_support, as.integer(diagnostics$models$conditionalOnSupport))
+  expect_equal(modelRows$sampled, as.integer(diagnostics$models$sampled))
+  expect_equal(modelRows$rank, diagnostics$models$rank)
+  expect_equal(modelRows$condition_number, diagnostics$models$conditionNumber, tolerance = 1e-10)
+  expect_equal(modelRows$support_size, diagnostics$models$supportSize)
+  expect_equal(as.numeric(modelRows$max_kkt_gap), diagnostics$models$maxKktGap, tolerance = 1e-10)
+  expect_equal(modelRows$truncated_share, diagnostics$models$truncatedShare, tolerance = 1e-10)
+  expect_equal(modelRows$other_scale_truncated_share, diagnostics$models$otherScaleTruncatedShare, tolerance = 1e-10)
+
+  # The DDL takes them:
+  connectionDetails <- newSqlite()
+  quietly(createResultsDataModel(connectionDetails, databaseSchema = "main"))
+  zipFile <- file.path(outputFolder, "Results_db.zip")
+  DatabaseConnector::createZipFile(zipFile, files = file.path(outputFolder, paste0(tableNames, ".csv")), rootFolder = outputFolder)
+  quietly(uploadResults(connectionDetails, schema = "main", zipFileName = zipFile, purgeSiteDataBeforeUploading = FALSE))
+  connection <- DatabaseConnector::connect(connectionDetails)
+  on.exit(DatabaseConnector::disconnect(connection), add = TRUE)
+  expect_equal(countRows(connection, "ccw_variance_diagnostics"), nrow(estimands))
+  expect_equal(countRows(connection, "ccw_variance_model_diagnostics"), nrow(modelRows))
 })
 
 test_that("createResultsDataModel creates the specified tables, and migrations run from an empty schema", {
@@ -209,8 +305,11 @@ test_that("The shipped Results_Eunomia.zip has the specified columns and uploads
   quietly(uploadResults(connectionDetails, schema = "main", zipFileName = zipFile, purgeSiteDataBeforeUploading = FALSE))
   connection <- DatabaseConnector::connect(connectionDetails)
   on.exit(DatabaseConnector::disconnect(connection), add = TRUE)
-  for (tableName in unique(specifications$tableName)) {
+  for (tableName in setdiff(unique(specifications$tableName), stackedOnlyTables)) {
     expect_true(countRows(connection, tableName) > 0, info = tableName)
+  }
+  for (tableName in stackedOnlyTables) {
+    expect_equal(countRows(connection, tableName), 0, info = tableName)
   }
   expect_equal(
     DatabaseConnector::querySql(connection, "SELECT DISTINCT database_id FROM main.ccw_result;")[, 1],
@@ -304,7 +403,7 @@ test_that("exportToCsv writes every table with exactly the specified columns", {
       info = tableName
     )
     data <- readExported(exportFolder, tableName)
-    expect_true(nrow(data) > 0, info = tableName)
+    expect_equal(nrow(data) > 0, !tableName %in% stackedOnlyTables, info = tableName)
     # Primary keys are unique and complete:
     keys <- specifications$columnName[specifications$tableName == tableName & specifications$primaryKey == "Yes"]
     expect_false(anyDuplicated(data[, keys]) > 0, info = tableName)
