@@ -11,7 +11,8 @@ computeCcwSensitivity(
   computeWeightsArgs = createComputeWeightsArgs(),
   fitOutcomeModelArgs = createFitOutcomeModelArgs(),
   variants = NULL,
-  .censoringModelFits = NULL
+  .censoringModelFits = NULL,
+  .weightedClones = NULL
 )
 }
 \arguments{
@@ -37,13 +38,22 @@ example \code{list("binary, no interactions" = list(fitCensoringModelsArgs = lis
 
 \item{.censoringModelFits}{For internal use (\code{\link[=computeCcwDiagnostics]{computeCcwDiagnostics()}}): \code{NULL}, or censoring
 models fitted earlier, which are reused instead of refitted.}
+
+\item{.weightedClones}{For internal use (\code{\link[=computeCcwDiagnostics]{computeCcwDiagnostics()}}): \code{NULL}, or a list of
+weighted clones computed earlier from these clones (each a list with
+the censoring \code{models}, the \code{weightsJson} of the \code{ComputeWeightsArgs}
+as sorted JSON, and the \code{weightedClones}, which the caller closes),
+which are used instead of weighting the clones again.}
 }
 \value{
 A tibble of class \code{CcwSensitivity} with columns \code{variant} (\code{"specified"} for the specified
 settings), \code{changes} (a description of the changed settings) and the columns of the estimates of
 \code{\link[=fitOutcomeModel]{fitOutcomeModel()}} (\code{estimand}, \code{estimate}, \code{logEstimate}, \code{seLogEstimate}, \code{se}, \code{lb95}, \code{ub95},
 \code{p}). The attribute \code{variants} holds the settings of each variant. Each censoring model is fit once
-and shared by the variants that use it.
+and shared by the variants that use it. Variants whose censoring models differ only in the
+\code{covariateTimeInteraction} their hazard models record (for example settings whose interaction
+columns are all left out, see \code{\link[=computeCcwDiagnostics]{computeCcwDiagnostics()}}) have the same models: with the same weight
+settings they share their weights, and with the same outcome model settings too, their outcome model.
 }
 \description{
 Fits the censoring models, the weights and the outcome model under the specified settings and under

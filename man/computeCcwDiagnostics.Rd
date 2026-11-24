@@ -40,7 +40,7 @@ created from.}
 
 \item{strataCovariateIds}{IDs of covariates by which the calibration is also reported.}
 
-\item{sensitivity}{Also refit the outcome model under alternative choices (see
+\item{sensitivity}{Also fit the outcome model under alternative choices (see
 \code{\link[=computeCcwSensitivity]{computeCcwSensitivity()}})?}
 
 \item{fitOutcomeModelArgs}{An object of type \code{FitOutcomeModelArgs} as created using
@@ -88,8 +88,12 @@ rank them. Choices that give the same censoring models (for example the interact
 settings when no strategy uses the hazard model) are compared once. Each censoring model is fit once
 and shared by the choices that use it (for example the hazard model through \code{G} serves both
 \code{postGraceModel} choices, and both strategies with \code{initiateWithinModel = "hazard"}), and the models
-in \code{censoringModels} are reused, so only the models they lack are fit. For each choice the result
-holds:
+in \code{censoringModels} are reused, so only the models they lack are fit. A pooled logistic hazard
+model whose interaction columns are all left out (see \code{\link[=fitCensoringModels]{fitCensoringModels()}}; for example \code{"day0"}
+with 7-day intervals and \code{G = 7} when nobody starts on day 7) is the model without interactions, so
+it is fit once for all the interaction settings that give it. The choices whose models differ only
+in that setting keep their rows, labelled by their settings, with the weights, balance and
+calibration of the first of them, computed once. For each choice the result holds:
 \itemize{
 \item \code{calibration}: \code{\link[=computeCensoringModelCalibration]{computeCensoringModelCalibration()}}, for the binary model at \code{G} and for the
 hazard model of each interaction setting, by group of the prediction, in the large, and by the
@@ -103,7 +107,8 @@ covariates above \code{diagnosticThresholds$sdmThreshold}, before and after weig
 \item \code{positivity}: \code{\link[=computePositivity]{computePositivity()}} for the specified interaction setting, with the binary model
 at \code{G} and the hazard model of each strategy with a grace period;
 \item \code{sensitivity}: \code{\link[=computeCcwSensitivity]{computeCcwSensitivity()}} with its default variants, only when \code{sensitivity = TRUE},
-because it refits the outcome model under every variant.
+because it fits the outcome model under every variant (once per distinct set of weights and outcome
+model settings, with the weights computed for the choices above where the models are the same).
 }
 
 Read the balance with the grace-period selection check. The clones compared at \code{tau + 1} are the

@@ -164,6 +164,13 @@ createDefaultCcwMultiThreadingSettings <- function(maxCores) {
 #'    event time, every 30 days and the horizons, `attrition` (that of the clones) and
 #'    `followUpDistribution` (quantiles of the days of follow-up of the clones of each strategy).
 #'    `diagnostics$values` holds the values that the summary compares with the diagnostic thresholds.
+#'
+#'    Analyses that differ only in `covariateTimeInteraction` can have the same censoring models:
+#'    pooled logistic hazard models whose interaction columns are all left out (see
+#'    [fitCensoringModels()]) are the model without interactions, fit once. Their covariate balance, and
+#'    their outcome models when their other settings are the same, are then computed for one of them
+#'    and copied for the others (with the bootstrap, only when the hazard models were fit on their
+#'    whole risk sets, so that the replicates' models have no interaction columns either).
 #' 7. **Summary** (`resultsSummary.rds`, `diagnosticsSummary.rds`): see [getResultsSummary()] and
 #'    [getDiagnosticsSummary()].
 #'
@@ -433,8 +440,16 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     .runTasks(unname(tasks), .doFitCensoringModels, multiThreadingSettings$fitCensoringModelThreads)
   }
 
+  # Censoring models that are those of another file of the same censoring population (analyses that
+  # differ only in a covariateTimeInteraction whose interaction columns are all left out): the balance and
+  # outcome models of such analyses with the same other settings are computed once and copied.
+  sameModels <- .sameCensoringModelFiles(referenceTable, getAnalysis, path)
+
   # Covariate balance ----------------------------------------------------------------------------
-  subset <- referenceTable[!duplicated(referenceTable$balanceFile) & toCompute(referenceTable$balanceFile), ]
+  balanceRows <- referenceTable[referenceTable$balanceFile != "" & !duplicated(referenceTable$balanceFile), ]
+  balanceKey <- paste(sameModels[balanceRows$censoringModelFile], balanceRows$weightsId, balanceRows$balanceId)
+  balanceSource <- balanceRows$balanceFile[match(balanceKey, balanceKey)]
+  subset <- balanceRows[balanceSource == balanceRows$balanceFile & toCompute(balanceRows$balanceFile), ]
   if (nrow(subset) > 0) {
     message("*** Computing covariate balance ***")
     tasks <- lapply(seq_len(nrow(subset)), function(i) {
@@ -454,9 +469,13 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     })
     .runTasks(tasks, .doComputeBalance, multiThreadingSettings$computeBalanceThreads)
   }
+  copies <- toCompute(balanceRows$balanceFile)
+  .copyOutputFiles(balanceSource[copies], balanceRows$balanceFile[copies], path, "covariate balance")
 
   # Outcome models ---------------------------------------------------------------------------------
-  subset <- referenceTable[toCompute(referenceTable$outcomeModelFile), ]
+  needed <- toCompute(referenceTable$outcomeModelFile)
+  outcomeSource <- .sharedOutcomeModelFiles(referenceTable, sameModels, getAnalysis, specifications, path)
+  subset <- referenceTable[needed & outcomeSource == referenceTable$outcomeModelFile, ]
   subset <- subset[order(!subset$outcomeOfInterest), ]
   if (nrow(subset) > 0) {
     message("*** Fitting outcome models ***")
@@ -485,11 +504,12 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     })
     .runTasks(tasks, .doFitOutcomeModel, multiThreadingSettings$fitOutcomeModelThreads)
   }
+  .copyOutputFiles(outcomeSource[needed], referenceTable$outcomeModelFile[needed], path, "outcome model")
 
   # Summary --------------------------------------------------------------------------------------
   mainFileName <- file.path(outputFolder, "resultsSummary.rds")
   diagnosticsSummaryFileName <- file.path(outputFolder, "diagnosticsSummary.rds")
-  if (nrow(subset) > 0 || !file.exists(mainFileName) || !file.exists(diagnosticsSummaryFileName)) {
+  if (any(needed) || !file.exists(mainFileName) || !file.exists(diagnosticsSummaryFileName)) {
     message("*** Summarizing results ***")
     summarizeResults(
       referenceTable = referenceTable,
@@ -518,11 +538,15 @@ runCcwAnalyses <- function(connectionDetails = NULL,
   ))
 }
 
-# The strategy settings the censoring models depend on (not the labels or strategy IDs).
-.censoringSettingsJson <- function(analysis) {
+# The strategy settings the censoring models depend on (not the labels or strategy IDs), optionally
+# without covariateTimeInteraction.
+.censoringSettingsJson <- function(analysis, withoutCovariateTimeInteraction = FALSE) {
   createClonesArgs <- analysis$createClonesArgs
   fitCensoringModelsArgs <- analysis$fitCensoringModelsArgs$toList()
   fitCensoringModelsArgs$control$threads <- NULL
+  if (withoutCovariateTimeInteraction) {
+    fitCensoringModelsArgs$covariateTimeInteraction <- NULL
+  }
   return(.settingsJson(list(
     strategies = lapply(createClonesArgs$strategies, function(strategy) {
       list(
@@ -721,6 +745,97 @@ runCcwAnalyses <- function(connectionDetails = NULL,
     "balanceFile",
     "outcomeModelFile"
   )])
+}
+
+# Shared outputs -----------------------------------------------------------------------------------
+
+# For each censoring model file of the reference table, the file whose models its models are: itself,
+# or an earlier file of the same censoring population and target-treatment (and outcome, when the models
+# are refit for every outcome) whose analysis differs only in covariateTimeInteraction and whose models
+# are the same but for the setting their hazard models record (.withoutInteractionLabels()), as when the
+# pooled logistic hazard models' interaction columns are all left out. Reads only the files of such
+# analyses.
+.sameCensoringModelFiles <- function(referenceTable, getAnalysis, path) {
+  files <- referenceTable[!duplicated(referenceTable$censoringModelFile), c("analysisId", "censoringModelFile")]
+  sameModels <- stats::setNames(files$censoringModelFile, files$censoringModelFile)
+  withoutInteraction <- vapply(files$analysisId, function(analysisId) .censoringSettingsJson(getAnalysis(analysisId), withoutCovariateTimeInteraction = TRUE), character(1))
+  # The file name without the censoring settings ID (_m<censoringId>):
+  candidates <- split(files$censoringModelFile, paste(sub("_m[0-9]+_", "_", files$censoringModelFile), withoutInteraction))
+  for (group in candidates[lengths(candidates) > 1]) {
+    models <- lapply(group, function(file) .withoutInteractionLabels(readRDS(path(file))))
+    for (i in seq_along(group)[-1]) {
+      for (j in seq_len(i - 1)) {
+        if (sameModels[[group[j]]] == group[j] && .sameCensoringModels(models[[i]], models[[j]])) {
+          sameModels[[group[i]]] <- group[j]
+          message(sprintf(
+            "The censoring models of %s are those of %s but for the covariateTimeInteraction they record (their hazard models have no interaction columns), so analyses that differ only in it share the covariate balance and outcome models",
+            group[i], group[j]
+          ))
+          break
+        }
+      }
+    }
+  }
+  return(sameModels)
+}
+
+# For each row of the reference table, the outcome model file whose model is its model: its own, or that
+# of the first row with the same censoring models (`sameModels`, .sameCensoringModelFiles()) and the same
+# other inputs of .doFitOutcomeModel(). With the bootstrap, whose replicates refit the censoring models
+# with each analysis' covariateTimeInteraction, only when the full-data hazard models were fit on their
+# whole risk sets: a replicate's risk set is then a subset of the full data's, so its hazard models have
+# no interaction columns either.
+.sharedOutcomeModelFiles <- function(referenceTable, sameModels, getAnalysis, specifications, path) {
+  sources <- referenceTable$outcomeModelFile
+  shared <- sameModels[referenceTable$censoringModelFile]
+  inClass <- shared %in% shared[shared != referenceTable$censoringModelFile]
+  if (!any(inClass)) {
+    return(sources)
+  }
+  rows <- which(inClass)
+  keys <- vapply(rows, function(i) {
+    refRow <- referenceTable[i, ]
+    analysis <- getAnalysis(refRow$analysisId)
+    fitOutcomeModelArgs <- analysis$fitOutcomeModelArgs
+    if (fitOutcomeModelArgs$varianceEstimator == "bootstrap" && .hasSampledHazardModel(readRDS(path(shared[[i]])))) {
+      return(refRow$outcomeModelFile)
+    }
+    return(paste(shared[[i]], refRow$ccwDataFile, refRow$studyPopFile, refRow$outcomeId, refRow$outcomeOfInterest, .settingsJson(list(
+      createStudyPopulationArgs = .getStudyPopulationArgs(specifications, analysis, refRow)$toList(),
+      createClonesArgs = analysis$createClonesArgs$toList(),
+      computeWeightsArgs = analysis$computeWeightsArgs$toList(),
+      fitOutcomeModelArgs = fitOutcomeModelArgs$toList()
+    ))))
+  }, character(1))
+  sources[rows] <- sources[rows][match(keys, keys)]
+  return(sources)
+}
+
+# Does a CcwCensoringModels have a hazard model fit on a sample of its risk set (maxCohortSizeForFitting)?
+.hasSampledHazardModel <- function(censoringModels) {
+  hazardModels <- c(
+    Filter(function(model) identical(model$kind, "hazard"), censoringModels),
+    Filter(Negate(is.null), lapply(censoringModels, function(model) model$early))
+  )
+  return(any(vapply(hazardModels, function(model) !isFALSE(model$diagnostics$sampled), logical(1))))
+}
+
+# Copies each output file `sources[i]` to `targets[i]` when they differ (outputs of analyses with the same
+# inputs, see .sharedOutcomeModelFiles()), under a temporary name and renamed, as .saveFile() writes.
+.copyOutputFiles <- function(sources, targets, path, what) {
+  copies <- which(sources != targets)
+  if (length(copies) == 0) {
+    return(invisible(NULL))
+  }
+  message(sprintf("Copying %d %s file(s) from analyses with the same censoring models and settings", length(copies), what))
+  for (i in copies) {
+    tempFile <- paste0(path(targets[i]), ".tmp", Sys.getpid(), ".rds")
+    if (!file.copy(path(sources[i]), tempFile, overwrite = TRUE) || !file.rename(tempFile, path(targets[i]))) {
+      unlink(tempFile)
+      stop(sprintf("Could not copy '%s' to '%s'", sources[i], targets[i]))
+    }
+  }
+  invisible(NULL)
 }
 
 # Tasks ------------------------------------------------------------------------------------------

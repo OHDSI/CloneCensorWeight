@@ -390,7 +390,10 @@ test_that("The weight summary matches the daily weights on both scales, before a
           expect_equal(row$cloneDays, length(w), info = info)
           expect_equal(row$meanWeight, mean(w), tolerance = 1e-6, info = info)
           expect_equal(row$maxWeight, max(w), tolerance = 1e-6, info = info)
-          expect_equal(row$p99Weight, unname(stats::quantile(w, 0.99)), tolerance = 1e-6, info = info)
+          probabilities <- c(p25Weight = 0.25, medianWeight = 0.5, p75Weight = 0.75, p95Weight = 0.95, p99Weight = 0.99)
+          for (name in names(probabilities)) {
+            expect_equal(row[[name]], unname(stats::quantile(w, probabilities[[name]])), tolerance = 1e-6, info = info)
+          }
           ess <- vapply(split(w, r$day), function(x) sum(x)^2 / sum(x^2), numeric(1))
           expect_equal(row$effectiveSampleSize, mean(ess), tolerance = 1e-6, info = info)
           if (parts[2] == "after") {
@@ -411,6 +414,13 @@ test_that("The weight summary matches the daily weights on both scales, before a
     single <- single[single$scale == "stabilized" & single$truncation == "after", ]
     expect_equal(single$meanWeight, distribution$meanWeight, tolerance = 1e-10)
     expect_equal(single$effectiveSampleSize, distribution$effectiveSampleSize, tolerance = 1e-10)
+    # computeWeightDistribution() makes one row per clone-day, and computeWeightSummary() one per range
+    # of days with the same weight (strategy 1 from day 8, after its switch), with the same counts,
+    # extremes and quantiles:
+    expect_identical(single$cloneDays, distribution$clones)
+    for (column in c("minWeight", "p25Weight", "medianWeight", "p75Weight", "maxWeight")) {
+      expect_identical(single[[column]], distribution[[column]], info = column)
+    }
     close(weighted)
   }
   expect_output(print(summary), "Weights per strategy")
